@@ -1,0 +1,43 @@
+# SMT WEEX Trading Bot Configuration
+
+project:
+  id: "smt-weex-2025"
+  region: "us-central1"
+
+etherscan:
+  base_url: "https://api.etherscan.io/v2/api"
+  chain_id: 1
+  rate_limit_delay: 0.25
+  batch_size: 20
+
+categories:
+  - CEX_Wallet
+  - Staker
+  - Institutional
+  - DeFi_Trader
+  - Miner
+  - Exploiter
+
+whale_filter:
+  top_n_per_category: 200
+  min_balance_eth: 10
+
+trading:
+  pairs:
+    direct:
+      - ETH/USDT
+      - BTC/USDT
+      - SOL/USDT
+    indirect:
+      - DOGE/USDT
+      - XRP/USDT
+      - ADA/USDT
+      - BNB/USDT
+      - LTC/USDT
+
+bigquery:
+  dataset_raw: "raw_data"
+  dataset_processed: "processed_data"
+
+gcs:
+  bucket: "smt-weex-2025-models"
