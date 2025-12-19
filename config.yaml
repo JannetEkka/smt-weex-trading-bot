@@ -1,0 +1,108 @@
+# SMT WEEX Trading Bot Configuration
+
+project:
+  id: "smt-weex-2025"
+  region: "us-central1"
+
+# Etherscan API (V2 unified)
+etherscan:
+  base_url: "https://api.etherscan.io/v2/api"
+  chain_id: 1
+  rate_limit_delay: 0.25
+  batch_size: 20
+
+# BigQuery datasets
+bigquery:
+  dataset_raw: "raw_data"
+  dataset_processed: "processed_data"
+  dataset_ml: "ml_data"
+
+# GCS bucket
+gcs:
+  bucket: "smt-weex-2025-models"
+  model_path: "models/production/catboost_whale_classifier_production.cbm"
+  encoder_path: "models/production/label_encoder_production.pkl"
+  features_path: "models/production/features.json"
+
+# Whale categories
+categories:
+  - CEX_Wallet
+  - Staker
+  - Institutional
+  - DeFi_Trader
+  - Miner
+  - Exploiter
+
+# Merged categories for model (5-class)
+merged_categories:
+  Large_Holder:
+    - CEX_Wallet
+    - Institutional
+
+# Signal mapping
+signals:
+  Miner:
+    sell: "BEARISH"
+    buy: "NEUTRAL"
+  Staker:
+    unstake: "BEARISH"
+    stake: "NEUTRAL"
+  CEX_Wallet:
+    inflow: "BEARISH"
+    outflow: "BULLISH"
+  Large_Holder:
+    sell: "BEARISH"
+    buy: "BULLISH"
+  DeFi_Trader:
+    high_volume: "VOLATILITY"
+    normal: "NEUTRAL"
+  Exploiter:
+    any: "AVOID"
+
+# Trading configuration
+trading:
+  enabled: false  # Set true for live trading
+  testnet: true
+  max_position_usd: 100
+  leverage: 1
+  min_tx_value_eth: 10
+  min_confidence: 0.6
+  
+  # WEEX trading pairs
+  pairs:
+    direct:
+      - ETH/USDT
+      - BTC/USDT
+      - SOL/USDT
+    indirect:
+      - DOGE/USDT
+      - XRP/USDT
+      - ADA/USDT
+      - BNB/USDT
+      - LTC/USDT
+
+# Monitoring
+monitoring:
+  poll_interval_seconds: 60
+  lookback_minutes: 10
+  top_whales_to_monitor: 50
+
+# Gemini validator
+gemini:
+  model: "gemini-2.5-flash"
+  temperature: 0.1
+  grounding_enabled: true
+
+# Known CEX addresses
+cex_addresses:
+  "0x28c6c06298d514db089934071355e5743bf21d60": "Binance"
+  "0x21a31ee1afc51d94c2efccaa2092ad1028285549": "Binance"
+  "0xdfd5293d8e347dfe59e90efd55b2956a1343963d": "Binance"
+  "0x56eddb7aa87536c09ccc2793473599fd21a8b17f": "Binance"
+  "0xf977814e90da44bfa03b6295a0616a897441acec": "Binance"
+  "0x3cc936b795a188f0e246cbb2d74c5bd190aecf18": "MEXC"
+
+# Logging
+logging:
+  level: "INFO"
+  file: "smt_bot.log"

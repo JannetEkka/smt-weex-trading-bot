@@ -1,34 +1,55 @@
-# Env
+# Environment
 .env
-*.env
-venv/
-__pycache__/
-*.pyc
+.env.local
+.env.*.local
 
-# Data files (too large for git)
-data/*.csv
-data/*.xlsx
-data/*.json
-!data/.gitkeep
+# Data files
+data/
+*.csv
+*.db
+*.sqlite
 
-# Models
+# Model files (use GCS)
 models/*.cbm
 models/*.pkl
-!models/.gitkeep
+*.cbm
+*.pkl
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
 
 # IDE
-.idea/
 .vscode/
+.idea/
 *.swp
-
-# OS
-.DS_Store
-Thumbs.db
+*.swo
 
 # Logs
 *.log
 logs/
 
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
 # Secrets
-*credentials*.json
-*service-account*.json
+*secret*
+*credential*
+*.json
+!config.yaml
+
+# Temp
+tmp/
+temp/
+*.tmp
