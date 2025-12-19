@@ -13,11 +13,20 @@ from datetime import datetime
 # Config
 ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")
 BASE_URL = "https://api.etherscan.io/v2/api"
-RATE_LIMIT_DELAY = 0.25
+RATE_LIMIT_DELAY = 0.35  # 350ms = ~2.8 calls/sec (safe for free tier 5/sec)
 LOOKBACK_DAYS = 90
 
+# All transaction types to fetch
+TX_TYPES = [
+    ('txlist', 'normal'),           # Normal ETH transactions
+    ('txlistinternal', 'internal'), # Internal/contract transactions
+    ('tokentx', 'erc20'),           # ERC-20 token transfers
+    ('tokennfttx', 'erc721'),       # ERC-721 NFT transfers
+    ('token1155tx', 'erc1155'),     # ERC-1155 transfers
+]
+
 def fetch_transactions(address: str, tx_type: str = "txlist") -> list:
-    """Fetch transactions for an address. tx_type: txlist, txlistinternal, tokentx"""
+    """Fetch transactions for an address."""
     params = {
         'chainid': '1',
         'module': 'account',
@@ -52,6 +61,8 @@ def main():
     df = pd.read_csv(input_file)
     addresses = df['address'].str.lower().unique().tolist()
     print(f"Fetching transactions for {len(addresses)} whales...")
+    print(f"Transaction types: {[t[1] for t in TX_TYPES]}")
+    print(f"Estimated time: ~{len(addresses) * len(TX_TYPES) * RATE_LIMIT_DELAY / 60:.1f} minutes\n")
     
     # Calculate cutoff timestamp
     cutoff_ts = int((datetime.now().timestamp()) - (LOOKBACK_DAYS * 86400))
@@ -61,21 +72,21 @@ def main():
     for i, addr in enumerate(addresses):
         print(f"[{i+1}/{len(addresses)}] {addr[:10]}...", end=" ")
         
-        # Fetch normal txs
-        txs = fetch_transactions(addr, "txlist")
-        time.sleep(RATE_LIMIT_DELAY)
+        tx_counts = []
+        for action, tx_label in TX_TYPES:
+            txs = fetch_transactions(addr, action)
+            
+            # Filter by lookback period and add metadata
+            for tx in txs:
+                if int(tx.get('timeStamp', 0)) >= cutoff_ts:
+                    tx['wallet_address'] = addr
+                    tx['tx_type'] = tx_label
+                    all_txs.append(tx)
+            
+            tx_counts.append(f"{tx_label}:{len(txs)}")
+            time.sleep(RATE_LIMIT_DELAY)
         
-        # Fetch token txs
-        token_txs = fetch_transactions(addr, "tokentx")
-        time.sleep(RATE_LIMIT_DELAY)
-        
-        # Filter by lookback period and add wallet address
-        for tx in txs + token_txs:
-            if int(tx.get('timeStamp', 0)) >= cutoff_ts:
-                tx['wallet_address'] = addr
-                all_txs.append(tx)
-        
-        print(f"{len(txs)} normal, {len(token_txs)} token txs")
+        print(f"{', '.join(tx_counts)}")
     
     # Save
     if all_txs:
@@ -83,6 +94,12 @@ def main():
         output_file = f"data/whale_transactions_{datetime.now().strftime('%Y%m%d')}.csv"
         tx_df.to_csv(output_file, index=False)
         print(f"\nSaved {len(tx_df)} transactions to {output_file}")
+        
+        # Summary by type
+        print("\n=== Transaction Summary by Type ===")
+        for tx_type in tx_df['tx_type'].unique():
+            count = len(tx_df[tx_df['tx_type'] == tx_type])
+            print(f"{tx_type}: {count:,} transactions")
     else:
         print("No transactions found")
 

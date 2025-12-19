@@ -7,6 +7,7 @@ import pandas as pd
 import requests
 import time
 import os
+import re
 from typing import List, Dict
 from datetime import datetime
 
@@ -15,6 +16,19 @@ ETHERSCAN_API_KEY = os.getenv("ETHERSCAN_API_KEY", "YOUR_API_KEY_HERE")
 BASE_URL = "https://api.etherscan.io/v2/api"
 BATCH_SIZE = 20  # Max addresses per balancemulti call
 RATE_LIMIT_DELAY = 0.25  # 250ms between calls (safe for free tier)
+
+# Categories to process (skip All_Labels sheet)
+CATEGORIES = ['Miner', 'Exploiter', 'DeFi_Trader', 'CEX_Wallet', 'Staker', 'Institutional']
+
+def clean_address(addr) -> str:
+    """Extract clean address from string"""
+    if pd.isna(addr):
+        return None
+    addr_str = str(addr).strip()
+    match = re.match(r'(0x[a-fA-F0-9]{40})', addr_str)
+    if match:
+        return match.group(1).lower()
+    return None
 
 def fetch_balances_batch(addresses: List[str]) -> Dict[str, float]:
     """Fetch balances for up to 20 addresses in one call"""
@@ -40,29 +54,55 @@ def fetch_balances_batch(addresses: List[str]) -> Dict[str, float]:
                 results[addr] = balance_eth
             return results
         else:
-            print(f"API Error: {data.get('message', 'Unknown error')}")
+            print(f"API Error: {data.get('message', 'Unknown error')} - {data.get('result', '')}")
             return {}
     except Exception as e:
         print(f"Request failed: {e}")
         return {}
 
 def main():
-    # Load labeled addresses from Excel
-    input_file = "etherscan_all_labels_20251211.xlsx"
+    input_file = "data/etherscan_all_labels_20251211.xlsx"
     
     if not os.path.exists(input_file):
         print(f"Error: {input_file} not found")
         return
     
-    df = pd.read_excel(input_file)
-    print(f"Loaded {len(df)} addresses from {input_file}")
-    print(f"Columns: {list(df.columns)}")
-    print(f"Categories: {df['category'].unique() if 'category' in df.columns else 'N/A'}")
+    xl = pd.ExcelFile(input_file)
+    print(f"Found sheets: {xl.sheet_names}")
+    
+    # Collect all addresses with their categories
+    all_records = []
+    
+    for category in CATEGORIES:
+        if category not in xl.sheet_names:
+            print(f"Warning: Sheet '{category}' not found, skipping")
+            continue
+        
+        df = pd.read_excel(xl, sheet_name=category)
+        print(f"\n--- {category} ---")
+        print(f"Columns: {df.columns.tolist()}")
+        
+        # Each column contains addresses for a sub-label
+        for col in df.columns:
+            addresses_in_col = df[col].dropna().tolist()
+            for addr in addresses_in_col:
+                clean = clean_address(addr)
+                if clean:
+                    all_records.append({
+                        'address': clean,
+                        'category': category,
+                        'sub_label': col
+                    })
+        
+        print(f"Extracted addresses from {category}: {len([r for r in all_records if r['category'] == category])}")
+    
+    # Create dataframe and dedupe
+    df = pd.DataFrame(all_records)
+    df = df.drop_duplicates(subset=['address'], keep='first')
+    print(f"\nTotal unique addresses: {len(df)}")
     
     # Get all unique addresses
-    address_col = 'address' if 'address' in df.columns else df.columns[0]
-    all_addresses = df[address_col].str.lower().unique().tolist()
-    print(f"\nTotal unique addresses: {len(all_addresses)}")
+    all_addresses = df['address'].unique().tolist()
     
     # Fetch balances in batches
     all_balances = {}
@@ -83,37 +123,34 @@ def main():
         time.sleep(RATE_LIMIT_DELAY)
     
     # Add balances to dataframe
-    df['balance_eth'] = df[address_col].str.lower().map(all_balances)
+    df['balance_eth'] = df['address'].map(all_balances)
     df['balance_eth'] = df['balance_eth'].fillna(0)
     
     # Sort by balance within each category
-    if 'category' in df.columns:
-        df = df.sort_values(['category', 'balance_eth'], ascending=[True, False])
-    else:
-        df = df.sort_values('balance_eth', ascending=False)
+    df = df.sort_values(['category', 'balance_eth'], ascending=[True, False])
     
     # Save results
-    output_file = f"whale_balances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    output_file = f"data/whale_balances_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     df.to_csv(output_file, index=False)
     print(f"\nSaved to {output_file}")
     
     # Print summary per category
-    if 'category' in df.columns:
-        print("\n=== Balance Summary by Category ===")
-        for cat in df['category'].unique():
-            cat_df = df[df['category'] == cat]
-            total = cat_df['balance_eth'].sum()
-            count = len(cat_df)
-            non_zero = len(cat_df[cat_df['balance_eth'] > 0])
-            top_balance = cat_df['balance_eth'].max()
-            print(f"{cat}: {count} addresses, {non_zero} with balance, Top: {top_balance:,.2f} ETH, Total: {total:,.2f} ETH")
+    print("\n=== Balance Summary by Category ===")
+    for cat in CATEGORIES:
+        cat_df = df[df['category'] == cat]
+        if len(cat_df) == 0:
+            continue
+        total = cat_df['balance_eth'].sum()
+        count = len(cat_df)
+        non_zero = len(cat_df[cat_df['balance_eth'] > 0])
+        top_balance = cat_df['balance_eth'].max()
+        print(f"{cat}: {count} addresses, {non_zero} with balance, Top: {top_balance:,.2f} ETH, Total: {total:,.2f} ETH")
     
     # Print top 10 overall
     print("\n=== Top 10 Whales by Balance ===")
     top10 = df.nlargest(10, 'balance_eth')
     for _, row in top10.iterrows():
-        cat = row.get('category', 'N/A')
-        print(f"{row[address_col][:10]}... | {row['balance_eth']:,.2f} ETH | {cat}")
+        print(f"{row['address'][:10]}... | {row['balance_eth']:,.2f} ETH | {row['category']} | {row['sub_label']}")
 
 if __name__ == "__main__":
     main()
