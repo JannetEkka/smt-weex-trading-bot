@@ -54,6 +54,21 @@ python scripts/04_extract_features.py
 - Cloud Run (API hosting)
 - WEEX API (trade execution)
 
+## Model
+
+**CatBoost Classifier** - 5-class whale behavior classification
+
+| Class | F1-Score | Signal |
+|-------|----------|--------|
+| Miner | 82% | Sells = Bearish |
+| Exploiter | 82% | Avoid token |
+| Staker | 73% | Unstake = Bearish |
+| DeFi_Trader | 51% | Volume spike = Volatility |
+| Large_Holder | 45% | Follow direction |
+
+**Training:** 646 labeled whales, 32 features, 5-fold CV
+**Model file:** `gs://smt-weex-2025-models/models/production/catboost_whale_classifier_production.cbm`
+
 ## Author
 
 Jannet Ekka - Smart Money Tracker
