@@ -1,0 +1,38 @@
+{
+  "generated_at": "2025-12-27T05:45:26.659843+00:00",
+  "pipeline_version": "SMT-Signal-v2-BTC",
+  "trading_pair": "cmt_btcusdt",
+  "btc_price": 87462.0,
+  "whale": {
+    "address": "bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h",
+    "category": "CEX_Wallet",
+    "sub_label": "Binance Hot 2",
+    "balance_btc": 45000
+  },
+  "flow": {
+    "net_direction": "outflow",
+    "net_value": 82.96086774999998,
+    "inflow_btc": 240.85441606,
+    "outflow_btc": 323.81528381,
+    "inflow_count": 4,
+    "outflow_count": 5,
+    "total_significant_txs": 9,
+    "lookback_hours": 6
+  },
+  "signal": {
+    "signal": "LONG",
+    "base": "BULLISH",
+    "confidence": 0.85,
+    "reasoning": "CEX_Wallet (Binance Hot 2) shows outflow of 82.96 BTC over 6h (9 significant TXs). Net flow indicates BULLISH sentiment.",
+    "sustained": true
+  },
+  "validation": {
+    "decision": "EXECUTE",
+    "signal": "LONG",
+    "confidence": 0.85,
+    "reasoning": "CEX_Wallet (Binance Hot 2) shows a significant net outflow of 82.96 BTC over 6 hours. This reduction in exchange supply is generally interpreted as bullish sentiment, indicating whales are moving BTC off-exchange, potentially for holding or other uses, thereby reducing immediate selling pressure. The generated signal has high confidence (85%).",
+    "grounding": true,
+    "news": "Here's a summary of the latest Bitcoin (BTC) news, focusing on whale movements, exchange flows, and ETF activity as of Friday, December 27, 2025:\n\n**Major Whale Movements:**\nOn Friday, December 26, blockchain monitoring platform Whale Alert reported seven substantial Bitcoin transfers totaling 13,904 BTC, valued at over $1 billion. These movements occurred between unknown wallets and coincided wit"
+  },
+  "ready_to_trade": true
+}

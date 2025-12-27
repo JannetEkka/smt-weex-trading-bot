@@ -1,0 +1,127 @@
+[
+  {
+    "timestamp": "2025-12-27T06:48:32.350471+00:00",
+    "log_id": "smt_1766818112350",
+    "action": "OPEN_POSITION",
+    "decision": "EXECUTE",
+    "reasoning": "Whale signal: Binance Hot 2 outflow 82.96 BTC. Signal: LONG 85%. Gemini: CEX_Wallet (Binance Hot 2) shows a significant net outflow of 82.96 BTC over 6 hours. This reduction",
+    "data": {
+      "whale": {
+        "address": "bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h",
+        "category": "CEX_Wallet",
+        "sub_label": "Binance Hot 2",
+        "balance_btc": 45000
+      },
+      "flow": {
+        "net_direction": "outflow",
+        "net_value": 82.96086774999998,
+        "inflow_btc": 240.85441606,
+        "outflow_btc": 323.81528381,
+        "inflow_count": 4,
+        "outflow_count": 5,
+        "total_significant_txs": 9,
+        "lookback_hours": 6
+      },
+      "signal": {
+        "signal": "LONG",
+        "base": "BULLISH",
+        "confidence": 0.85,
+        "reasoning": "CEX_Wallet (Binance Hot 2) shows outflow of 82.96 BTC over 6h (9 significant TXs). Net flow indicates BULLISH sentiment.",
+        "sustained": true
+      },
+      "trade": {
+        "symbol": "cmt_btcusdt",
+        "direction": "LONG",
+        "size_usd": 10,
+        "size_btc": 0.000114,
+        "leverage": 20,
+        "price": 87405.9
+      }
+    }
+  },
+  {
+    "timestamp": "2025-12-27T06:48:32.786484+00:00",
+    "log_id": "smt_1766818112786",
+    "action": "ORDER_EXECUTED",
+    "decision": "FAILED",
+    "reasoning": "LONG opened",
+    "data": {
+      "order_result": {
+        "code": "40015",
+        "msg": "INVALID_ARGUMENT: The order size must be greater than 0 and matches the stepSize '0.0001' requirement. Current size is '0.000114'",
+        "requestTime": 1766818112746,
+        "data": null
+      }
+    }
+  },
+  {
+    "timestamp": "2025-12-27T06:48:37.792316+00:00",
+    "log_id": "smt_1766818117792",
+    "action": "CLOSE_POSITION",
+    "decision": "EXECUTE",
+    "reasoning": "Completing trade cycle for API test.",
+    "data": {
+      "action": "Close LONG"
+    }
+  },
+  {
+    "timestamp": "2025-12-27T06:48:38.170933+00:00",
+    "log_id": "smt_1766818118170",
+    "action": "ORDER_EXECUTED",
+    "decision": "FAILED",
+    "reasoning": "Position closed",
+    "data": {
+      "order_result": {
+        "code": "40015",
+        "msg": "INVALID_ARGUMENT: The order size must be greater than 0 and matches the stepSize '0.0001' requirement. Current size is '0.000114'",
+        "requestTime": 1766818118129,
+        "data": null
+      }
+    }
+  },
+  {
+    "timestamp": "2025-12-27T06:48:38.557754+00:00",
+    "log_id": "smt_1766818118557",
+    "action": "TRADE_COMPLETE",
+    "decision": "SUCCESS",
+    "reasoning": "Trade complete. LONG, PnL: +0.0000",
+    "data": {
+      "initial": 1000.0,
+      "final": 1000.0,
+      "pnl": 0.0
+    }
+  },
+  {
+    "timestamp": "2025-12-27T06:50:39.495690+00:00",
+    "log_id": "smt_1766818239495",
+    "action": "OPEN_POSITION",
+    "decision": "EXECUTE",
+    "reasoning": "Whale: Binance Hot 2 outflow 82.96 BTC. Signal: LONG",
+    "data": {
+      "whale": {
+        "address": "bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h",
+        "category": "CEX_Wallet",
+        "sub_label": "Binance Hot 2",
+        "balance_btc": 45000
+      },
+      "signal": {
+        "signal": "LONG",
+        "base": "BULLISH",
+        "confidence": 0.85,
+        "reasoning": "CEX_Wallet (Binance Hot 2) shows outflow of 82.96 BTC over 6h (9 significant TXs). Net flow indicates BULLISH sentiment.",
+        "sustained": true
+      }
+    }
+  }
+]{
+  "timestamp": "2025-12-27T06:52:09Z",
+  "action": "API_TEST_COMPLETE",
+  "decision": "SUCCESS",
+  "reasoning": "Whale signal: Binance Hot 2 outflow 82.96 BTC. Opened LONG, closed position. API test passed.",
+  "data": {
+    "open_order_id": "699686410562569061",
+    "close_order_id": "699686585372771173",
+    "pnl": -0.0096,
+    "trade_value_usd": 8.74
+  }
+}

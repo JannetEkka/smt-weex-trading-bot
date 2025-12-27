@@ -1,0 +1,34 @@
+{
+  "whale": {
+    "address": "0xf977814e90da44bfa03b6295a0616a897441acec",
+    "category": "CEX_Wallet",
+    "sub_label": "Binance 8",
+    "balance_eth": 538622,
+    "tx_hash": "0xc6e51282da43698980312bd8b3934df81931b345eb7ae72b5de62bedc7c99b9d",
+    "tx_time": "2025-12-26 03:24",
+    "tx_value": 190778.103,
+    "is_outflow": false,
+    "direction": "INFLOW"
+  },
+  "signal": {
+    "signal": "SHORT",
+    "base": "BEARISH",
+    "confidence": 0.75,
+    "reasoning": "CEX_Wallet inflow of 190778.1 ETH = BEARISH"
+  },
+  "market": {
+    "btc_price": 88751.2,
+    "btc_change": 1.488,
+    "eth_price": 2968.79,
+    "eth_change": 1.3955
+  },
+  "validation": {
+    "decision": "EXECUTE",
+    "signal": "SHORT",
+    "confidence": 0.85,
+    "reasoning": "A significant inflow of 190,778 ETH to a major CEX (Binance 8) indicates potential selling pressure. This, combined with an explicit bearish signal and upcoming $6 billion ETH options expiry, suggests high volatility and a likely downward price movement.",
+    "grounding": true,
+    "news": "Ethereum is currently experiencing a critical day with approximately $6 billion in options contracts expiring, which is expected to introduce significant price volatility as it holds above $2,900. Mea"
+  },
+  "timestamp": "2025-12-26T09:35:12.233032+00:00"
+}
