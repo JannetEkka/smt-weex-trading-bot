@@ -1,0 +1,38 @@
+{
+  "generated_at": "2025-12-29T08:46:16.095943+00:00",
+  "pipeline_version": "SMT-Signal-v2-BTC",
+  "trading_pair": "cmt_btcusdt",
+  "btc_price": 89649.9,
+  "whale": {
+    "address": "bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h",
+    "category": "CEX_Wallet",
+    "sub_label": "Binance Hot 2",
+    "balance_btc": 45000
+  },
+  "flow": {
+    "net_direction": "inflow",
+    "net_value": 783.60535327,
+    "inflow_btc": 849.53516008,
+    "outflow_btc": 65.92980681,
+    "inflow_count": 6,
+    "outflow_count": 3,
+    "total_significant_txs": 9,
+    "lookback_hours": 6
+  },
+  "signal": {
+    "signal": "SHORT",
+    "base": "BEARISH",
+    "confidence": 0.6000000000000001,
+    "reasoning": "CEX_Wallet (Binance Hot 2) shows inflow of 783.61 BTC over 6h (9 significant TXs). Net flow indicates BEARISH sentiment. Note: 2025 research shows only ~15% of CEX inflows are actual sells.",
+    "sustained": true
+  },
+  "validation": {
+    "decision": "WAIT",
+    "signal": "SHORT",
+    "confidence": 0.2,
+    "reasoning": "The generated SHORT signal based on CEX inflow is significantly weakened by the provided research indicating only ~15% of CEX inflows are actual sell signals. This, combined with the current strong bullish market rebound and ETF-driven sentiment, makes a SHORT trade highly risky and ill-advised at this time.",
+    "grounding": true,
+    "news": "Here's a summary of the latest Bitcoin (BTC) news, including major whale movements, exchange flows, and ETF activity as of December 29, 2025:\n\n**Latest Bitcoin News**\nThe cryptocurrency market has seen a dramatic rebound, with the total market capitalization surging by $80 billion in just seven hours, pushing the global value of digital assets back above $3 trillion. Bitcoin led this charge, with "
+  },
+  "ready_to_trade": false
+}

@@ -1,0 +1,52 @@
+[
+  {
+    "timestamp": "2025-12-29T08:47:22.062732+00:00",
+    "log_id": "smt_1766998042062",
+    "action": "OPEN_POSITION",
+    "decision": "EXECUTE",
+    "reasoning": "API test trade #2 to meet 10 USDT minimum requirement",
+    "data": {
+      "symbol": "cmt_btcusdt",
+      "direction": "LONG",
+      "size": 0.0001
+    }
+  },
+  {
+    "timestamp": "2025-12-29T08:47:22.482420+00:00",
+    "log_id": "smt_1766998042482",
+    "action": "ORDER_EXECUTED",
+    "decision": "SUCCESS",
+    "reasoning": "LONG opened",
+    "data": {
+      "order_id": "700440557364708197"
+    }
+  },
+  {
+    "timestamp": "2025-12-29T08:47:25.486254+00:00",
+    "log_id": "smt_1766998045486",
+    "action": "CLOSE_POSITION",
+    "decision": "EXECUTE",
+    "reasoning": "Closing to complete trade cycle",
+    "data": {}
+  },
+  {
+    "timestamp": "2025-12-29T08:47:25.865561+00:00",
+    "log_id": "smt_1766998045865",
+    "action": "ORDER_EXECUTED",
+    "decision": "SUCCESS",
+    "reasoning": "Position closed",
+    "data": {
+      "order_id": "700440571579204453"
+    }
+  },
+  {
+    "timestamp": "2025-12-29T08:47:26.351528+00:00",
+    "log_id": "smt_1766998046351",
+    "action": "TRADE_COMPLETE",
+    "decision": "SUCCESS",
+    "reasoning": "API test trade #2 complete",
+    "data": {
+      "balance": "999.98050630"
+    }
+  }
+]
