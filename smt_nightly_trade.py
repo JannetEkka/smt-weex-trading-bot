@@ -304,7 +304,7 @@ def run_nightly_trade():
         return
     
     set_leverage(TRADING_PAIR, MAX_LEVERAGE)
-    size = round(TRADE_SIZE_USD / eth_price, 4)
+    size = round(TRADE_SIZE_USD / eth_price, 3)
     trade_signal = validation["signal"]
     order_type = "1" if trade_signal == "LONG" else "2"
     close_type = "3" if trade_signal == "LONG" else "4"
