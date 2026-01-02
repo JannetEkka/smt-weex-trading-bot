@@ -53,3 +53,6 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+# Allow AI logs for hackathon compliance
+!ai_logs/
+!ai_logs/*.json

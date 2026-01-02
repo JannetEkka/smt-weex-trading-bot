@@ -1,0 +1,69 @@
+{
+  "run_id": "smt_nightly_20260102_134925",
+  "timestamp": "2026-01-02T13:49:25.941089+00:00",
+  "pipeline_version": "SMT-ETH-v1.0",
+  "trading_pair": "cmt_ethusdt",
+  "steps": [
+    {
+      "step": "MARKET_CHECK",
+      "timestamp": "2026-01-02T13:49:26.683268+00:00",
+      "data": {
+        "eth_price": 3053.59,
+        "balance_usdt": 999.9805063
+      }
+    },
+    {
+      "step": "SIGNAL_GENERATED",
+      "timestamp": "2026-01-02T13:49:41.872179+00:00",
+      "data": {
+        "whale": "Binance 15",
+        "signal": "LONG",
+        "confidence": "85%",
+        "reasoning": "CEX_Wallet (Binance 15) shows outflow of 1300.00 ETH. Signal: BULLISH."
+      }
+    },
+    {
+      "step": "GEMINI_VALIDATION",
+      "timestamp": "2026-01-02T13:50:00.988377+00:00",
+      "data": {
+        "decision": "EXECUTE",
+        "signal": "LONG",
+        "reasoning": "The primary signal indicates a strong LONG position with 85% confidence. This is supported by a significant whale outflow of 1300 ETH from a CEX (Binance), which typically suggests accumulation or mov"
+      }
+    },
+    {
+      "step": "OPENING_POSITION",
+      "timestamp": "2026-01-02T13:50:01.339689+00:00",
+      "data": {
+        "signal": "LONG",
+        "size_eth": 0.0033,
+        "size_usd": 10.0
+      }
+    },
+    {
+      "step": "ORDER_RESULT",
+      "timestamp": "2026-01-02T13:50:01.820558+00:00",
+      "data": {
+        "result": "{'code': '40015', 'msg': \"INVALID_ARGUMENT: The order size must be greater than 0 and matches the stepSize '0.001' requirement. Current size is '0.0033'\", 'requestTime': 1767361801778, 'data': None}"
+      }
+    },
+    {
+      "step": "CLOSE_RESULT",
+      "timestamp": "2026-01-02T13:50:05.237994+00:00",
+      "data": {
+        "result": "{'code': '40015', 'msg': \"INVALID_ARGUMENT: The order size must be greater than 0 and matches the stepSize '0.001' requirement. Current size is '0.0033'\", 'requestTime': 1767361805195, 'data': None}"
+      }
+    },
+    {
+      "step": "TRADE_COMPLETE",
+      "timestamp": "2026-01-02T13:50:07.619074+00:00",
+      "data": {
+        "initial_balance": 999.9805063,
+        "final_balance": 999.9805063,
+        "pnl": 0.0
+      }
+    }
+  ],
+  "final_decision": "EXECUTED",
+  "pnl": 0.0
+}
