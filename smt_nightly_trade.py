@@ -239,6 +239,22 @@ def place_order(symbol: str, side: str, size: float) -> Dict:
     r = requests.post(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("POST", endpoint, body), data=body, timeout=15)
     return r.json()
 
+def upload_ai_log(order_id: Optional[str], stage: str, model: str, input_data: Dict, output_data: Dict, explanation: str) -> Dict:
+    """Upload AI log to WEEX for compliance"""
+    endpoint = "/capi/v2/order/uploadAiLog"
+    payload = {
+        "orderId": order_id,
+        "stage": stage,
+        "model": model,
+        "input": input_data,
+        "output": output_data,
+        "explanation": explanation[:500]  # Max 500 words
+    }
+    body = json.dumps(payload)
+    r = requests.post(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("POST", endpoint, body), data=body, timeout=15)
+    print(f"[AI LOG UPLOAD] {r.status_code}: {r.text[:200]}")
+    return r.json()
+
 # ============================================================
 # MAIN PIPELINE
 # ============================================================
@@ -329,6 +345,30 @@ def run_nightly_trade():
     print("\n" + "=" * 70)
     print(f"NIGHTLY TRADE COMPLETE - PnL: {pnl:.4f} USDT")
     print("=" * 70)
+    # Upload AI log to WEEX
+    try:
+        order_id = None
+        if "ORDER_RESULT" in str(ai_log):
+            for step in ai_log["steps"]:
+                if step["step"] == "ORDER_RESULT" and "order_id" in str(step["data"]):
+                    order_id = step["data"].get("result", "").split("order_id': '")[1].split("'")[0] if "order_id" in step["data"].get("result", "") else None
+        
+        upload_ai_log(
+            order_id=order_id,
+            stage="Trade Execution",
+            model="SMT-Whale-CatBoost-v1.0 + Gemini-2.5-Flash",
+            input_data={
+                "whale_signal": ai_log["steps"][1]["data"] if len(ai_log["steps"]) > 1 else {},
+                "gemini_validation": ai_log["steps"][2]["data"] if len(ai_log["steps"]) > 2 else {}
+            },
+            output_data={
+                "final_decision": ai_log.get("final_decision", ""),
+                "pnl": ai_log.get("pnl", 0)
+            },
+            explanation=f"SMT whale behavior trading bot. Detected {ai_log['steps'][1]['data'].get('whale', 'unknown')} whale activity. Signal: {ai_log['steps'][1]['data'].get('signal', 'unknown')} with {ai_log['steps'][1]['data'].get('confidence', 'unknown')} confidence. Gemini validated and decision was {ai_log.get('final_decision', 'unknown')}. PnL: {ai_log.get('pnl', 0):.4f} USDT."
+        )
+    except Exception as e:
+        print(f"[AI LOG UPLOAD ERROR] {e}")
 
 def save_log(log_data: Dict):
     os.makedirs("ai_logs", exist_ok=True)

@@ -1,0 +1,69 @@
+{
+  "run_id": "smt_nightly_20260102_174731",
+  "timestamp": "2026-01-02T17:47:31.552302+00:00",
+  "pipeline_version": "SMT-ETH-v1.0",
+  "trading_pair": "cmt_ethusdt",
+  "steps": [
+    {
+      "step": "MARKET_CHECK",
+      "timestamp": "2026-01-02T17:47:32.326375+00:00",
+      "data": {
+        "eth_price": 3125.68,
+        "balance_usdt": 999.9698887
+      }
+    },
+    {
+      "step": "SIGNAL_GENERATED",
+      "timestamp": "2026-01-02T17:47:47.315503+00:00",
+      "data": {
+        "whale": "Binance 14",
+        "signal": "LONG",
+        "confidence": "85%",
+        "reasoning": "CEX_Wallet (Binance 14) shows outflow of 149.99 ETH. Signal: BULLISH."
+      }
+    },
+    {
+      "step": "GEMINI_VALIDATION",
+      "timestamp": "2026-01-02T17:48:10.657728+00:00",
+      "data": {
+        "decision": "EXECUTE",
+        "signal": "LONG",
+        "reasoning": "The explicit 'LONG' signal at 85% confidence is strongly corroborated by highly bullish fundamental news. Ethereum's network is demonstrating significant growth, with record-breaking daily transaction"
+      }
+    },
+    {
+      "step": "OPENING_POSITION",
+      "timestamp": "2026-01-02T17:48:11.014389+00:00",
+      "data": {
+        "signal": "LONG",
+        "size_eth": 0.003,
+        "size_usd": 10.0
+      }
+    },
+    {
+      "step": "ORDER_RESULT",
+      "timestamp": "2026-01-02T17:48:11.386096+00:00",
+      "data": {
+        "result": "{'client_oid': 'smt_1767376091014', 'order_id': '702026209428505445'}"
+      }
+    },
+    {
+      "step": "CLOSE_RESULT",
+      "timestamp": "2026-01-02T17:48:14.769870+00:00",
+      "data": {
+        "result": "{'client_oid': 'smt_1767376094389', 'order_id': '702026223617835877'}"
+      }
+    },
+    {
+      "step": "TRADE_COMPLETE",
+      "timestamp": "2026-01-02T17:48:17.164198+00:00",
+      "data": {
+        "initial_balance": 999.9698887,
+        "final_balance": 999.95895197,
+        "pnl": -0.010936729999912131
+      }
+    }
+  ],
+  "final_decision": "EXECUTED",
+  "pnl": -0.010936729999912131
+}
