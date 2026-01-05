@@ -1,0 +1,43 @@
+{
+  "run_id": "smt_nightly_20260105_135102",
+  "timestamp": "2026-01-05T13:51:02.776981+00:00",
+  "pipeline_version": "SMT-ETH-v1.0",
+  "trading_pair": "cmt_ethusdt",
+  "steps": [
+    {
+      "step": "MARKET_CHECK",
+      "timestamp": "2026-01-05T13:51:03.499167+00:00",
+      "data": {
+        "eth_price": 3146.79,
+        "balance_usdt": 0.0
+      }
+    },
+    {
+      "step": "SIGNAL_GENERATED",
+      "timestamp": "2026-01-05T13:51:19.272272+00:00",
+      "data": {
+        "whale": "Binance 15",
+        "signal": "LONG",
+        "confidence": "85%",
+        "reasoning": "CEX_Wallet (Binance 15) shows outflow of 770.00 ETH. Signal: BULLISH."
+      }
+    },
+    {
+      "step": "GEMINI_VALIDATION",
+      "timestamp": "2026-01-05T13:52:03.986848+00:00",
+      "data": {
+        "decision": "WAIT",
+        "signal": "NEUTRAL",
+        "reasoning": "The provided data presents conflicting signals. While the specific whale activity of a 770 ETH outflow from a CEX is accompanied by a strong 'LONG' signal at 85% confidence, the accompanying news desc"
+      }
+    },
+    {
+      "step": "TRADE_SKIPPED",
+      "timestamp": "2026-01-05T13:52:03.986917+00:00",
+      "data": {
+        "reason": "The provided data presents conflicting signals. While the specific whale activity of a 770 ETH outflow from a CEX is accompanied by a strong 'LONG' signal at 85% confidence, the accompanying news describes a much larger and clearly bearish event. A notable Ethereum whale has converted significant amounts of ETH (over 22,000 ETH, totaling $68.9 million) into Wrapped Bitcoin (WBTC). This conversion from ETH to WBTC indicates a de-risking from Ethereum and a preference for Bitcoin, which is a strong bearish indicator for ETH. The magnitude of this bearish whale activity significantly outweighs the smaller, ambiguous 770 ETH outflow. Given these strong, opposing signals, especially the clear bearish action from a larger whale, a 'WAIT' decision is prudent to observe further market developments and gain clarity. The overall market signal is therefore considered NEUTRAL due to the conflicting forces."
+      }
+    }
+  ],
+  "final_decision": "NO_TRADE"
+}

@@ -1,0 +1,15 @@
+{
+  "run_id": "smt_v2_20260102_184726",
+  "timestamp": "2026-01-02T18:47:26.305939+00:00",
+  "pipeline_version": "SMT-ETH-v2.0-MultiStage",
+  "trading_pair": "cmt_ethusdt",
+  "stages": {
+    "stage1_signal_detection": {
+      "tradeable": false,
+      "confidence": 0,
+      "reason": "Failed to parse AI response"
+    }
+  },
+  "final_decision": "NO_TRADE",
+  "reason": "Failed to parse AI response"
+}
