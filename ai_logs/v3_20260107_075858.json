@@ -1,0 +1,29 @@
+{
+  "run_id": "daemon_20260107_075858",
+  "timestamp": "2026-01-07T07:58:59.525779+00:00",
+  "pipeline_version": "SMT-v3.0-Competition",
+  "daemon_mode": true,
+  "stages": [],
+  "trades": [
+    {
+      "executed": true,
+      "order_id": null,
+      "symbol": "cmt_btcusdt",
+      "signal": "LONG",
+      "size": 0.0010769850449856653,
+      "position_usdt": 100,
+      "entry_price": 92851.8,
+      "tp_price": 97494.39000000001,
+      "sl_price": 90530.505,
+      "tp_pct": 5.0,
+      "sl_pct": 2.5,
+      "leverage": 20,
+      "result": {
+        "code": "40015",
+        "msg": "INVALID_ARGUMENT: The order open tp param triggerPrice must be greater than 0 and matches the stepSize '0.1' requirement. Current order open tp param triggerPrice is '97494.39'",
+        "requestTime": 1767773095302,
+        "data": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "run_id": "daemon_20260107_200500",
+  "timestamp": "2026-01-07T20:05:01.133097+00:00",
+  "pipeline_version": "SMT-v3.0-Competition",
+  "daemon_mode": true,
+  "stages": [],
+  "trades": [
+    {
+      "executed": true,
+      "order_id": null,
+      "symbol": "cmt_xrpusdt",
+      "signal": "LONG",
+      "size": 45.60587403657591,
+      "position_usdt": 100,
+      "entry_price": 2.1927,
+      "tp_price": 2.302335,
+      "sl_price": 2.1378825,
+      "tp_pct": 5.0,
+      "sl_pct": 2.5,
+      "leverage": 20,
+      "result": {
+        "code": "40015",
+        "msg": "INVALID_ARGUMENT: The order size must be greater than 0 and matches the stepSize '10' requirement. Current size is '45.6059'",
+        "requestTime": 1767816586288,
+        "data": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "run_id": "smt_v3_20260108_063057",
+  "timestamp": "2026-01-08T06:30:57.779584+00:00",
+  "pipeline_version": "SMT-v3.0-Competition",
+  "test_mode": false,
+  "stages": [
+    {
+      "stage": "ACCOUNT_STATUS",
+      "timestamp": "2026-01-08T06:30:58.557188+00:00",
+      "data": {
+        "balance": 999.95895197,
+        "open_positions": 0,
+        "pnl": -0.04104802999995627,
+        "pnl_pct": "-0.0%",
+        "days_left": 21,
+        "strategy_mode": "MODERATE"
+      }
+    },
+    {
+      "stage": "WHALE_DISCOVERY",
+      "timestamp": "2026-01-08T06:31:06.475606+00:00",
+      "data": {
+        "large_txs": 2,
+        "whales_found": 10
+      }
+    },
+    {
+      "stage": "WHALE_SIGNAL",
+      "timestamp": "2026-01-08T06:32:21.712929+00:00",
+      "data": {
+        "address": "0x28c6c06298...",
+        "category": "Staker",
+        "signal": "LONG",
+        "confidence": "17%"
+      }
+    },
+    {
+      "stage": "BEST_OPPORTUNITY",
+      "timestamp": "2026-01-08T06:36:11.199984+00:00",
+      "data": {
+        "pair": "XRP",
+        "signal": "LONG",
+        "confidence": "90%",
+        "position_size": 100,
+        "tp": "5.0%",
+        "sl": "2.5%"
+      }
+    },
+    {
+      "stage": "TRADE_EXECUTED",
+      "timestamp": "2026-01-08T06:36:12.300021+00:00",
+      "data": {
+        "order_id": null,
+        "symbol": "cmt_xrpusdt",
+        "signal": "LONG",
+        "size": 47.01,
+        "entry_price": 2.1272,
+        "tp_price": 2.23356,
+        "sl_price": 2.07402
+      }
+    }
+  ],
+  "trades": [
+    {
+      "executed": true,
+      "order_id": null,
+      "symbol": "cmt_xrpusdt",
+      "signal": "LONG",
+      "size": 47.01,
+      "position_usdt": 100,
+      "entry_price": 2.1272,
+      "tp_price": 2.23356,
+      "sl_price": 2.07402,
+      "tp_pct": 5.0,
+      "sl_pct": 2.5,
+      "leverage": 20,
+      "result": {
+        "code": "40015",
+        "msg": "INVALID_ARGUMENT: The order size must be greater than 0 and matches the stepSize '10' requirement. Current size is '47.01'",
+        "requestTime": 1767854172256,
+        "data": null
+      }
+    }
+  ],
+  "final_decision": "EXECUTED"
+}

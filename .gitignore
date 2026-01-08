@@ -56,3 +56,11 @@ temp/
 # Allow AI logs for hackathon compliance
 !ai_logs/
 !ai_logs/*.json
+
+# Re-include ai_logs (must be after *.json ignore)
+!ai_logs/
+!ai_logs/**
+
+# Re-include ai_logs (must be after *.json ignore)
+!ai_logs/
+!ai_logs/**

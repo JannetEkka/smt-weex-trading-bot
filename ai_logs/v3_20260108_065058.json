@@ -1,0 +1,84 @@
+{
+  "run_id": "smt_v3_20260108_065058",
+  "timestamp": "2026-01-08T06:50:58.662136+00:00",
+  "pipeline_version": "SMT-v3.0-Competition",
+  "test_mode": false,
+  "stages": [
+    {
+      "stage": "ACCOUNT_STATUS",
+      "timestamp": "2026-01-08T06:50:59.397127+00:00",
+      "data": {
+        "balance": 999.95895197,
+        "open_positions": 0,
+        "pnl": -0.04104802999995627,
+        "pnl_pct": "-0.0%",
+        "days_left": 21,
+        "strategy_mode": "MODERATE"
+      }
+    },
+    {
+      "stage": "WHALE_DISCOVERY",
+      "timestamp": "2026-01-08T06:51:07.540874+00:00",
+      "data": {
+        "large_txs": 1,
+        "whales_found": 9
+      }
+    },
+    {
+      "stage": "WHALE_SIGNAL",
+      "timestamp": "2026-01-08T06:52:06.662568+00:00",
+      "data": {
+        "address": "0xeae7380dd4...",
+        "category": "Staker",
+        "signal": "SHORT",
+        "confidence": "20%"
+      }
+    },
+    {
+      "stage": "BEST_OPPORTUNITY",
+      "timestamp": "2026-01-08T06:56:27.556773+00:00",
+      "data": {
+        "pair": "SOL",
+        "signal": "LONG",
+        "confidence": "85%",
+        "position_size": 100,
+        "tp": "5.0%",
+        "sl": "2.5%"
+      }
+    },
+    {
+      "stage": "TRADE_EXECUTED",
+      "timestamp": "2026-01-08T06:56:28.998483+00:00",
+      "data": {
+        "order_id": "704036529323901285",
+        "symbol": "cmt_solusdt",
+        "signal": "LONG",
+        "size": 0.7,
+        "entry_price": 135.17,
+        "tp_price": 141.92849999999999,
+        "sl_price": 131.79074999999997
+      }
+    }
+  ],
+  "trades": [
+    {
+      "executed": true,
+      "order_id": "704036529323901285",
+      "symbol": "cmt_solusdt",
+      "signal": "LONG",
+      "size": 0.7,
+      "position_usdt": 100,
+      "entry_price": 135.17,
+      "tp_price": 141.92849999999999,
+      "sl_price": 131.79074999999997,
+      "tp_pct": 5.0,
+      "sl_pct": 2.5,
+      "leverage": 20,
+      "result": {
+        "client_oid": "smt_1767855388624",
+        "order_id": "704036529323901285"
+      }
+    }
+  ],
+  "final_decision": "EXECUTED"
+}

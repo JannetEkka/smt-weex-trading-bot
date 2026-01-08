@@ -1,0 +1,75 @@
+{
+  "run_id": "smt_v3_20260107_165637",
+  "timestamp": "2026-01-07T16:56:37.961723+00:00",
+  "pipeline_version": "SMT-v3.0-Competition",
+  "test_mode": false,
+  "stages": [
+    {
+      "stage": "ACCOUNT_STATUS",
+      "timestamp": "2026-01-07T16:56:38.732302+00:00",
+      "data": {
+        "balance": 999.95895197,
+        "open_positions": 0,
+        "pnl": -0.04104802999995627,
+        "pnl_pct": "-0.0%",
+        "days_left": 21,
+        "strategy_mode": "MODERATE"
+      }
+    },
+    {
+      "stage": "NO_WHALE_DATA",
+      "timestamp": "2026-01-07T16:56:47.987876+00:00",
+      "data": {
+        "reason": "No large transactions found"
+      }
+    },
+    {
+      "stage": "BEST_OPPORTUNITY",
+      "timestamp": "2026-01-07T17:01:03.158991+00:00",
+      "data": {
+        "pair": "ETH",
+        "signal": "LONG",
+        "confidence": "85%",
+        "position_size": 100,
+        "tp": "5.0%",
+        "sl": "2.5%"
+      }
+    },
+    {
+      "stage": "TRADE_EXECUTED",
+      "timestamp": "2026-01-07T17:01:04.258229+00:00",
+      "data": {
+        "order_id": null,
+        "symbol": "cmt_ethusdt",
+        "signal": "LONG",
+        "size": 0.03169994103810967,
+        "entry_price": 3154.58,
+        "tp_price": 3312.309,
+        "sl_price": 3075.7155
+      }
+    }
+  ],
+  "trades": [
+    {
+      "executed": true,
+      "order_id": null,
+      "symbol": "cmt_ethusdt",
+      "signal": "LONG",
+      "size": 0.03169994103810967,
+      "position_usdt": 100,
+      "entry_price": 3154.58,
+      "tp_price": 3312.309,
+      "sl_price": 3075.7155,
+      "tp_pct": 5.0,
+      "sl_pct": 2.5,
+      "leverage": 20,
+      "result": {
+        "code": "40015",
+        "msg": "INVALID_ARGUMENT: The order size must be greater than 0 and matches the stepSize '0.001' requirement. Current size is '0.0317'",
+        "requestTime": 1767805264214,
+        "data": null
+      }
+    }
+  ],
+  "final_decision": "EXECUTED"
+}
