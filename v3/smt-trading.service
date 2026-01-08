@@ -1,0 +1,36 @@
+[Unit]
+Description=SMT Trading Daemon V3 - WEEX AI Wars
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smtforweex
+Group=smtforweex
+WorkingDirectory=/home/smtforweex/smt-weex-trading-bot
+Environment="PATH=/home/smtforweex/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="GOOGLE_CLOUD_PROJECT=smt-weex-2025"
+Environment="GOOGLE_CLOUD_LOCATION=us-central1"
+Environment="GOOGLE_GENAI_USE_VERTEXAI=True"
+Environment="GCS_BUCKET=smt-weex-2025-models"
+
+# Load secrets from environment file
+EnvironmentFile=/home/smtforweex/smt-weex-trading-bot/.env
+
+# Run the daemon
+ExecStart=/usr/bin/python3 /home/smtforweex/smt-weex-trading-bot/smt_daemon_v3.py
+
+# Restart on failure
+Restart=always
+RestartSec=30
+
+# Logging
+StandardOutput=append:/home/smtforweex/smt-weex-trading-bot/logs/daemon_stdout.log
+StandardError=append:/home/smtforweex/smt-weex-trading-bot/logs/daemon_stderr.log
+
+# Resource limits
+MemoryLimit=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target

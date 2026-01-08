@@ -1,0 +1,120 @@
+#!/bin/bash
+# SMT Daemon Control Script
+# Easy commands to manage the trading daemon
+
+SERVICE_NAME="smt-trading"
+REPO_DIR="$HOME/smt-weex-trading-bot/v3"
+LOG_FILE="$REPO_DIR/logs/daemon_$(date +%Y%m%d).log"
+
+case "$1" in
+    start)
+        echo "Starting SMT Trading Daemon..."
+        sudo systemctl start $SERVICE_NAME
+        sleep 2
+        sudo systemctl status $SERVICE_NAME --no-pager
+        ;;
+    
+    stop)
+        echo "Stopping SMT Trading Daemon..."
+        sudo systemctl stop $SERVICE_NAME
+        echo "Stopped."
+        ;;
+    
+    restart)
+        echo "Restarting SMT Trading Daemon..."
+        sudo systemctl restart $SERVICE_NAME
+        sleep 2
+        sudo systemctl status $SERVICE_NAME --no-pager
+        ;;
+    
+    status)
+        sudo systemctl status $SERVICE_NAME --no-pager
+        echo ""
+        echo "Active positions:"
+        cat "$REPO_DIR/active_trades.json" 2>/dev/null || echo "No active trades file"
+        ;;
+    
+    logs)
+        echo "Tailing logs: $LOG_FILE"
+        tail -f "$LOG_FILE"
+        ;;
+    
+    logs-all)
+        echo "All daemon logs:"
+        journalctl -u $SERVICE_NAME -f
+        ;;
+    
+    test)
+        echo "Running in TEST MODE (no real trades)..."
+        cd "$REPO_DIR"
+        SMT_TEST_MODE=true python3 smt_daemon_v3.py
+        ;;
+    
+    manual)
+        echo "Running manually (real trades, Ctrl+C to stop)..."
+        cd "$REPO_DIR"
+        python3 smt_daemon_v3.py
+        ;;
+    
+    positions)
+        echo "Current positions on WEEX:"
+        cd "$REPO_DIR"
+        python3 -c "
+from smt_nightly_trade_v3 import get_open_positions, get_balance, check_position_status
+balance = get_balance()
+positions = get_open_positions()
+print(f'Balance: {balance:.2f} USDT')
+print(f'Open positions: {len(positions)}')
+for p in positions:
+    print(f'  {p[\"symbol\"]}: {p[\"side\"]} {p[\"size\"]} @ {p[\"entry_price\"]}, PnL: {p[\"unrealized_pnl\"]:.2f}')
+"
+        ;;
+    
+    cleanup)
+        echo "Cleaning up all pending orders..."
+        cd "$REPO_DIR"
+        python3 -c "
+from smt_nightly_trade_v3 import TRADING_PAIRS, cancel_all_orders_for_symbol
+for pair, info in TRADING_PAIRS.items():
+    symbol = info['symbol']
+    print(f'Cleaning {symbol}...')
+    result = cancel_all_orders_for_symbol(symbol)
+    print(f'  Cancelled: {len(result.get(\"regular_cancelled\", []))} regular, {len(result.get(\"plan_cancelled\", []))} plan orders')
+print('Done!')
+"
+        ;;
+    
+    enable)
+        echo "Enabling daemon to start on boot..."
+        sudo systemctl enable $SERVICE_NAME
+        echo "Enabled."
+        ;;
+    
+    disable)
+        echo "Disabling daemon from starting on boot..."
+        sudo systemctl disable $SERVICE_NAME
+        echo "Disabled."
+        ;;
+    
+    *)
+        echo "SMT Trading Daemon Control"
+        echo ""
+        echo "Usage: $0 {command}"
+        echo ""
+        echo "Commands:"
+        echo "  start      - Start the daemon"
+        echo "  stop       - Stop the daemon"
+        echo "  restart    - Restart the daemon"
+        echo "  status     - Show daemon status and active trades"
+        echo "  logs       - Tail today's log file"
+        echo "  logs-all   - Show all logs via journalctl"
+        echo "  test       - Run in test mode (no real trades)"
+        echo "  manual     - Run manually in foreground"
+        echo "  positions  - Show current WEEX positions"
+        echo "  cleanup    - Cancel all pending orders"
+        echo "  enable     - Enable auto-start on boot"
+        echo "  disable    - Disable auto-start on boot"
+        echo ""
+        exit 1
+        ;;
+esac
