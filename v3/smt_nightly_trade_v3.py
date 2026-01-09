@@ -60,9 +60,9 @@ STARTING_BALANCE = 1000.0
 
 # Trading Parameters
 MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 5
-MAX_SINGLE_POSITION_PCT = 0.25  # Max 25% of balance per trade
-MAX_TOTAL_EXPOSURE_PCT = 0.60  # Max 60% of balance across all positions
+MAX_OPEN_POSITIONS = 2
+MAX_SINGLE_POSITION_PCT = 0.10  # Max 10% of balance per trade
+MAX_TOTAL_EXPOSURE_PCT = 0.25  # Max 25% of balance across all positions
 
 # Trading Pairs
 TRADING_PAIRS = {
@@ -1142,7 +1142,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     
     # Position size
     position_usdt = decision.get("recommended_position_usdt", balance * 0.10)
-    position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)  # Cap at max
+    position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT, 200)  # Cap at max, WEEX limit $200
     
     # Calculate size in asset units and round to WEEX stepSize
     raw_size = position_usdt / current_price
