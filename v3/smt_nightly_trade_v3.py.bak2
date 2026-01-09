@@ -101,19 +101,6 @@ CEX_ADDRESSES = {
 # Cache for contract info (stepSize, minOrderSize, etc.)
 CONTRACT_INFO_CACHE = {}
 
-# Known step sizes for each pair (from WEEX error messages)
-# This is the actual tradeable step, not size_increment
-KNOWN_STEP_SIZES = {
-    "cmt_btcusdt": 0.001,
-    "cmt_ethusdt": 0.001,
-    "cmt_solusdt": 0.1,
-    "cmt_dogeusdt": 100,
-    "cmt_xrpusdt": 10,
-    "cmt_adausdt": 10,
-    "cmt_bnbusdt": 0.01,
-    "cmt_ltcusdt": 0.01,
-}
-
 
 def get_contract_info(symbol: str) -> Dict:
     """Get contract info including stepSize from WEEX"""
@@ -128,16 +115,6 @@ def get_contract_info(symbol: str) -> Dict:
         
         if isinstance(data, list) and len(data) > 0:
             info = data[0]
-            
-            # Get step size - use known value or derive from contract_val/minOrderSize
-            step_size = KNOWN_STEP_SIZES.get(symbol)
-            if step_size is None:
-                # Try to infer from contract_val or minOrderSize
-                contract_val = float(info.get("contract_val", "1"))
-                min_order = float(info.get("minOrderSize", "0.001"))
-                # Use the larger of contract_val or the smallest sensible step
-                step_size = max(contract_val, min_order) if contract_val >= 1 else min_order
-            
             contract_info = {
                 "symbol": symbol,
                 "size_increment": info.get("size_increment", "3"),  # Decimal places
@@ -145,40 +122,31 @@ def get_contract_info(symbol: str) -> Dict:
                 "min_order_size": float(info.get("minOrderSize", "0.001")),
                 "max_order_size": float(info.get("maxOrderSize", "100000")),
                 "max_leverage": int(info.get("maxLeverage", 100)),
-                "step_size": step_size,  # Actual trading step
-                "contract_val": float(info.get("contract_val", "1")),
             }
             CONTRACT_INFO_CACHE[symbol] = contract_info
-            print(f"  [CONTRACT] {symbol}: step={step_size}, min={contract_info['min_order_size']}")
             return contract_info
     except Exception as e:
         print(f"  [WEEX] Error getting contract info: {e}")
     
     # Default fallback
-    return {"size_increment": "3", "tick_size": "2", "min_order_size": 0.001, "step_size": 0.001}
+    return {"size_increment": "3", "tick_size": "2", "min_order_size": 0.001}
 
 
 def round_size_to_step(size: float, symbol: str) -> float:
-    """Round size DOWN to match WEEX stepSize requirement"""
+    """Round size to match WEEX stepSize requirement"""
     contract_info = get_contract_info(symbol)
     
-    # Use the actual step_size
-    step = contract_info.get("step_size", 0.001)
+    # size_increment is the number of decimal places allowed
+    # e.g., "3" means 0.001 stepSize, "0" means 1, "-1" means 10
+    increment = int(contract_info.get("size_increment", "3"))
     
-    # Round DOWN to nearest step (floor division)
-    # This ensures we don't exceed available balance
-    import math
-    rounded = math.floor(size / step) * step
-    
-    # Handle floating point precision
-    if step >= 1:
-        rounded = int(rounded)
+    if increment >= 0:
+        # Round to N decimal places
+        return round(size, increment)
     else:
-        # Determine decimal places from step
-        decimals = len(str(step).split('.')[-1]) if '.' in str(step) else 0
-        rounded = round(rounded, decimals)
-    
-    return float(rounded)
+        # Round to nearest 10, 100, etc.
+        step = 10 ** abs(increment)
+        return round(size / step) * step
 
 # Signal mapping for whale classification
 SIGNAL_MAP = {
@@ -268,20 +236,17 @@ def get_open_positions() -> List[Dict]:
         if isinstance(data, list):
             for pos in data:
                 size = float(pos.get("size", 0))
-                margin = float(pos.get("marginSize", 0))  # WEEX uses marginSize not margin
-                open_value = float(pos.get("open_value", 0))
-                
-                # Calculate entry price from open_value / size
-                entry_price = open_value / size if size > 0 else 0
-                
-                # Position is truly open only if it has size > 0
-                if size > 0:
+                margin = float(pos.get("margin", 0))
+                entry_price = float(pos.get("avgCost", 0))
+                # Position is truly open only if it has size AND margin AND entry_price
+                # WEEX sometimes returns stale positions with size but 0 margin/entry
+                if size > 0 and margin > 0 and entry_price > 0:
                     positions.append({
                         "symbol": pos.get("symbol"),
-                        "side": pos.get("side", "").upper(),  # WEEX returns uppercase
+                        "side": "LONG" if pos.get("side") == "long" else "SHORT",
                         "size": size,
                         "entry_price": entry_price,
-                        "unrealized_pnl": float(pos.get("unrealizePnl", 0)),  # WEEX uses unrealizePnl
+                        "unrealized_pnl": float(pos.get("unrealizedPL", 0)),
                         "margin": margin,
                     })
         return positions
@@ -297,57 +262,23 @@ def set_leverage(symbol: str, leverage: int) -> Dict:
     return r.json()
 
 
-def place_order(symbol: str, side: str, size: float, tp_price: float = None, sl_price: float = None) -> Dict:
+def place_order(symbol: str, side: str, size: float) -> Dict:
     """
-    Place order on WEEX with optional TP/SL
+    Place market order on WEEX (without TP/SL - use place_plan_order separately)
     side: "1"=OpenLong, "2"=OpenShort, "3"=CloseLong, "4"=CloseShort
-    
-    Uses LIMIT order slightly above/below market for instant fill when TP/SL needed.
-    Uses MARKET order when no TP/SL (for closing positions).
     """
     endpoint = "/capi/v2/order/placeOrder"
+    # Round size to match WEEX stepSize requirement
     rounded_size = round_size_to_step(size, symbol)
     
-    # Get current price for limit orders
-    current_price = get_price(symbol)
-    
-    # Determine if we need limit order (for TP/SL) or market order
-    use_limit = tp_price is not None or sl_price is not None
-    
-    if use_limit and current_price > 0:
-        # Use limit order slightly worse than market for instant fill
-        # For buys (open long, close short): slightly higher
-        # For sells (open short, close long): slightly lower
-        if side in ("1", "4"):  # Open Long or Close Short = BUY
-            limit_price = round(current_price * 1.002, 2)  # 0.2% above
-        else:  # Open Short or Close Long = SELL
-            limit_price = round(current_price * 0.998, 2)  # 0.2% below
-        
-        order = {
-            "symbol": symbol,
-            "client_oid": f"smt_{int(time.time()*1000)}",
-            "size": str(rounded_size),
-            "type": side,
-            "order_type": "0",  # Normal order
-            "match_price": "0",  # LIMIT order
-            "price": str(limit_price),
-        }
-        
-        # Add TP/SL
-        if tp_price:
-            order["presetTakeProfitPrice"] = str(round(tp_price, 2))
-        if sl_price:
-            order["presetStopLossPrice"] = str(round(sl_price, 2))
-    else:
-        # Market order (no TP/SL, used for closing)
-        order = {
-            "symbol": symbol,
-            "client_oid": f"smt_{int(time.time()*1000)}",
-            "size": str(rounded_size),
-            "type": side,
-            "order_type": "0",
-            "match_price": "1"  # MARKET order
-        }
+    order = {
+        "symbol": symbol,
+        "client_oid": f"smt_{int(time.time()*1000)}",
+        "size": str(rounded_size),
+        "type": side,
+        "order_type": "0",
+        "match_price": "1"
+    }
     
     body = json.dumps(order)
     
@@ -1135,7 +1066,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     if signal not in ("LONG", "SHORT"):
         return {"executed": False, "reason": "No trade signal"}
     
-    # Get current price for position sizing
+    # Get current price
     current_price = get_price(symbol)
     if current_price == 0:
         return {"executed": False, "reason": "Could not get price"}
@@ -1156,20 +1087,18 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     
     print(f"  [Trade] Raw size: {raw_size:.6f}, Rounded: {size}")
     
-    # Determine order type
+    # Calculate TP/SL prices
+    tp_pct = decision.get("take_profit_percent", 3.0) / 100
+    sl_pct = decision.get("stop_loss_percent", 2.0) / 100
+    
     if signal == "LONG":
         order_type = "1"  # Open Long
-    else:  # SHORT
-        order_type = "2"  # Open Short
-    
-    # Calculate TP/SL from current price
-    tp_pct = decision.get("take_profit_percent", 5.0) / 100
-    sl_pct = decision.get("stop_loss_percent", 2.5) / 100
-    
-    if signal == "LONG":
+        close_type = "3"  # Close Long (for TP/SL)
         tp_price = current_price * (1 + tp_pct)
         sl_price = current_price * (1 - sl_pct)
     else:  # SHORT
+        order_type = "2"  # Open Short
+        close_type = "4"  # Close Short (for TP/SL)
         tp_price = current_price * (1 - tp_pct)
         sl_price = current_price * (1 + sl_pct)
     
@@ -1177,11 +1106,9 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     print(f"  [Trade] Setting leverage to {MAX_LEVERAGE}x...")
     set_leverage(symbol, MAX_LEVERAGE)
     
-    # Place LIMIT order with TP/SL
-    print(f"  [Trade] Placing {signal} @ ~${current_price:.2f}")
-    print(f"  [Trade] TP: ${tp_price:.2f} (+{tp_pct*100:.1f}%), SL: ${sl_price:.2f} (-{sl_pct*100:.1f}%)")
-    
-    result = place_order(symbol, order_type, size, tp_price, sl_price)
+    # Place main order (without TP/SL)
+    print(f"  [Trade] Placing {signal} order: {size} @ ${current_price:.2f}")
+    result = place_order(symbol, order_type, size)
     
     order_id = result.get("order_id")
     
@@ -1192,11 +1119,26 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
             "result": result,
         }
     
-    print(f"  [Trade] Order placed: {order_id}")
+    print(f"  [Trade] Main order filled: {order_id}")
+    
+    # Wait a moment for position to be established
+    time.sleep(1)
+    
+    # Place TP order using plan_order endpoint
+    print(f"  [Trade] Placing TP plan order @ ${tp_price:.2f} ({tp_pct*100:.1f}%)")
+    tp_result = place_plan_order(symbol, close_type, size, tp_price)
+    tp_order_id = tp_result.get("order_id")
+    
+    # Place SL order using plan_order endpoint
+    print(f"  [Trade] Placing SL plan order @ ${sl_price:.2f} ({sl_pct*100:.1f}%)")
+    sl_result = place_plan_order(symbol, close_type, size, sl_price)
+    sl_order_id = sl_result.get("order_id")
     
     return {
         "executed": True,
         "order_id": order_id,
+        "tp_order_id": tp_order_id,
+        "sl_order_id": sl_order_id,
         "symbol": symbol,
         "signal": signal,
         "size": size,
@@ -1208,6 +1150,8 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         "sl_pct": sl_pct * 100,
         "leverage": MAX_LEVERAGE,
         "result": result,
+        "tp_result": tp_result,
+        "sl_result": sl_result,
     }
 
 
@@ -1367,28 +1311,20 @@ def check_position_status(symbol: str) -> Dict:
         r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=15)
         data = r.json()
         
-        # singlePosition returns a list, not a dict
-        if isinstance(data, list) and len(data) > 0:
-            pos = data[0]
-            size = float(pos.get("size", 0))
-            
-            if size > 0:
-                open_value = float(pos.get("open_value", 0))
-                entry_price = open_value / size if size > 0 else 0
-                
-                return {
-                    "is_open": True,
-                    "symbol": symbol,
-                    "side": pos.get("side", "").upper(),
-                    "size": size,
-                    "entry_price": entry_price,
-                    "mark_price": float(pos.get("markPrice", 0)),
-                    "unrealized_pnl": float(pos.get("unrealizePnl", 0)),
-                    "margin": float(pos.get("marginSize", 0)),
-                    "liquidation_price": float(pos.get("liquidatePrice", 0)),
-                }
-        
-        return {"is_open": False, "symbol": symbol}
+        if isinstance(data, dict) and float(data.get("size", 0)) > 0:
+            return {
+                "is_open": True,
+                "symbol": symbol,
+                "side": "LONG" if data.get("side") == "long" else "SHORT",
+                "size": float(data.get("size", 0)),
+                "entry_price": float(data.get("avgCost", 0)),
+                "mark_price": float(data.get("markPrice", 0)),
+                "unrealized_pnl": float(data.get("unrealizedPL", 0)),
+                "margin": float(data.get("margin", 0)),
+                "liquidation_price": float(data.get("liquidationPrice", 0)),
+            }
+        else:
+            return {"is_open": False, "symbol": symbol}
     except Exception as e:
         print(f"  [WEEX] Error checking position: {e}")
         return {"is_open": False, "symbol": symbol, "error": str(e)}
