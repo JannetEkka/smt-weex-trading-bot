@@ -318,10 +318,12 @@ def place_order(symbol: str, side: str, size: float, tp_price: float = None, sl_
         # Use limit order slightly worse than market for instant fill
         # For buys (open long, close short): slightly higher
         # For sells (open short, close long): slightly lower
+        contract_info = get_contract_info(symbol)
+        tick_decimals = int(contract_info.get("tick_size", 2))
         if side in ("1", "4"):  # Open Long or Close Short = BUY
-            limit_price = round(current_price * 1.002, 2)  # 0.2% above
+            limit_price = round(current_price * 1.002, tick_decimals)  # 0.2% above
         else:  # Open Short or Close Long = SELL
-            limit_price = round(current_price * 0.998, 2)  # 0.2% below
+            limit_price = round(current_price * 0.998, tick_decimals)  # 0.2% below
         
         order = {
             "symbol": symbol,
@@ -477,11 +479,11 @@ def get_competition_status(balance: float) -> Dict:
         tp_target = 3.0
         sl_limit = 2.0
     elif days_left <= 15:
-        max_hold_hours = 72
+        max_hold_hours = 48
         tp_target = 4.0
         sl_limit = 2.0
     else:
-        max_hold_hours = 120
+        max_hold_hours = 48
         tp_target = 5.0
         sl_limit = 2.5
     
