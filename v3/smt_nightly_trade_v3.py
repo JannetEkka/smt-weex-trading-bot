@@ -1599,6 +1599,14 @@ def run_pipeline():
     # ===== STAGE 1: Get Account Status =====
     balance = get_balance()
     open_positions = get_open_positions()
+    
+    # Balance floor protection
+    MIN_BALANCE_FLOOR = 500
+    if balance < MIN_BALANCE_FLOOR:
+        log_stage("SKIPPED", {"reason": f"Balance protection: ${balance:.0f} below ${MIN_BALANCE_FLOOR} floor"})
+        ai_log["final_decision"] = "BALANCE_PROTECTION"
+        save_local_log(ai_log, run_timestamp)
+        return
     competition_status = get_competition_status(balance)
     
     log_stage("ACCOUNT_STATUS", {
