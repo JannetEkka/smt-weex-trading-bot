@@ -500,6 +500,7 @@ def quick_cleanup_check():
     """Quick check for closed positions - runs frequently"""
     
     state.last_cleanup = datetime.now(timezone.utc)
+    position_closed = False
     
     try:
         active_symbols = tracker.get_active_symbols()
@@ -513,10 +514,15 @@ def quick_cleanup_check():
                 cleanup = cancel_all_orders_for_symbol(symbol)
                 tracker.close_trade(symbol, {"reason": "tp_sl_hit", "cleanup": cleanup})
                 state.trades_closed += 1
+                position_closed = True
+        
+        # If a position closed, trigger signal check for new opportunity
+        if position_closed:
+            logger.info("Position closed - triggering immediate signal check for new opportunity")
+            check_trading_signals()
                 
     except Exception as e:
         logger.debug(f"Quick cleanup check error: {e}")
-
 
 # ============================================================
 # HEALTH CHECK (Every minute)

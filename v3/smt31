@@ -1,0 +1,336 @@
+#!/bin/bash
+# SMT V3.1 Daemon Control Script
+# Multi-persona trading system
+
+SERVICE_NAME="smt-trading-v31"
+REPO_DIR="$HOME/smt-weex-trading-bot/v3"
+LOG_FILE="$REPO_DIR/logs/daemon_v3_1_$(date +%Y%m%d).log"
+STATE_FILE="$REPO_DIR/trade_state_v3_1.json"
+
+case "$1" in
+    start)
+        echo "Starting SMT V3.1 Trading Daemon..."
+        sudo systemctl start $SERVICE_NAME 2>/dev/null || {
+            echo "Service not found. Running in foreground mode..."
+            cd "$REPO_DIR"
+            nohup python3 smt_daemon_v3_1.py > /dev/null 2>&1 &
+            echo "Started with PID: $!"
+        }
+        sleep 2
+        $0 status
+        ;;
+    
+    stop)
+        echo "Stopping SMT V3.1 Trading Daemon..."
+        sudo systemctl stop $SERVICE_NAME 2>/dev/null || {
+            pkill -f "smt_daemon_v3_1.py"
+        }
+        echo "Stopped."
+        ;;
+    
+    restart)
+        echo "Restarting SMT V3.1..."
+        $0 stop
+        sleep 2
+        $0 start
+        ;;
+    
+    status)
+        echo "=========================================="
+        echo "SMT V3.1 STATUS"
+        echo "=========================================="
+        
+        # Check if daemon is running
+        if pgrep -f "smt_daemon_v3_1.py" > /dev/null; then
+            echo "Daemon: RUNNING (PID: $(pgrep -f 'smt_daemon_v3_1.py'))"
+        else
+            echo "Daemon: STOPPED"
+        fi
+        
+        echo ""
+        cd "$REPO_DIR"
+        python3 -c "
+from smt_nightly_trade_v3_1 import get_open_positions, get_balance, get_competition_status
+import json
+
+balance = get_balance()
+positions = get_open_positions()
+competition = get_competition_status(balance)
+
+print(f'Balance: \${balance:.2f} USDT')
+print(f'Open positions: {len(positions)}/5')
+print(f'Phase: {competition[\"phase\"]}')
+print(f'Days left: {competition[\"days_left\"]}')
+print()
+
+if positions:
+    total_pnl = 0
+    print('Positions:')
+    for p in positions:
+        pnl = p.get('unrealized_pnl', 0)
+        total_pnl += pnl
+        symbol_short = p['symbol'].replace('cmt_', '').upper()
+        margin = p.get('margin', 0)
+        pnl_pct = (pnl / margin * 100) if margin > 0 else 0
+        status = '+' if pnl >= 0 else ''
+        print(f'  {symbol_short}: {p[\"side\"]} {p[\"size\"]} @ \${p[\"entry_price\"]:.4f} | PnL: {status}\${pnl:.2f} ({pnl_pct:+.1f}%)')
+    print(f'  ----------------------------------------')
+    print(f'  Total Unrealized PnL: \${total_pnl:.2f}')
+else:
+    print('No open positions.')
+"
+        ;;
+    
+    logs)
+        echo "Tailing V3.1 logs: $LOG_FILE"
+        tail -f "$LOG_FILE" 2>/dev/null || {
+            echo "Log file not found. Looking for latest..."
+            latest=$(ls -t "$REPO_DIR/logs/daemon_v3_1_"*.log 2>/dev/null | head -1)
+            if [ -n "$latest" ]; then
+                echo "Found: $latest"
+                tail -f "$latest"
+            else
+                echo "No V3.1 log files found."
+            fi
+        }
+        ;;
+    
+    test)
+        echo "Running V3.1 in TEST MODE (no real trades)..."
+        cd "$REPO_DIR"
+        SMT_TEST_MODE=true python3 smt_nightly_trade_v3_1.py --test
+        ;;
+    
+    manual)
+        echo "Running V3.1 daemon manually (real trades, Ctrl+C to stop)..."
+        cd "$REPO_DIR"
+        python3 smt_daemon_v3_1.py
+        ;;
+    
+    positions)
+        cd "$REPO_DIR"
+        python3 -c "
+from smt_nightly_trade_v3_1 import get_open_positions, get_balance
+from datetime import datetime, timezone
+
+balance = get_balance()
+positions = get_open_positions()
+
+print(f'Balance: \${balance:.2f} USDT')
+print(f'Open positions: {len(positions)}/5')
+print()
+
+if positions:
+    for p in positions:
+        pnl = p.get('unrealized_pnl', 0)
+        symbol_short = p['symbol'].replace('cmt_', '').upper()
+        margin = p.get('margin', 0)
+        pnl_pct = (pnl / margin * 100) if margin > 0 else 0
+        status_icon = '[+]' if pnl >= 0 else '[-]'
+        print(f'{status_icon} {symbol_short}: {p[\"side\"]} size={p[\"size\"]} entry=\${p[\"entry_price\"]:.4f}')
+        print(f'    Margin: \${margin:.2f} | PnL: \${pnl:.2f} ({pnl_pct:+.1f}%)')
+else:
+    print('No open positions.')
+"
+        ;;
+    
+    close)
+        if [ -z "$2" ]; then
+            echo "Usage: $0 close <SYMBOL>"
+            echo "Example: $0 close LTCUSDT"
+            exit 1
+        fi
+        
+        SYMBOL_INPUT=$(echo "$2" | tr '[:upper:]' '[:lower:]')
+        
+        echo "Closing position: $2"
+        cd "$REPO_DIR"
+        python3 -c "
+from smt_nightly_trade_v3_1 import get_open_positions, close_position_manually, cancel_all_orders_for_symbol
+
+symbol_input = '$SYMBOL_INPUT'
+symbol = f'cmt_{symbol_input}' if not symbol_input.startswith('cmt_') else symbol_input
+
+positions = get_open_positions()
+pos = None
+for p in positions:
+    if p['symbol'] == symbol:
+        pos = p
+        break
+
+if not pos:
+    print(f'No open position for {symbol}')
+else:
+    print(f'Closing {pos[\"side\"]} {pos[\"size\"]} {symbol}...')
+    result = close_position_manually(symbol, pos['side'], pos['size'])
+    print(f'Close result: {result}')
+    
+    # Cleanup orders
+    cleanup = cancel_all_orders_for_symbol(symbol)
+    print(f'Cancelled orders: {len(cleanup.get(\"cancelled\", []))}')
+    print('Done.')
+"
+        ;;
+    
+    close-losers)
+        echo "Closing all LOSING positions..."
+        cd "$REPO_DIR"
+        python3 -c "
+from smt_nightly_trade_v3_1 import get_open_positions, close_position_manually, cancel_all_orders_for_symbol
+
+positions = get_open_positions()
+losers = [p for p in positions if p.get('unrealized_pnl', 0) < 0]
+
+if not losers:
+    print('No losing positions to close.')
+else:
+    print(f'Found {len(losers)} losing positions:')
+    for p in losers:
+        pnl = p.get('unrealized_pnl', 0)
+        symbol = p['symbol']
+        symbol_short = symbol.replace('cmt_', '').upper()
+        
+        print(f'  Closing {symbol_short}: {p[\"side\"]} {p[\"size\"]} (PnL: \${pnl:.2f})...')
+        result = close_position_manually(symbol, p['side'], p['size'])
+        cleanup = cancel_all_orders_for_symbol(symbol)
+        print(f'    Closed. Cancelled {len(cleanup.get(\"cancelled\", []))} orders.')
+    
+    print()
+    print(f'Closed {len(losers)} losing positions.')
+"
+        ;;
+    
+    close-all)
+        echo "WARNING: This will close ALL open positions!"
+        read -p "Are you sure? (yes/no): " confirm
+        if [ "$confirm" != "yes" ]; then
+            echo "Cancelled."
+            exit 0
+        fi
+        
+        echo "Closing all positions..."
+        cd "$REPO_DIR"
+        python3 -c "
+from smt_nightly_trade_v3_1 import get_open_positions, close_position_manually, cancel_all_orders_for_symbol
+
+positions = get_open_positions()
+
+if not positions:
+    print('No open positions.')
+else:
+    print(f'Closing {len(positions)} positions:')
+    for p in positions:
+        symbol = p['symbol']
+        symbol_short = symbol.replace('cmt_', '').upper()
+        pnl = p.get('unrealized_pnl', 0)
+        
+        print(f'  Closing {symbol_short}: {p[\"side\"]} {p[\"size\"]} (PnL: \${pnl:.2f})...')
+        result = close_position_manually(symbol, p['side'], p['size'])
+        cleanup = cancel_all_orders_for_symbol(symbol)
+        print(f'    Done.')
+    
+    print()
+    print(f'Closed all {len(positions)} positions.')
+"
+        ;;
+    
+    cleanup)
+        echo "Cleaning up all pending orders..."
+        cd "$REPO_DIR"
+        python3 -c "
+from smt_nightly_trade_v3_1 import TRADING_PAIRS, cancel_all_orders_for_symbol
+
+total_cancelled = 0
+for pair, info in TRADING_PAIRS.items():
+    symbol = info['symbol']
+    result = cancel_all_orders_for_symbol(symbol)
+    cancelled = len(result.get('cancelled', []))
+    if cancelled > 0:
+        print(f'  {pair}: Cancelled {cancelled} orders')
+        total_cancelled += cancelled
+
+if total_cancelled == 0:
+    print('No pending orders to cancel.')
+else:
+    print(f'Total cancelled: {total_cancelled}')
+"
+        ;;
+    
+    analyze)
+        echo "Running multi-persona analysis (no execution)..."
+        cd "$REPO_DIR"
+        python3 -c "
+from smt_nightly_trade_v3_1 import (
+    MultiPersonaAnalyzer, TRADING_PAIRS, get_balance, 
+    get_open_positions, get_competition_status
+)
+
+analyzer = MultiPersonaAnalyzer()
+balance = get_balance()
+positions = get_open_positions()
+competition = get_competition_status(balance)
+
+print(f'Balance: \${balance:.2f}')
+print(f'Open positions: {len(positions)}/5')
+print(f'Phase: {competition[\"phase\"]}')
+print()
+print('Multi-Persona Analysis:')
+print('=' * 60)
+
+for pair, pair_info in TRADING_PAIRS.items():
+    # Skip if already have position
+    has_position = any(p.get('symbol') == pair_info['symbol'] for p in positions)
+    if has_position:
+        print(f'{pair}: [SKIP - has position]')
+        continue
+    
+    try:
+        result = analyzer.analyze(pair, pair_info, balance, competition, positions)
+        decision = result.get('decision', 'ERROR')
+        confidence = result.get('confidence', 0)
+        
+        if decision in ('LONG', 'SHORT'):
+            print(f'{pair}: {decision} @ {confidence:.0%}')
+            print(f'  Position: \${result.get(\"recommended_position_usdt\", 0):.0f} USDT')
+            print(f'  TP/SL: +{result.get(\"take_profit_percent\", 0)}% / -{result.get(\"stop_loss_percent\", 0)}%')
+        else:
+            print(f'{pair}: {decision} ({result.get(\"reasoning\", \"\")})')
+    except Exception as e:
+        print(f'{pair}: ERROR - {e}')
+
+print()
+print('=' * 60)
+print('Analysis complete. No trades executed.')
+"
+        ;;
+    
+    *)
+        echo "=========================================="
+        echo "SMT V3.1 - Multi-Persona Trading System"
+        echo "=========================================="
+        echo ""
+        echo "Usage: $0 {command}"
+        echo ""
+        echo "Daemon Commands:"
+        echo "  start        - Start the V3.1 daemon"
+        echo "  stop         - Stop the daemon"
+        echo "  restart      - Restart the daemon"
+        echo "  status       - Show daemon status + positions"
+        echo "  logs         - Tail today's log file"
+        echo "  manual       - Run manually in foreground"
+        echo "  test         - Run in test mode (no trades)"
+        echo ""
+        echo "Position Commands:"
+        echo "  positions    - Show detailed positions"
+        echo "  close <SYM>  - Close specific position (e.g., close LTCUSDT)"
+        echo "  close-losers - Close all losing positions"
+        echo "  close-all    - Close ALL positions (confirmation required)"
+        echo "  cleanup      - Cancel all pending orders"
+        echo ""
+        echo "Analysis:"
+        echo "  analyze      - Run multi-persona analysis (no execution)"
+        echo ""
+        exit 1
+        ;;
+esac
+
