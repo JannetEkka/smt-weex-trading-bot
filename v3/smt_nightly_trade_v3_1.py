@@ -1,19 +1,30 @@
 """
-SMT Nightly Trade V3.1.1 - Tier-Based Multi-Persona Analysis
+SMT Nightly Trade V3.1.4 - Tier-Based Multi-Persona Analysis
 =============================================================
 Enhanced trading with tier-based risk management.
 
-V3.1.1 Changes:
-- Tier 1 (BTC, ETH, BNB, LTC): 4% TP, 2% SL, 48h hold - slow grind, room to breathe
-- Tier 2 (SOL): 3% TP, 1.75% SL, 12h hold - volatile but not meme-tier
-- Tier 3 (DOGE, XRP, ADA): 2.5% TP, 1.5% SL, 6h hold - momentum scalp, get out fast
+V3.1.4 Changes (CRITICAL FIXES):
+- Reduced MAX_OPEN_POSITIONS from 8 to 5 (less exposure)
+- Increased MIN_CONFIDENCE_TO_TRADE from 55% to 65% (better signals)
+- Widened Tier 3 SL from 1.5% to 2.0% (stop getting whipsawed)
+- Increased Tier 3 TP from 2.5% to 3.0% (better R:R ratio)
+- Added MARKET TREND FILTER - don't go LONG when BTC is dropping!
+- Reduced Tier 3 max hold from 6h to 4h (faster exits)
+
+V3.1.3 Changes:
+- Fixed explanation truncation: 2500 chars (500 words) instead of 500 chars
+
+Tier Config:
+- Tier 1 (BTC, ETH, BNB, LTC): 4% TP, 2% SL, 48h hold
+- Tier 2 (SOL): 3% TP, 1.75% SL, 12h hold  
+- Tier 3 (DOGE, XRP, ADA): 3% TP, 2% SL, 4h hold (UPDATED!)
 
 Personas:
 1. WHALE - On-chain whale intelligence (our unique edge)
 2. SENTIMENT - Market sentiment via Gemini search
 3. FLOW - Order flow analysis (taker ratio + depth)
 4. TECHNICAL - RSI, SMA, momentum indicators
-5. JUDGE - Final validator that weighs all personas
+5. JUDGE - Final validator that weighs all personas + MARKET TREND
 
 Run: python3 smt_nightly_trade_v3_1.py
 Test: python3 smt_nightly_trade_v3_1.py --test
@@ -60,19 +71,19 @@ COMPETITION_END = datetime(2026, 2, 2, tzinfo=timezone.utc)
 STARTING_BALANCE = 1000.0
 FLOOR_BALANCE = 950.0  # Protect principal - stop trading below this
 
-# Trading Parameters
+# Trading Parameters - V3.1.4 UPDATES
 MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 8
+MAX_OPEN_POSITIONS = 5  # REDUCED from 8 - less exposure, better management
 MAX_SINGLE_POSITION_PCT = 0.08  # 8% per trade max
 MIN_SINGLE_POSITION_PCT = 0.03  # 3% minimum
-MIN_CONFIDENCE_TO_TRADE = 0.55
+MIN_CONFIDENCE_TO_TRADE = 0.65  # INCREASED from 0.55 - stop taking weak signals!
 
 # ============================================================
-# V3.1.1: TIER-BASED PARAMETERS
+# V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
 # ============================================================
 # Tier 1: Stable (BTC, ETH, BNB, LTC) - slow grind, need room to breathe
 # Tier 2: Mid volatility (SOL) - volatile but not meme-tier
-# Tier 3: Fast/Meme (DOGE, XRP, ADA) - momentum scalp, get out fast
+# Tier 3: Fast/Meme (DOGE, XRP, ADA) - WIDENED SL to stop whipsaw losses
 
 TIER_CONFIG = {
     1: {  # BTC, ETH, BNB, LTC - Stable, slow movers
@@ -93,13 +104,13 @@ TIER_CONFIG = {
         "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 3h
         "force_exit_loss_pct": -4.0,  # Hard stop at -4%
     },
-    3: {  # DOGE, XRP, ADA - Fast movers, momentum scalp
+    3: {  # DOGE, XRP, ADA - V3.1.4: WIDENED SL, HIGHER TP
         "name": "FAST",
-        "tp_pct": 2.5,           # Take profit at 2.5%
-        "sl_pct": 1.5,           # Stop loss at 1.5%
-        "max_hold_hours": 6,     # Get out fast - 6h max
-        "early_exit_hours": 2,   # Check early exit after 2h
-        "early_exit_loss_pct": -1.0,  # Exit if -1% after 2h
+        "tp_pct": 3.0,           # INCREASED from 2.5% - better R:R
+        "sl_pct": 2.0,           # INCREASED from 1.5% - stop getting whipsawed!
+        "max_hold_hours": 4,     # REDUCED from 6h - get out faster
+        "early_exit_hours": 1.5, # REDUCED from 2h - check earlier
+        "early_exit_loss_pct": -1.0,  # Exit if -1% after 1.5h
         "force_exit_loss_pct": -4.0,  # Hard stop at -4%
     },
 }
@@ -117,8 +128,8 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.1.1-TierBased"
-MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.1"
+PIPELINE_VERSION = "SMT-v3.1.4-TierBased"
+MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.4"
 
 # Known step sizes
 KNOWN_STEP_SIZES = {
@@ -840,18 +851,63 @@ class TechnicalPersona:
 
 
 # ============================================================
-# JUDGE: FINAL DECISION MAKER (V3.1.1 - Tier-Based)
+# JUDGE: FINAL DECISION MAKER (V3.1.4 - Market Trend Filter)
 # ============================================================
 
 class JudgePersona:
-    """Weighs all persona votes and makes final decision with tier-based TP/SL."""
+    """Weighs all persona votes and makes final decision with tier-based TP/SL.
+    
+    V3.1.4: Added MARKET TREND FILTER - don't go against BTC trend!
+    """
     
     def __init__(self):
         self.name = "JUDGE"
+        self._btc_trend_cache = {"trend": None, "timestamp": 0}
+    
+    def _get_btc_trend(self) -> str:
+        """Check BTC 4h trend - returns 'UP', 'DOWN', or 'NEUTRAL'
+        
+        This prevents going LONG on altcoins when BTC is dumping,
+        or going SHORT when BTC is pumping.
+        """
+        import time as time_module
+        
+        # Cache for 15 minutes
+        if time_module.time() - self._btc_trend_cache["timestamp"] < 900:
+            return self._btc_trend_cache["trend"]
+        
+        try:
+            # Get BTC 4h candles
+            url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol=cmt_btcusdt&granularity=4h&limit=6"
+            r = requests.get(url, timeout=10)
+            data = r.json()
+            
+            if isinstance(data, list) and len(data) >= 3:
+                # Get last 3 candles closes (most recent first)
+                closes = [float(c[4]) for c in data[:3]]
+                
+                # Calculate 4h change
+                if len(closes) >= 2:
+                    change_pct = ((closes[0] - closes[1]) / closes[1]) * 100
+                    
+                    if change_pct > 1.0:  # BTC up more than 1% in 4h
+                        trend = "UP"
+                    elif change_pct < -1.0:  # BTC down more than 1% in 4h
+                        trend = "DOWN"
+                    else:
+                        trend = "NEUTRAL"
+                    
+                    self._btc_trend_cache = {"trend": trend, "timestamp": time_module.time()}
+                    print(f"  [JUDGE] BTC 4h trend: {trend} ({change_pct:+.2f}%)")
+                    return trend
+        except Exception as e:
+            print(f"  [JUDGE] BTC trend check error: {e}")
+        
+        return "NEUTRAL"
     
     def decide(self, persona_votes: List[Dict], pair: str, balance: float, 
                competition_status: Dict) -> Dict:
-        """Make final trading decision with TIER-BASED TP/SL"""
+        """Make final trading decision with TIER-BASED TP/SL and MARKET TREND FILTER"""
         
         # Get tier config for this pair
         tier_config = get_tier_config_for_pair(pair)
@@ -891,9 +947,10 @@ class JudgePersona:
         long_pct = long_score / total
         short_pct = short_score / total
         
+        # V3.1.4: STRICTER THRESHOLDS
         num_votes = len(persona_votes)
-        threshold = 0.35 if num_votes <= 3 else 0.40
-        ratio_req = 1.1 if num_votes <= 3 else 1.15
+        threshold = 0.40 if num_votes <= 3 else 0.45  # INCREASED from 0.35/0.40
+        ratio_req = 1.2 if num_votes <= 3 else 1.25   # INCREASED from 1.1/1.15
         
         if long_pct > threshold and long_score > short_score * ratio_req:
             decision = "LONG"
@@ -905,7 +962,19 @@ class JudgePersona:
             return self._wait_decision(f"No consensus: LONG={long_pct:.0%}, SHORT={short_pct:.0%}")
         
         if confidence < MIN_CONFIDENCE_TO_TRADE:
-            return self._wait_decision(f"Confidence too low: {confidence:.0%}")
+            return self._wait_decision(f"Confidence too low: {confidence:.0%} (need {MIN_CONFIDENCE_TO_TRADE:.0%})")
+        
+        # V3.1.4: MARKET TREND FILTER - Don't fight the trend!
+        if pair != "BTC":  # Don't check BTC against itself
+            btc_trend = self._get_btc_trend()
+            
+            if decision == "LONG" and btc_trend == "DOWN":
+                return self._wait_decision(f"BLOCKED: LONG signal but BTC trending DOWN. Don't fight the market!")
+            
+            if decision == "SHORT" and btc_trend == "UP":
+                # Less strict for shorts - only block if very strong uptrend
+                # This allows shorting during mild uptrends (mean reversion)
+                pass  # Allow shorts even in uptrend for now
         
         # Position sizing
         base_size = balance * 0.07
@@ -922,7 +991,7 @@ class JudgePersona:
         position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
         position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
         
-        # V3.1.1: TIER-BASED TP/SL
+        # V3.1.4: TIER-BASED TP/SL
         tp_pct = tier_config["tp_pct"]
         sl_pct = tier_config["sl_pct"]
         max_hold = tier_config["max_hold_hours"]
@@ -1118,7 +1187,7 @@ def upload_ai_log_to_weex(stage: str, input_data: Dict, output_data: Dict,
         "model": MODEL_NAME,
         "input": input_data,
         "output": output_data,
-        "explanation": explanation[:500]
+        "explanation": explanation[:2500]  # WEEX allows 500 words (~2500 chars), not 500 chars
     }
     
     if order_id:
@@ -1206,7 +1275,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     
     # Upload AI log
     upload_ai_log_to_weex(
-        stage=f"V3.1.1 Trade: {signal} {symbol.replace('cmt_', '').upper()}",
+        stage=f"V3.1.4 Trade: {signal} {symbol.replace('cmt_', '').upper()}",
         input_data={
             "pair": symbol,
             "balance": balance,
@@ -1223,7 +1292,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
             "tp_pct": tp_pct * 100,
             "sl_pct": sl_pct * 100,
         },
-        explanation=decision.get("reasoning", "")[:500],
+        explanation=decision.get("reasoning", "")[:2500],  # WEEX allows 500 words
         order_id=int(order_id) if str(order_id).isdigit() else None
     )
     

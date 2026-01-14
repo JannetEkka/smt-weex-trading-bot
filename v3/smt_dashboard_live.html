@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="60">
+    <title>SMT Live Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+        }
+        
+        .header .version { color: #888; font-size: 0.9em; }
+        .header .update-time { color: #666; font-size: 0.8em; margin-top: 5px; }
+        
+        .btc-trend {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            margin-top: 10px;
+            font-weight: bold;
+            background: rgba(0,0,0,0.3);
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 20px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .stat-card .label {
+            color: #888;
+            font-size: 0.8em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+        
+        .stat-card .value { font-size: 1.8em; font-weight: bold; }
+        .stat-card .value.positive { color: #00ff88; }
+        .stat-card .value.negative { color: #ff4757; }
+        .stat-card .value.neutral { color: #ffa502; }
+        
+        .section {
+            background: rgba(255,255,255,0.05);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .section h2 {
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid rgba(255,255,255,0.1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .section h2 .count {
+            background: #7b2cbf;
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 0.7em;
+        }
+        
+        .positions-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+        }
+        
+        .position-card {
+            background: rgba(0,0,0,0.3);
+            border-radius: 12px;
+            padding: 18px;
+            border-left: 4px solid;
+        }
+        
+        .position-card.long { border-left-color: #00ff88; }
+        .position-card.short { border-left-color: #ff4757; }
+        
+        .position-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        
+        .position-symbol { font-size: 1.2em; font-weight: bold; }
+        
+        .position-side {
+            padding: 3px 10px;
+            border-radius: 15px;
+            font-size: 0.75em;
+            font-weight: bold;
+        }
+        
+        .position-side.long { background: rgba(0,255,136,0.2); color: #00ff88; }
+        .position-side.short { background: rgba(255,71,87,0.2); color: #ff4757; }
+        
+        .position-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            font-size: 0.85em;
+        }
+        
+        .detail-item { display: flex; flex-direction: column; }
+        .detail-item .label { color: #666; font-size: 0.8em; }
+        .detail-item .value { font-weight: 500; }
+        
+        .pnl-large { font-size: 1.4em; font-weight: bold; text-align: right; }
+        .pnl-large.positive { color: #00ff88; }
+        .pnl-large.negative { color: #ff4757; }
+        
+        .position-targets {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            font-size: 0.8em;
+            color: #888;
+        }
+        
+        .position-targets .tp { color: #00ff88; margin-right: 15px; }
+        .position-targets .sl { color: #ff4757; }
+        
+        .tier-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.7em;
+            margin-left: 8px;
+        }
+        
+        .tier-1 { background: #3498db; }
+        .tier-2 { background: #9b59b6; }
+        .tier-3 { background: #e67e22; }
+        
+        table { width: 100%; border-collapse: collapse; }
+        
+        th, td {
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        th {
+            color: #888;
+            font-weight: 500;
+            text-transform: uppercase;
+            font-size: 0.75em;
+            letter-spacing: 1px;
+        }
+        
+        tr:hover { background: rgba(255,255,255,0.03); }
+        
+        .trade-pnl.positive { color: #00ff88; }
+        .trade-pnl.negative { color: #ff4757; }
+        
+        .positive { color: #00ff88; }
+        .negative { color: #ff4757; }
+        
+        .footer {
+            text-align: center;
+            color: #666;
+            font-size: 0.8em;
+            margin-top: 30px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Smart Money Tracker</h1>
+        <div class="version">V3.1.4 Live Dashboard - WEEX AI Wars</div>
+        <div class="btc-trend" style="color: #ffa502">
+            BTC: $97,221.60 | 4H Trend: NEUTRAL (+0.55%)
+        </div>
+        <div class="update-time">Last updated: 2026-01-14 20:38:13 | Auto-refresh: 60s</div>
+    </div>
+    
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="label">Starting Balance</div>
+            <div class="value neutral">$1,000.00</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Current Balance</div>
+            <div class="value negative">$0.00</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Equity</div>
+            <div class="value negative">$0.00</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Total PnL</div>
+            <div class="value negative">$-870.53</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Unrealized PnL</div>
+            <div class="value positive">$+129.47</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Open Positions</div>
+            <div class="value neutral">8</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Win Rate</div>
+            <div class="value negative">0%</div>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>Open Positions <span class="count">8</span></h2>
+        <div class="positions-grid">
+            
+            <div class="position-card long">
+                <div class="position-header">
+                    <div>
+                        <span class="position-symbol">SOLUSDT</span>
+                        <span class="tier-badge tier-2">T2 MID</span>
+                    </div>
+                    <span class="position-side long">LONG</span>
+                </div>
+                <div class="position-details">
+                    <div class="detail-item">
+                        <span class="label">Entry</span>
+                        <span class="value">$142.2500</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Current</span>
+                        <span class="value">$147.2900</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Size</span>
+                        <span class="value">11.8000</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Margin</span>
+                        <span class="value">$86.90</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">PnL %</span>
+                        <span class="value positive">+3.54%</span>
+                    </div>
+                    <div class="detail-item pnl-large positive">
+                        $+59.12
+                    </div>
+                </div>
+                <div class="position-targets">
+                    <span class="tp">TP: 3.0%</span>
+                    <span class="sl">SL: 1.75%</span>
+                </div>
+            </div>
+        
+            <div class="position-card long">
+                <div class="position-header">
+                    <div>
+                        <span class="position-symbol">BNBUSDT</span>
+                        <span class="tier-badge tier-1">T1 STABLE</span>
+                    </div>
+                    <span class="position-side long">LONG</span>
+                </div>
+                <div class="position-details">
+                    <div class="detail-item">
+                        <span class="label">Entry</span>
+                        <span class="value">$911.3500</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Current</span>
+                        <span class="value">$946.0100</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Size</span>
+                        <span class="value">1.3000</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Margin</span>
+                        <span class="value">$61.50</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">PnL %</span>
+                        <span class="value positive">+3.80%</span>
+                    </div>
+                    <div class="detail-item pnl-large positive">
+                        $+45.01
+                    </div>
+                </div>
+                <div class="position-targets">
+                    <span class="tp">TP: 4.0%</span>
+                    <span class="sl">SL: 2.0%</span>
+                </div>
+            </div>
+        
+            <div class="position-card long">
+                <div class="position-header">
+                    <div>
+                        <span class="position-symbol">ETHUSDT</span>
+                        <span class="tier-badge tier-1">T1 STABLE</span>
+                    </div>
+                    <span class="position-side long">LONG</span>
+                </div>
+                <div class="position-details">
+                    <div class="detail-item">
+                        <span class="label">Entry</span>
+                        <span class="value">$3322.4300</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Current</span>
+                        <span class="value">$3371.8300</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Size</span>
+                        <span class="value">0.4300</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Margin</span>
+                        <span class="value">$72.49</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">PnL %</span>
+                        <span class="value positive">+1.49%</span>
+                    </div>
+                    <div class="detail-item pnl-large positive">
+                        $+21.15
+                    </div>
+                </div>
+                <div class="position-targets">
+                    <span class="tp">TP: 4.0%</span>
+                    <span class="sl">SL: 2.0%</span>
+                </div>
+            </div>
+        
+            <div class="position-card long">
+                <div class="position-header">
+                    <div>
+                        <span class="position-symbol">BTCUSDT</span>
+                        <span class="tier-badge tier-1">T1 STABLE</span>
+                    </div>
+                    <span class="position-side long">LONG</span>
+                </div>
+                <div class="position-details">
+                    <div class="detail-item">
+                        <span class="label">Entry</span>
+                        <span class="value">$94253.9000</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Current</span>
+                        <span class="value">$97406.1000</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Size</span>
+                        <span class="value">0.0061</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Margin</span>
+                        <span class="value">$29.71</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">PnL %</span>
+                        <span class="value positive">+3.34%</span>
+                    </div>
+                    <div class="detail-item pnl-large positive">
+                        $+19.33
+                    </div>
+                </div>
+                <div class="position-targets">
+                    <span class="tp">TP: 4.0%</span>
+                    <span class="sl">SL: 2.0%</span>
+                </div>
+            </div>
+        
+            <div class="position-card long">
+                <div class="position-header">
+                    <div>
+                        <span class="position-symbol">XRPUSDT</span>
+                        <span class="tier-badge tier-3">T3 FAST</span>
+                    </div>
+                    <span class="position-side long">LONG</span>
+                </div>
+                <div class="position-details">
+                    <div class="detail-item">
+                        <span class="label">Entry</span>
+                        <span class="value">$2.1295</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Current</span>
+                        <span class="value">$2.1433</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Size</span>
+                        <span class="value">640.0000</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Margin</span>
+                        <span class="value">$70.00</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">PnL %</span>
+                        <span class="value positive">+0.65%</span>
+                    </div>
+                    <div class="detail-item pnl-large positive">
+                        $+8.96
+                    </div>
+                </div>
+                <div class="position-targets">
+                    <span class="tp">TP: 3.0%</span>
+                    <span class="sl">SL: 2.0%</span>
+                </div>
+            </div>
+        
+            <div class="position-card long">
+                <div class="position-header">
+                    <div>
+                        <span class="position-symbol">ADAUSDT</span>
+                        <span class="tier-badge tier-3">T3 FAST</span>
+                    </div>
+                    <span class="position-side long">LONG</span>
+                </div>
+                <div class="position-details">
+                    <div class="detail-item">
+                        <span class="label">Entry</span>
+                        <span class="value">$0.4137</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Current</span>
+                        <span class="value">$0.4130</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Size</span>
+                        <span class="value">3460.0000</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Margin</span>
+                        <span class="value">$80.00</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">PnL %</span>
+                        <span class="value negative">-0.17%</span>
+                    </div>
+                    <div class="detail-item pnl-large negative">
+                        $-2.42
+                    </div>
+                </div>
+                <div class="position-targets">
+                    <span class="tp">TP: 3.0%</span>
+                    <span class="sl">SL: 2.0%</span>
+                </div>
+            </div>
+        
+            <div class="position-card long">
+                <div class="position-header">
+                    <div>
+                        <span class="position-symbol">DOGEUSDT</span>
+                        <span class="tier-badge tier-3">T3 FAST</span>
+                    </div>
+                    <span class="position-side long">LONG</span>
+                </div>
+                <div class="position-details">
+                    <div class="detail-item">
+                        <span class="label">Entry</span>
+                        <span class="value">$0.1485</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Current</span>
+                        <span class="value">$0.1474</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Size</span>
+                        <span class="value">7400.0000</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Margin</span>
+                        <span class="value">$100.00</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">PnL %</span>
+                        <span class="value negative">-0.70%</span>
+                    </div>
+                    <div class="detail-item pnl-large negative">
+                        $-7.92
+                    </div>
+                </div>
+                <div class="position-targets">
+                    <span class="tp">TP: 3.0%</span>
+                    <span class="sl">SL: 2.0%</span>
+                </div>
+            </div>
+        
+            <div class="position-card long">
+                <div class="position-header">
+                    <div>
+                        <span class="position-symbol">LTCUSDT</span>
+                        <span class="tier-badge tier-1">T1 STABLE</span>
+                    </div>
+                    <span class="position-side long">LONG</span>
+                </div>
+                <div class="position-details">
+                    <div class="detail-item">
+                        <span class="label">Entry</span>
+                        <span class="value">$77.7400</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Current</span>
+                        <span class="value">$77.0300</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Size</span>
+                        <span class="value">19.1000</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">Margin</span>
+                        <span class="value">$73.60</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="label">PnL %</span>
+                        <span class="value negative">-0.91%</span>
+                    </div>
+                    <div class="detail-item pnl-large negative">
+                        $-13.75
+                    </div>
+                </div>
+                <div class="position-targets">
+                    <span class="tp">TP: 4.0%</span>
+                    <span class="sl">SL: 2.0%</span>
+                </div>
+            </div>
+        
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>Recent Trades <span class="count">0</span></h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Pair</th>
+                    <th>Side</th>
+                    <th>Price</th>
+                    <th>Size</th>
+                    <th>PnL</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td colspan="6" style="color:#888">No recent trades</td></tr>
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="footer">
+        SMT Trading Bot - WEEX AI Wars Hackathon 2026<br>
+        Dashboard auto-refreshes every 60 seconds
+    </div>
+</body>
+</html>

@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.1
+SMT Trading Daemon V3.1.4
 =========================
 Tier-based trading daemon with smart exits per tier.
+CRITICAL FIXES: Reduced positions, higher confidence, market trend filter.
+
+V3.1.4 Changes:
+- MAX_OPEN_POSITIONS: 8 -> 5
+- MIN_CONFIDENCE_TO_TRADE: 55% -> 65%
+- Tier 3 SL: 1.5% -> 2.0% (stop whipsaw)
+- Tier 3 TP: 2.5% -> 3.0% (better R:R)
+- Added BTC trend filter (don't LONG when BTC dumps)
 
 Tier Config:
 - Tier 1 (BTC, ETH, BNB, LTC): 4% TP, 2% SL, 48h hold
 - Tier 2 (SOL): 3% TP, 1.75% SL, 12h hold  
-- Tier 3 (DOGE, XRP, ADA): 2.5% TP, 1.5% SL, 6h hold
+- Tier 3 (DOGE, XRP, ADA): 3% TP, 2% SL, 4h hold
 
 Run: python3 smt_daemon_v3_1.py
 """
@@ -54,7 +62,7 @@ LOG_LEVEL = logging.INFO
 
 def setup_logging():
     os.makedirs(LOG_DIR, exist_ok=True)
-    log_file = os.path.join(LOG_DIR, f"daemon_v3_1_1_{datetime.now().strftime('%Y%m%d')}.log")
+    log_file = os.path.join(LOG_DIR, f"daemon_v3_1_4_{datetime.now().strftime('%Y%m%d')}.log")
     
     formatter = logging.Formatter(
         '%(asctime)s | %(levelname)-8s | %(message)s',
@@ -113,7 +121,7 @@ try:
         # Logging
         save_local_log,
     )
-    logger.info("V3.1.2 imports successful (with Runner Logic)")
+    logger.info("V3.1.4 imports successful (Market Trend Filter + Stricter Signals)")
 except ImportError as e:
     logger.error(f"Import error: {e}")
     logger.error(traceback.format_exc())
@@ -153,7 +161,7 @@ class DaemonState:
         }
 
 state = DaemonState()
-tracker = TradeTracker(state_file="trade_state_v3_1_1.json")
+tracker = TradeTracker(state_file="trade_state_v3_1_4.json")
 analyzer = MultiPersonaAnalyzer()
 
 
@@ -189,15 +197,20 @@ def run_with_retry(func, *args, max_retries=MAX_RETRIES, **kwargs):
 
 
 # ============================================================
-# V3.1.1 SIGNAL CHECKING
+# V3.1.4 SIGNAL CHECKING - HEDGE MODE SUPPORT
 # ============================================================
 
 def check_trading_signals():
-    """V3.1.1: Tier-based signal check"""
+    """V3.1.4: Tier-based signal check with HEDGE MODE
+    
+    ALWAYS analyzes ALL pairs and uploads AI logs.
+    HEDGE MODE: Can open LONG while SHORT is running (and vice versa)
+    WEEX supports bidirectional positions on same pair!
+    """
     
     run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     logger.info("=" * 60)
-    logger.info(f"V3.1.1 SIGNAL CHECK - {run_timestamp}")
+    logger.info(f"V3.1.4 SIGNAL CHECK - {run_timestamp}")
     logger.info("=" * 60)
     
     state.signals_checked += 1
@@ -213,88 +226,180 @@ def check_trading_signals():
         logger.info(f"Days left: {competition['days_left']}")
         
         available_slots = MAX_OPEN_POSITIONS - len(open_positions)
-        if available_slots <= 0:
-            logger.info("Max positions reached")
-            return
+        can_open_new = available_slots > 0
+        
+        if not can_open_new:
+            logger.info(f"Max positions ({len(open_positions)}/{MAX_OPEN_POSITIONS}) - Analysis only")
         
         ai_log = {
-            "run_id": f"v3_1_2_{run_timestamp}",
+            "run_id": f"v3_1_4_{run_timestamp}",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "version": "v3.1.2",
+            "version": "v3.1.4-hedge",
             "tier_config": TIER_CONFIG,
+            "analyses": [],
             "trades": [],
         }
         
         trade_opportunities = []
         
-        # Confidence threshold to override cooldown
+        # Confidence thresholds
         COOLDOWN_OVERRIDE_CONFIDENCE = 0.85
+        HEDGE_CONFIDENCE_THRESHOLD = 0.75  # Need 75%+ to open opposite direction
         
+        # Build map: symbol -> {side: position}
+        # This tracks BOTH long and short for each symbol
+        position_map = {}
+        for pos in open_positions:
+            symbol = pos.get("symbol")
+            side = pos.get("side", "").upper()
+            if symbol not in position_map:
+                position_map[symbol] = {}
+            position_map[symbol][side] = pos
+        
+        # ANALYZE ALL PAIRS
         for pair, pair_info in TRADING_PAIRS.items():
             symbol = pair_info["symbol"]
+            tier = pair_info.get("tier", 2)
+            tier_config = get_tier_config(tier)
             
-            # Skip if already have position
-            if any(p.get("symbol") == symbol for p in open_positions):
-                continue
+            # Check existing positions on this symbol
+            symbol_positions = position_map.get(symbol, {})
+            has_long = "LONG" in symbol_positions
+            has_short = "SHORT" in symbol_positions
+            long_pnl = symbol_positions.get("LONG", {}).get("unrealized_pnl", 0) if has_long else 0
+            short_pnl = symbol_positions.get("SHORT", {}).get("unrealized_pnl", 0) if has_short else 0
             
-            # Check cooldown status (but don't skip yet - check confidence first)
+            # Check cooldown
             on_cooldown = tracker.is_on_cooldown(symbol)
             cooldown_remaining = tracker.get_cooldown_remaining(symbol) if on_cooldown else 0
             
             try:
+                # ALWAYS analyze
                 decision = run_with_retry(
                     analyzer.analyze,
                     pair, pair_info, balance, competition, open_positions
                 )
                 
-                tier = pair_info.get("tier", 2)
-                tier_config = get_tier_config(tier)
                 confidence = decision.get("confidence", 0)
+                signal = decision.get("decision", "WAIT")
                 
-                # Handle cooldown with confidence override
+                # Build status string
+                status_parts = []
+                if has_long:
+                    status_parts.append(f"L:{long_pnl:+.1f}")
+                if has_short:
+                    status_parts.append(f"S:{short_pnl:+.1f}")
                 if on_cooldown:
-                    if confidence >= COOLDOWN_OVERRIDE_CONFIDENCE:
-                        logger.info(f"  {pair} (T{tier}): {decision.get('decision')} ({confidence:.0%}) - COOLDOWN OVERRIDE!")
+                    status_parts.append(f"CD:{cooldown_remaining:.1f}h")
+                
+                status_str = f" [{', '.join(status_parts)}]" if status_parts else ""
+                logger.info(f"  {pair} (T{tier}): {signal} ({confidence:.0%}){status_str}")
+                
+                # Determine tradability
+                can_trade_this = False
+                trade_type = "none"
+                
+                if signal == "LONG":
+                    if has_long:
+                        logger.info(f"    -> Already LONG")
+                    elif has_short:
+                        # HEDGE opportunity!
+                        if confidence >= HEDGE_CONFIDENCE_THRESHOLD and can_open_new:
+                            can_trade_this = True
+                            trade_type = "hedge"
+                            logger.info(f"    -> HEDGE: Can open LONG while SHORT running!")
+                        else:
+                            logger.info(f"    -> Has SHORT, need {HEDGE_CONFIDENCE_THRESHOLD:.0%}+ to hedge (have {confidence:.0%})")
                     else:
-                        logger.info(f"  {pair}: SKIPPED (cooldown {cooldown_remaining:.1f}h, confidence {confidence:.0%} < {COOLDOWN_OVERRIDE_CONFIDENCE:.0%})")
-                        continue
-                else:
-                    logger.info(f"  {pair} (T{tier}): {decision.get('decision')} ({confidence:.0%})")
+                        # No position - normal trade
+                        if can_open_new:
+                            can_trade_this = True
+                            trade_type = "new"
                 
-                if decision.get("decision") in ("LONG", "SHORT") and confidence >= 0.55:
-                    trade_opportunities.append({
-                        "pair": pair,
-                        "pair_info": pair_info,
-                        "decision": decision,
-                        "tier": tier,
-                        "cooldown_override": on_cooldown,
-                    })
+                elif signal == "SHORT":
+                    if has_short:
+                        logger.info(f"    -> Already SHORT")
+                    elif has_long:
+                        # HEDGE opportunity!
+                        if confidence >= HEDGE_CONFIDENCE_THRESHOLD and can_open_new:
+                            can_trade_this = True
+                            trade_type = "hedge"
+                            logger.info(f"    -> HEDGE: Can open SHORT while LONG running!")
+                        else:
+                            logger.info(f"    -> Has LONG, need {HEDGE_CONFIDENCE_THRESHOLD:.0%}+ to hedge (have {confidence:.0%})")
+                    else:
+                        # No position - normal trade
+                        if can_open_new:
+                            can_trade_this = True
+                            trade_type = "new"
                 
-                # Build explanation
+                # Build vote details
+                vote_details = []
+                for vote in decision.get("persona_votes", []):
+                    persona = vote.get("persona", "?")
+                    vote_signal = vote.get("signal", "?")
+                    conf = vote.get("confidence", 0)
+                    reason = vote.get("reasoning", "")[:300]
+                    vote_details.append(f"{persona}={vote_signal}({conf:.0%}): {reason}")
+                
                 judge_summary = decision.get("reasoning", "")
                 market_ctx = ""
                 for vote in decision.get("persona_votes", []):
                     if vote.get("persona") == "SENTIMENT" and vote.get("market_context"):
-                        market_ctx = vote.get("market_context", "")[:300]
+                        market_ctx = vote.get("market_context", "")[:1500]
                         break
                 
-                full_explanation = f"{judge_summary} | Market: {market_ctx}" if market_ctx else judge_summary
+                full_explanation = f"{judge_summary}\n\nVotes: {'; '.join(vote_details)}"
+                if market_ctx:
+                    full_explanation += f"\n\nMarket: {market_ctx}"
                 
+                # Upload AI log
                 upload_ai_log_to_weex(
-                    stage=f"V3.1.1 Analysis - {pair} (Tier {tier})",
+                    stage=f"V3.1.4 Analysis - {pair} (Tier {tier})",
                     input_data={
                         "pair": pair,
                         "tier": tier,
                         "balance": balance,
+                        "has_long": has_long,
+                        "has_short": has_short,
+                        "on_cooldown": on_cooldown,
                     },
                     output_data={
-                        "decision": decision.get("decision"),
-                        "confidence": decision.get("confidence", 0),
+                        "decision": signal,
+                        "confidence": confidence,
                         "tp_pct": tier_config["tp_pct"],
                         "sl_pct": tier_config["sl_pct"],
+                        "can_trade": can_trade_this,
+                        "trade_type": trade_type,
                     },
-                    explanation=full_explanation[:500]
+                    explanation=full_explanation[:2500]
                 )
+                
+                # Save to local log
+                ai_log["analyses"].append({
+                    "pair": pair,
+                    "tier": tier,
+                    "decision": signal,
+                    "confidence": confidence,
+                    "has_long": has_long,
+                    "has_short": has_short,
+                    "trade_type": trade_type,
+                })
+                
+                # Add to opportunities if tradeable
+                if can_trade_this and signal in ("LONG", "SHORT"):
+                    if on_cooldown and confidence < COOLDOWN_OVERRIDE_CONFIDENCE:
+                        logger.info(f"    -> Skip (cooldown)")
+                    elif confidence >= MIN_CONFIDENCE_TO_TRADE:
+                        if on_cooldown:
+                            logger.info(f"    -> COOLDOWN OVERRIDE")
+                        trade_opportunities.append({
+                            "pair": pair,
+                            "pair_info": pair_info,
+                            "decision": decision,
+                            "tier": tier,
+                            "trade_type": trade_type,
+                        })
                 
                 time.sleep(2)
                 
@@ -308,8 +413,11 @@ def check_trading_signals():
             
             tier = best["tier"]
             tier_config = get_tier_config(tier)
+            trade_type = best["trade_type"]
             
-            logger.info(f"Executing: {best['pair']} {best['decision']['decision']} (Tier {tier}: {tier_config['name']})")
+            logger.info(f"")
+            type_label = "[HEDGE] " if trade_type == "hedge" else ""
+            logger.info(f"EXECUTING {type_label}{best['pair']} {best['decision']['decision']} (T{tier})")
             
             trade_result = run_with_retry(
                 execute_trade,
@@ -318,14 +426,16 @@ def check_trading_signals():
             
             if trade_result.get("executed"):
                 logger.info(f"Trade executed: {trade_result.get('order_id')}")
-                logger.info(f"  TP: {trade_result.get('tp_pct'):.1f}%, SL: {trade_result.get('sl_pct'):.1f}%, Max Hold: {trade_result.get('max_hold_hours')}h")
+                logger.info(f"  TP: {trade_result.get('tp_pct'):.1f}%, SL: {trade_result.get('sl_pct'):.1f}%")
                 
+                # Use symbol_side as key for tracker to support hedge
                 tracker.add_trade(best["pair_info"]["symbol"], trade_result)
                 state.trades_opened += 1
                 ai_log["trades"].append(trade_result)
             else:
                 logger.warning(f"Trade failed: {trade_result.get('reason')}")
         else:
+            logger.info(f"")
             logger.info("No trade opportunities")
         
         save_local_log(ai_log, run_timestamp)
@@ -337,7 +447,7 @@ def check_trading_signals():
 
 
 # ============================================================
-# V3.1.1 TIER-BASED POSITION MONITORING
+# V3.1.4 TIER-BASED POSITION MONITORING
 # ============================================================
 
 def monitor_positions():
@@ -475,7 +585,7 @@ def monitor_positions():
                     state.trades_closed += 1
                     
                     upload_ai_log_to_weex(
-                        stage=f"V3.1.1 Smart Exit - {symbol_clean}",
+                        stage=f"V3.1.4 Smart Exit - {symbol_clean}",
                         input_data={"symbol": symbol, "tier": tier, "hours_open": hours_open},
                         output_data={"reason": exit_reason, "pnl_pct": pnl_pct},
                         explanation=f"Tier {tier} smart exit: {exit_reason}. PnL: {pnl_pct:+.2f}%"
@@ -527,7 +637,7 @@ def log_health():
     active = len(tracker.get_active_symbols())
     
     logger.info(
-        f"V3.1.2 HEALTH | Up: {uptime_str} | "
+        f"V3.1.4 HEALTH | Up: {uptime_str} | "
         f"Signals: {state.signals_checked} | "
         f"Trades: {state.trades_opened}/{state.trades_closed} | "
         f"Runners: {state.runners_triggered} | "
@@ -541,8 +651,13 @@ def log_health():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.2 - Tier-Based Trading with Runner Logic")
+    logger.info("SMT Daemon V3.1.4 - Market Trend Filter + Stricter Signals")
     logger.info("=" * 60)
+    logger.info("V3.1.4 CRITICAL FIXES:")
+    logger.info("  - MAX_POSITIONS: 5 (was 8)")
+    logger.info("  - MIN_CONFIDENCE: 65% (was 55%)")
+    logger.info("  - Tier 3 SL: 2% (was 1.5%)")
+    logger.info("  - BTC Trend Filter: No LONG when BTC dumps")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         pairs = [p for p, info in TRADING_PAIRS.items() if info["tier"] == tier]
@@ -599,7 +714,7 @@ def run_daemon():
             state.errors += 1
             time.sleep(30)
     
-    logger.info("V3.1.1 Daemon shutdown")
+    logger.info("V3.1.4 Daemon shutdown")
     logger.info(f"Stats: {json.dumps(state.to_dict(), indent=2)}")
 
 
