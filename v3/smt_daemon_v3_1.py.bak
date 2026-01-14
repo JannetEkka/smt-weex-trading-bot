@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.1
-=========================
-Tier-based trading daemon with smart exits per tier.
+SMT Trading Daemon V3.1
+=======================
+Multi-persona trading daemon with smarter exit logic.
 
-Tier Config:
-- Tier 1 (BTC, ETH, BNB, LTC): 4% TP, 2% SL, 48h hold
-- Tier 2 (SOL): 3% TP, 1.75% SL, 12h hold  
-- Tier 3 (DOGE, XRP, ADA): 2.5% TP, 1.5% SL, 6h hold
+Features:
+- 4 Personas: WHALE, SENTIMENT, FLOW, TECHNICAL
+- Judge makes final decision based on weighted votes
+- Smarter exits: cut losers early, protect profits
+- 2-hour signal interval
+- AI logs with order_id for "AI order" display
 
 Run: python3 smt_daemon_v3_1.py
+Service: sudo systemctl start smt-trading-v31
+
+Logs: logs/daemon_v3_1_YYYYMMDD.log
 """
 
 import os
@@ -26,14 +31,20 @@ from typing import Dict, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ============================================================
-# V3.1.1 CONFIGURATION
+# V3.1 CONFIGURATION
 # ============================================================
 
 # Timing
-SIGNAL_CHECK_INTERVAL = 30 * 60  # 30 minutes
-POSITION_MONITOR_INTERVAL = 2 * 60  # 2 minutes (check more often for tier 3)
-HEALTH_CHECK_INTERVAL = 60
-CLEANUP_CHECK_INTERVAL = 30
+SIGNAL_CHECK_INTERVAL = 30 * 60  # 30 minutes       # 2 hours (balanced - not too aggressive)
+POSITION_MONITOR_INTERVAL = 3 * 60         # 3 minutes (check more often for exits)
+HEALTH_CHECK_INTERVAL = 60                 # 1 minute
+CLEANUP_CHECK_INTERVAL = 30                # 30 seconds
+
+# Smart Exit Thresholds
+EARLY_EXIT_CHECK_HOURS = 3                 # Start checking after 3 hours
+EARLY_EXIT_LOSS_PCT = -2.5                 # Exit if losing more than 2.5% after 3h
+MAX_HOLD_HOURS_DEFAULT = 24                # Reduced from 48h - faster turnover
+MAX_HOLD_HOURS_FINAL = 6                   # Final days of competition
 
 # Competition
 COMPETITION_START = datetime(2026, 1, 12, tzinfo=timezone.utc)
@@ -54,7 +65,7 @@ LOG_LEVEL = logging.INFO
 
 def setup_logging():
     os.makedirs(LOG_DIR, exist_ok=True)
-    log_file = os.path.join(LOG_DIR, f"daemon_v3_1_1_{datetime.now().strftime('%Y%m%d')}.log")
+    log_file = os.path.join(LOG_DIR, f"daemon_v3_1_{datetime.now().strftime('%Y%m%d')}.log")
     
     formatter = logging.Formatter(
         '%(asctime)s | %(levelname)-8s | %(message)s',
@@ -89,8 +100,6 @@ try:
         # Config
         TEST_MODE, TRADING_PAIRS, MAX_LEVERAGE, STARTING_BALANCE,
         PIPELINE_VERSION, MODEL_NAME, MAX_OPEN_POSITIONS,
-        TIER_CONFIG, get_tier_for_symbol, get_tier_config,
-        RUNNER_CONFIG, get_runner_config,
         
         # WEEX API
         get_price, get_balance, get_open_positions,
@@ -98,13 +107,12 @@ try:
         
         # Position management
         check_position_status, cancel_all_orders_for_symbol,
-        close_position_manually, execute_runner_partial_close,
-        TradeTracker,
+        close_position_manually, TradeTracker,
         
         # Competition
         get_competition_status,
         
-        # Multi-persona
+        # V3.1: Multi-persona
         MultiPersonaAnalyzer,
         
         # Trading
@@ -113,10 +121,9 @@ try:
         # Logging
         save_local_log,
     )
-    logger.info("V3.1.2 imports successful (with Runner Logic)")
+    logger.info("V3.1 imports successful")
 except ImportError as e:
     logger.error(f"Import error: {e}")
-    logger.error(traceback.format_exc())
     sys.exit(1)
 
 
@@ -134,7 +141,6 @@ class DaemonState:
         self.trades_opened = 0
         self.trades_closed = 0
         self.early_exits = 0
-        self.runners_triggered = 0  # V3.1.2: Track runner partial closes
         self.errors = 0
         
         self.is_running = True
@@ -148,12 +154,11 @@ class DaemonState:
             "trades_opened": self.trades_opened,
             "trades_closed": self.trades_closed,
             "early_exits": self.early_exits,
-            "runners_triggered": self.runners_triggered,
             "errors": self.errors,
         }
 
 state = DaemonState()
-tracker = TradeTracker(state_file="trade_state_v3_1_1.json")
+tracker = TradeTracker(state_file="trade_state_v3_1.json")
 analyzer = MultiPersonaAnalyzer()
 
 
@@ -176,6 +181,14 @@ def is_competition_active() -> bool:
     return False
 
 
+def get_max_hold_hours() -> int:
+    now = datetime.now(timezone.utc)
+    days_left = (COMPETITION_END - now).days
+    if days_left <= 3:
+        return MAX_HOLD_HOURS_FINAL
+    return MAX_HOLD_HOURS_DEFAULT
+
+
 def run_with_retry(func, *args, max_retries=MAX_RETRIES, **kwargs):
     for attempt in range(max_retries):
         try:
@@ -189,15 +202,15 @@ def run_with_retry(func, *args, max_retries=MAX_RETRIES, **kwargs):
 
 
 # ============================================================
-# V3.1.1 SIGNAL CHECKING
+# V3.1 SIGNAL CHECKING (Multi-Persona)
 # ============================================================
 
 def check_trading_signals():
-    """V3.1.1: Tier-based signal check"""
+    """V3.1: Multi-persona signal check"""
     
     run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     logger.info("=" * 60)
-    logger.info(f"V3.1.1 SIGNAL CHECK - {run_timestamp}")
+    logger.info(f"V3.1 SIGNAL CHECK - {run_timestamp}")
     logger.info("=" * 60)
     
     state.signals_checked += 1
@@ -217,60 +230,42 @@ def check_trading_signals():
             logger.info("Max positions reached")
             return
         
+        
         ai_log = {
-            "run_id": f"v3_1_2_{run_timestamp}",
+            "run_id": f"v3_1_{run_timestamp}",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "version": "v3.1.2",
-            "tier_config": TIER_CONFIG,
+            "version": "v3.1",
+            "personas": ["WHALE", "SENTIMENT", "FLOW", "TECHNICAL", "JUDGE"],
             "trades": [],
         }
         
+        # Evaluate all pairs with multi-persona
         trade_opportunities = []
         
-        # Confidence threshold to override cooldown
-        COOLDOWN_OVERRIDE_CONFIDENCE = 0.85
-        
         for pair, pair_info in TRADING_PAIRS.items():
-            symbol = pair_info["symbol"]
-            
             # Skip if already have position
-            if any(p.get("symbol") == symbol for p in open_positions):
+            if any(p.get("symbol") == pair_info["symbol"] for p in open_positions):
+                # logger.info(f"  {pair}: Already have position")  # DISABLED
                 continue
             
-            # Check cooldown status (but don't skip yet - check confidence first)
-            on_cooldown = tracker.is_on_cooldown(symbol)
-            cooldown_remaining = tracker.get_cooldown_remaining(symbol) if on_cooldown else 0
-            
             try:
+                # Multi-persona analysis
                 decision = run_with_retry(
                     analyzer.analyze,
                     pair, pair_info, balance, competition, open_positions
                 )
                 
-                tier = pair_info.get("tier", 2)
-                tier_config = get_tier_config(tier)
-                confidence = decision.get("confidence", 0)
+                logger.info(f"  {pair}: {decision.get('decision')} ({decision.get('confidence', 0):.0%})")
                 
-                # Handle cooldown with confidence override
-                if on_cooldown:
-                    if confidence >= COOLDOWN_OVERRIDE_CONFIDENCE:
-                        logger.info(f"  {pair} (T{tier}): {decision.get('decision')} ({confidence:.0%}) - COOLDOWN OVERRIDE!")
-                    else:
-                        logger.info(f"  {pair}: SKIPPED (cooldown {cooldown_remaining:.1f}h, confidence {confidence:.0%} < {COOLDOWN_OVERRIDE_CONFIDENCE:.0%})")
-                        continue
-                else:
-                    logger.info(f"  {pair} (T{tier}): {decision.get('decision')} ({confidence:.0%})")
-                
-                if decision.get("decision") in ("LONG", "SHORT") and confidence >= 0.55:
+                if decision.get("decision") in ("LONG", "SHORT") and decision.get("confidence", 0) >= 0.60:
                     trade_opportunities.append({
                         "pair": pair,
                         "pair_info": pair_info,
                         "decision": decision,
-                        "tier": tier,
-                        "cooldown_override": on_cooldown,
                     })
                 
-                # Build explanation
+                # Upload analysis log (no order_id yet)
+                # Build explanation with BOTH judge summary AND market context
                 judge_summary = decision.get("reasoning", "")
                 market_ctx = ""
                 for vote in decision.get("persona_votes", []):
@@ -281,22 +276,21 @@ def check_trading_signals():
                 full_explanation = f"{judge_summary} | Market: {market_ctx}" if market_ctx else judge_summary
                 
                 upload_ai_log_to_weex(
-                    stage=f"V3.1.1 Analysis - {pair} (Tier {tier})",
+                    stage=f"V3.1 Analysis - {pair}",
                     input_data={
                         "pair": pair,
-                        "tier": tier,
                         "balance": balance,
+                        "personas": ["WHALE", "SENTIMENT", "FLOW", "TECHNICAL"],
                     },
                     output_data={
                         "decision": decision.get("decision"),
                         "confidence": decision.get("confidence", 0),
-                        "tp_pct": tier_config["tp_pct"],
-                        "sl_pct": tier_config["sl_pct"],
+                        "votes": decision.get("vote_breakdown", {}),
                     },
                     explanation=full_explanation[:500]
                 )
                 
-                time.sleep(2)
+                time.sleep(2)  # Rate limit
                 
             except Exception as e:
                 logger.error(f"Error analyzing {pair}: {e}")
@@ -306,10 +300,7 @@ def check_trading_signals():
             trade_opportunities.sort(key=lambda x: x["decision"]["confidence"], reverse=True)
             best = trade_opportunities[0]
             
-            tier = best["tier"]
-            tier_config = get_tier_config(tier)
-            
-            logger.info(f"Executing: {best['pair']} {best['decision']['decision']} (Tier {tier}: {tier_config['name']})")
+            logger.info(f"Executing: {best['pair']} {best['decision']['decision']}")
             
             trade_result = run_with_retry(
                 execute_trade,
@@ -318,7 +309,6 @@ def check_trading_signals():
             
             if trade_result.get("executed"):
                 logger.info(f"Trade executed: {trade_result.get('order_id')}")
-                logger.info(f"  TP: {trade_result.get('tp_pct'):.1f}%, SL: {trade_result.get('sl_pct'):.1f}%, Max Hold: {trade_result.get('max_hold_hours')}h")
                 
                 tracker.add_trade(best["pair_info"]["symbol"], trade_result)
                 state.trades_opened += 1
@@ -337,11 +327,11 @@ def check_trading_signals():
 
 
 # ============================================================
-# V3.1.1 TIER-BASED POSITION MONITORING
+# V3.1 SMART POSITION MONITORING
 # ============================================================
 
 def monitor_positions():
-    """V3.1.1: Tier-based position monitoring with smart exits"""
+    """V3.1: Smart position monitoring with early exit logic"""
     
     state.last_position_check = datetime.now(timezone.utc)
     
@@ -350,6 +340,8 @@ def monitor_positions():
         
         if not active_symbols:
             return
+        
+        max_hold = get_max_hold_hours()
         
         for symbol in active_symbols:
             trade = tracker.get_active_trade(symbol)
@@ -360,15 +352,12 @@ def monitor_positions():
                 position = check_position_status(symbol)
                 
                 if not position.get("is_open"):
+                    # Position closed (TP/SL hit)
                     logger.info(f"{symbol} CLOSED via TP/SL")
                     cleanup = cancel_all_orders_for_symbol(symbol)
                     tracker.close_trade(symbol, {"reason": "tp_sl_hit", "cleanup": cleanup})
                     state.trades_closed += 1
                     continue
-                
-                # Get tier config for this position
-                tier = trade.get("tier", get_tier_for_symbol(symbol))
-                tier_config = get_tier_config(tier)
                 
                 # Calculate metrics
                 opened_at = datetime.fromisoformat(trade["opened_at"].replace("Z", "+00:00"))
@@ -387,76 +376,32 @@ def monitor_positions():
                 
                 pnl_usdt = position.get("unrealized_pnl", 0)
                 
-                # Get tier-specific exit parameters
-                max_hold = tier_config["max_hold_hours"]
-                early_exit_hours = tier_config["early_exit_hours"]
-                early_exit_loss = tier_config["early_exit_loss_pct"]
-                force_exit_loss = tier_config["force_exit_loss_pct"]
+                logger.debug(f"  {symbol}: {hours_open:.1f}h, PnL: {pnl_pct:+.2f}% (${pnl_usdt:+.2f})")
                 
-                logger.debug(f"  {symbol} (T{tier}): {hours_open:.1f}h, PnL: {pnl_pct:+.2f}%")
-                
-                # ===== V3.1.2: RUNNER LOGIC (check FIRST before exits) =====
-                runner_config = get_runner_config(tier)
-                runner_triggered = trade.get("runner_triggered", False)
-                
-                if runner_config.get("enabled") and not runner_triggered and pnl_pct > 0:
-                    trigger_pct = runner_config.get("trigger_pct", 2.0)
-                    
-                    if pnl_pct >= trigger_pct:
-                        symbol_clean = symbol.replace("cmt_", "").upper()
-                        logger.info(f"{symbol_clean}: RUNNER TRIGGERED at +{pnl_pct:.2f}%!")
-                        
-                        runner_result = execute_runner_partial_close(
-                            symbol=symbol,
-                            side=position["side"],
-                            current_size=position["size"],
-                            entry_price=entry_price,
-                            current_price=current_price
-                        )
-                        
-                        if runner_result.get("executed"):
-                            logger.info(f"  [RUNNER] Closed {runner_result['closed_size']} units, locked ${runner_result['profit_locked']:.2f}")
-                            logger.info(f"  [RUNNER] Remaining {runner_result['remaining_size']} units running free")
-                            
-                            # Update trade state to mark runner as triggered
-                            trade["runner_triggered"] = True
-                            trade["runner_closed_size"] = runner_result["closed_size"]
-                            trade["runner_profit_locked"] = runner_result["profit_locked"]
-                            trade["new_sl_price"] = runner_result.get("new_sl_price")
-                            tracker.save_state()
-                            
-                            # Update state counter
-                            state.runners_triggered = getattr(state, 'runners_triggered', 0) + 1
-                        else:
-                            logger.warning(f"  [RUNNER] Failed: {runner_result.get('reason')}")
-                        
-                        continue  # Skip exit checks this cycle, let runner run
-                
-                # ===== TIER-BASED SMART EXIT LOGIC =====
+                # ===== SMART EXIT LOGIC =====
                 
                 should_exit = False
                 exit_reason = ""
                 
-                # 1. Max hold time exceeded (tier-specific)
+                # 1. Max hold time exceeded
                 if hours_open >= max_hold:
                     should_exit = True
-                    exit_reason = f"max_hold_T{tier} ({hours_open:.1f}h > {max_hold}h)"
+                    exit_reason = f"max_hold ({hours_open:.1f}h > {max_hold}h)"
                 
-                # 2. Early exit if losing after tier-specific hours
-                elif hours_open >= early_exit_hours and pnl_pct <= early_exit_loss:
+                # 2. Early exit if losing after EARLY_EXIT_CHECK_HOURS
+                elif hours_open >= EARLY_EXIT_CHECK_HOURS and pnl_pct <= EARLY_EXIT_LOSS_PCT:
                     should_exit = True
-                    exit_reason = f"early_exit_T{tier} ({pnl_pct:.2f}% after {hours_open:.1f}h)"
+                    exit_reason = f"early_exit_loss ({pnl_pct:.2f}% after {hours_open:.1f}h)"
                     state.early_exits += 1
                 
-                # 3. Force exit on large loss (universal -4%)
-                elif pnl_pct <= force_exit_loss:
+                # 3. Exit if losing badly (> 4%) regardless of time
+                elif pnl_pct <= -4.0:
                     should_exit = True
-                    exit_reason = f"force_stop_T{tier} ({pnl_pct:.2f}%)"
+                    exit_reason = f"stop_loss_override ({pnl_pct:.2f}%)"
                     state.early_exits += 1
                 
                 if should_exit:
-                    symbol_clean = symbol.replace("cmt_", "").upper()
-                    logger.warning(f"{symbol_clean}: Force close - {exit_reason}")
+                    logger.warning(f"{symbol}: Force close - {exit_reason}")
                     
                     close_result = close_position_manually(
                         symbol=symbol,
@@ -466,7 +411,6 @@ def monitor_positions():
                     
                     tracker.close_trade(symbol, {
                         "reason": exit_reason,
-                        "tier": tier,
                         "hours_open": hours_open,
                         "final_pnl_pct": pnl_pct,
                         "close_result": close_result,
@@ -475,10 +419,10 @@ def monitor_positions():
                     state.trades_closed += 1
                     
                     upload_ai_log_to_weex(
-                        stage=f"V3.1.1 Smart Exit - {symbol_clean}",
-                        input_data={"symbol": symbol, "tier": tier, "hours_open": hours_open},
+                        stage=f"V3.1 Smart Exit - {symbol}",
+                        input_data={"symbol": symbol, "hours_open": hours_open},
                         output_data={"reason": exit_reason, "pnl_pct": pnl_pct},
-                        explanation=f"Tier {tier} smart exit: {exit_reason}. PnL: {pnl_pct:+.2f}%"
+                        explanation=f"Smart exit: {exit_reason}. PnL: {pnl_pct:+.2f}%"
                     )
                     
             except Exception as e:
@@ -509,6 +453,7 @@ def quick_cleanup_check():
                 state.trades_closed += 1
                 position_closed = True
         
+        # Trigger new signal check when position closes
         if position_closed:
             logger.info("Position closed - checking for new opportunity")
             check_trading_signals()
@@ -527,10 +472,10 @@ def log_health():
     active = len(tracker.get_active_symbols())
     
     logger.info(
-        f"V3.1.2 HEALTH | Up: {uptime_str} | "
+        f"V3.1 HEALTH | Up: {uptime_str} | "
         f"Signals: {state.signals_checked} | "
         f"Trades: {state.trades_opened}/{state.trades_closed} | "
-        f"Runners: {state.runners_triggered} | "
+        f"Early exits: {state.early_exits} | "
         f"Active: {active}"
     )
 
@@ -541,16 +486,10 @@ def log_health():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.2 - Tier-Based Trading with Runner Logic")
-    logger.info("=" * 60)
-    logger.info("Tier Configuration:")
-    for tier, config in TIER_CONFIG.items():
-        pairs = [p for p, info in TRADING_PAIRS.items() if info["tier"] == tier]
-        runner = RUNNER_CONFIG.get(tier, {})
-        runner_str = f"Runner: +{runner.get('trigger_pct', 0)}% -> close 50%" if runner.get("enabled") else "No Runner"
-        logger.info(f"  Tier {tier} ({config['name']}): {', '.join(pairs)}")
-        logger.info(f"    TP: {config['tp_pct']}%, SL: {config['sl_pct']}%, Hold: {config['max_hold_hours']}h | {runner_str}")
-    logger.info("Cooldown Override: 85%+ confidence bypasses cooldown")
+    logger.info("SMT Daemon V3.1 - Multi-Persona + Smart Exits")
+    logger.info(f"Signal interval: {SIGNAL_CHECK_INTERVAL // 60}m")
+    logger.info(f"Early exit after: {EARLY_EXIT_CHECK_HOURS}h if < {EARLY_EXIT_LOSS_PCT}%")
+    logger.info(f"Max hold: {MAX_HOLD_HOURS_DEFAULT}h")
     logger.info("=" * 60)
     
     last_signal = 0
@@ -599,7 +538,7 @@ def run_daemon():
             state.errors += 1
             time.sleep(30)
     
-    logger.info("V3.1.1 Daemon shutdown")
+    logger.info("V3.1 Daemon shutdown")
     logger.info(f"Stats: {json.dumps(state.to_dict(), indent=2)}")
 
 

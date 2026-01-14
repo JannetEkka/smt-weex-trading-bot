@@ -1,7 +1,12 @@
 """
-SMT Nightly Trade V3.1 - Multi-Persona Analysis
-================================================
-Enhanced trading with multiple AI personas voting on decisions.
+SMT Nightly Trade V3.1.1 - Tier-Based Multi-Persona Analysis
+=============================================================
+Enhanced trading with tier-based risk management.
+
+V3.1.1 Changes:
+- Tier 1 (BTC, ETH, BNB, LTC): 4% TP, 2% SL, 48h hold - slow grind, room to breathe
+- Tier 2 (SOL): 3% TP, 1.75% SL, 12h hold - volatile but not meme-tier
+- Tier 3 (DOGE, XRP, ADA): 2.5% TP, 1.5% SL, 6h hold - momentum scalp, get out fast
 
 Personas:
 1. WHALE - On-chain whale intelligence (our unique edge)
@@ -9,12 +14,6 @@ Personas:
 3. FLOW - Order flow analysis (taker ratio + depth)
 4. TECHNICAL - RSI, SMA, momentum indicators
 5. JUDGE - Final validator that weighs all personas
-
-Features over V3:
-- Multi-persona voting system
-- Order flow analysis (like competitors)
-- Smarter exit logic (don't hold losers too long)
-- AI logs with order_id for "AI order" display
 
 Run: python3 smt_nightly_trade_v3_1.py
 Test: python3 smt_nightly_trade_v3_1.py --test
@@ -63,42 +62,74 @@ FLOOR_BALANCE = 950.0  # Protect principal - stop trading below this
 
 # Trading Parameters
 MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 8  # Increased from 5 to compete
-MAX_SINGLE_POSITION_PCT = 0.08  # 12% per trade max ($120 on $1000) - CONSERVATIVE
-MIN_SINGLE_POSITION_PCT = 0.03  # 5% minimum ($50 on $1000) - CONSERVATIVE
-MIN_CONFIDENCE_TO_TRADE = 0.55  # FIXED: lowered from 0.60  # Need 60% confidence from Judge
+MAX_OPEN_POSITIONS = 8
+MAX_SINGLE_POSITION_PCT = 0.08  # 8% per trade max
+MIN_SINGLE_POSITION_PCT = 0.03  # 3% minimum
+MIN_CONFIDENCE_TO_TRADE = 0.55
 
-# V3.1: Smarter exit thresholds
-EARLY_EXIT_LOSS_PCT = -3.0      # Exit if losing more than 3%
-EARLY_EXIT_TIME_HOURS = 4       # Check for early exit after 4 hours
-TRAILING_PROFIT_LOCK_PCT = 2.0  # If we were up 2%+, don't let it go negative
+# ============================================================
+# V3.1.1: TIER-BASED PARAMETERS
+# ============================================================
+# Tier 1: Stable (BTC, ETH, BNB, LTC) - slow grind, need room to breathe
+# Tier 2: Mid volatility (SOL) - volatile but not meme-tier
+# Tier 3: Fast/Meme (DOGE, XRP, ADA) - momentum scalp, get out fast
 
-# Trading Pairs
+TIER_CONFIG = {
+    1: {  # BTC, ETH, BNB, LTC - Stable, slow movers
+        "name": "STABLE",
+        "tp_pct": 4.0,           # Take profit at 4%
+        "sl_pct": 2.0,           # Stop loss at 2%
+        "max_hold_hours": 48,    # Allow 48h for slow grind
+        "early_exit_hours": 6,   # Check early exit after 6h
+        "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 6h
+        "force_exit_loss_pct": -4.0,  # Hard stop at -4%
+    },
+    2: {  # SOL - Mid volatility
+        "name": "MID",
+        "tp_pct": 3.0,           # Take profit at 3%
+        "sl_pct": 1.75,          # Stop loss at 1.75%
+        "max_hold_hours": 12,    # 12h max hold
+        "early_exit_hours": 3,   # Check early exit after 3h
+        "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 3h
+        "force_exit_loss_pct": -4.0,  # Hard stop at -4%
+    },
+    3: {  # DOGE, XRP, ADA - Fast movers, momentum scalp
+        "name": "FAST",
+        "tp_pct": 2.5,           # Take profit at 2.5%
+        "sl_pct": 1.5,           # Stop loss at 1.5%
+        "max_hold_hours": 6,     # Get out fast - 6h max
+        "early_exit_hours": 2,   # Check early exit after 2h
+        "early_exit_loss_pct": -1.0,  # Exit if -1% after 2h
+        "force_exit_loss_pct": -4.0,  # Hard stop at -4%
+    },
+}
+
+# Trading Pairs with correct tiers
 TRADING_PAIRS = {
-    "ETH": {"symbol": "cmt_ethusdt", "tier": 1, "has_whale_data": True},
     "BTC": {"symbol": "cmt_btcusdt", "tier": 1, "has_whale_data": True},
+    "ETH": {"symbol": "cmt_ethusdt", "tier": 1, "has_whale_data": True},
+    "BNB": {"symbol": "cmt_bnbusdt", "tier": 1, "has_whale_data": False},
+    "LTC": {"symbol": "cmt_ltcusdt", "tier": 1, "has_whale_data": False},
     "SOL": {"symbol": "cmt_solusdt", "tier": 2, "has_whale_data": False},
-    "DOGE": {"symbol": "cmt_dogeusdt", "tier": 2, "has_whale_data": False},
-    "XRP": {"symbol": "cmt_xrpusdt", "tier": 2, "has_whale_data": False},
-    "ADA": {"symbol": "cmt_adausdt", "tier": 2, "has_whale_data": False},
-    "BNB": {"symbol": "cmt_bnbusdt", "tier": 2, "has_whale_data": False},
-    "LTC": {"symbol": "cmt_ltcusdt", "tier": 2, "has_whale_data": False},
+    "DOGE": {"symbol": "cmt_dogeusdt", "tier": 3, "has_whale_data": False},
+    "XRP": {"symbol": "cmt_xrpusdt", "tier": 3, "has_whale_data": False},
+    "ADA": {"symbol": "cmt_adausdt", "tier": 3, "has_whale_data": False},
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.1-MultiPersona"
-MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1"
+PIPELINE_VERSION = "SMT-v3.1.1-TierBased"
+MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.1"
 
 # Known step sizes
 KNOWN_STEP_SIZES = {
     "cmt_btcusdt": 0.0001,
-    "cmt_ethusdt": 0.01,    # WEEX wants 0.01
+    "cmt_ethusdt": 0.01,
     "cmt_solusdt": 0.1,
-    "cmt_dogeusdt": 100,    # WEEX error confirmed
-    "cmt_xrpusdt": 10,      # WEEX error confirmed
-    "cmt_adausdt": 10,      # WEEX error: stepSize '10'
+    "cmt_dogeusdt": 100,
+    "cmt_xrpusdt": 10,
+    "cmt_adausdt": 10,
     "cmt_bnbusdt": 0.1,
-    "cmt_ltcusdt": 0.1,     # WEEX error: stepSize '0.1'
+    "cmt_ltcusdt": 0.1,
 }
 
 CEX_ADDRESSES = {
@@ -109,6 +140,42 @@ CEX_ADDRESSES = {
 }
 
 CONTRACT_INFO_CACHE = {}
+
+
+# ============================================================
+# TIER HELPER FUNCTIONS
+# ============================================================
+
+def get_tier_for_symbol(symbol: str) -> int:
+    """Get tier number for a symbol (e.g., 'cmt_btcusdt' -> 1)"""
+    for pair_name, pair_info in TRADING_PAIRS.items():
+        if pair_info["symbol"] == symbol:
+            return pair_info.get("tier", 2)
+    return 2  # Default to mid tier
+
+
+def get_tier_for_pair(pair_name: str) -> int:
+    """Get tier number for a pair name (e.g., 'BTC' -> 1)"""
+    if pair_name in TRADING_PAIRS:
+        return TRADING_PAIRS[pair_name].get("tier", 2)
+    return 2
+
+
+def get_tier_config(tier: int) -> Dict:
+    """Get tier configuration"""
+    return TIER_CONFIG.get(tier, TIER_CONFIG[2])
+
+
+def get_tier_config_for_symbol(symbol: str) -> Dict:
+    """Get tier config for a symbol"""
+    tier = get_tier_for_symbol(symbol)
+    return get_tier_config(tier)
+
+
+def get_tier_config_for_pair(pair_name: str) -> Dict:
+    """Get tier config for a pair name"""
+    tier = get_tier_for_pair(pair_name)
+    return get_tier_config(tier)
 
 
 # ============================================================
@@ -141,14 +208,12 @@ def get_price(symbol: str) -> float:
 
 
 def get_balance() -> float:
-    """Get available USDT balance from WEEX using /assets endpoint"""
+    """Get available USDT balance from WEEX"""
     try:
-        # Use /assets endpoint which returns correct available balance
         endpoint = "/capi/v2/account/assets"
         r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=15)
         data = r.json()
         
-        # Response is a list: [{"coinName": "USDT", "available": "xxx", "equity": "xxx", ...}]
         if isinstance(data, list):
             for asset in data:
                 if asset.get("coinName") == "USDT":
@@ -156,7 +221,6 @@ def get_balance() -> float:
                     if available > 0:
                         return available
         
-        # Fallback to old endpoint if assets doesn't work
         endpoint2 = "/capi/v2/account/accounts"
         r2 = requests.get(f"{WEEX_BASE_URL}{endpoint2}", headers=weex_headers("GET", endpoint2), timeout=15)
         data2 = r2.json()
@@ -223,17 +287,15 @@ def get_contract_info(symbol: str) -> Dict:
 
 
 def round_size_to_step(size: float, symbol: str) -> float:
-    """Round size DOWN to nearest step - FIXED for all step sizes"""
+    """Round size DOWN to nearest step"""
     contract_info = get_contract_info(symbol)
     step = contract_info.get("step_size", 0.001)
     
     import math
-    # Floor to nearest step (works for step=10, step=0.1, etc)
     floored = math.floor(size / step) * step
     
-    # Handle precision
     if step >= 1:
-        return int(floored)  # Return as integer for large steps
+        return int(floored)
     else:
         decimals = len(str(step).split('.')[-1]) if '.' in str(step) else 0
         return round(floored, decimals)
@@ -246,18 +308,32 @@ def round_price_to_tick(price: float, symbol: str) -> float:
 
 
 # ============================================================
-# PERSONA 1: WHALE INTELLIGENCE
+# PERSONA 1: WHALE INTELLIGENCE (FIXED - Actually uses data!)
 # ============================================================
+
+# Top whales to monitor (from our dataset - highest ETH holders)
+TOP_WHALES = [
+    {"address": "0x47ac0fb4f2d84898e4d9e7b4dab3c24507a6d503", "label": "SushiSwap Whale", "balance": 554999},
+    {"address": "0xf977814e90da44bfa03b6295a0616a897441acec", "label": "Binance Hot", "balance": 538622},
+    {"address": "0x28c6c06298d514db089934071355e5743bf21d60", "label": "Binance Main", "balance": 159563},
+    {"address": "0x21a31ee1afc51d94c2efccaa2092ad1028285549", "label": "Binance 2", "balance": 24971},
+    {"address": "0xdfd5293d8e347dfe59e90efd55b2956a1343963d", "label": "Binance 3", "balance": 15215},
+    {"address": "0x1d5a591eebb5bcb20f440d121e4f62e8d1689997", "label": "DEX Whale", "balance": 20753},
+    {"address": "0xee1bf4d7c53af2beafc7dc1dcea222a8c6d87ad9", "label": "DEX Trader", "balance": 40086},
+    {"address": "0x73af3bcf944a6559933396c1577b257e2054d935", "label": "Aave Whale", "balance": 303067},
+]
 
 class WhalePersona:
     """
     Analyzes on-chain whale behavior for ETH/BTC signals.
-    Our unique competitive advantage.
+    Tracks large wallet movements via Etherscan API.
     """
     
     def __init__(self):
         self.name = "WHALE"
-        self.weight = 2.0  # Higher weight - our edge
+        self.weight = 2.0
+        self.cache = {}
+        self.cache_ttl = 300  # 5 minutes
     
     def analyze(self, pair: str, pair_info: Dict) -> Dict:
         """Analyze whale activity for trading signal"""
@@ -271,56 +347,76 @@ class WhalePersona:
             }
         
         try:
-            # Fetch recent large transactions
-            large_txs = self._fetch_large_transactions(100.0, 6)
+            # Analyze top whales
+            total_inflow = 0
+            total_outflow = 0
+            whale_signals = []
+            whales_analyzed = 0
             
-            if not large_txs:
+            for whale in TOP_WHALES[:5]:  # Check top 5 whales
+                try:
+                    flow = self._analyze_whale_flow(whale["address"], whale["label"])
+                    if flow:
+                        whales_analyzed += 1
+                        total_inflow += flow["inflow"]
+                        total_outflow += flow["outflow"]
+                        
+                        if flow["net"] > 100:  # Significant inflow (>100 ETH)
+                            whale_signals.append(f"{whale['label']}: +{flow['net']:.0f} ETH")
+                        elif flow["net"] < -100:  # Significant outflow
+                            whale_signals.append(f"{whale['label']}: {flow['net']:.0f} ETH")
+                    
+                    time.sleep(0.25)  # Rate limit Etherscan
+                except Exception as e:
+                    print(f"  [WHALE] Error analyzing {whale['label']}: {e}")
+                    continue
+            
+            if whales_analyzed == 0:
                 return {
                     "persona": self.name,
                     "signal": "NEUTRAL",
                     "confidence": 0.3,
-                    "reasoning": "No recent large transactions found",
+                    "reasoning": "Could not fetch whale data from Etherscan",
                 }
             
-            # Analyze whale addresses
-            whale_addresses = self._discover_whales(large_txs)
+            net_flow = total_inflow - total_outflow
             
-            best_signal = None
-            for addr in whale_addresses[:5]:
-                try:
-                    txs = self._fetch_history(addr, 90)
-                    if not txs:
-                        continue
-                    
-                    flow = self._analyze_flow(addr, txs)
-                    
-                    if flow["direction"] == "inflow" and flow["net_flow_eth"] > 50:
-                        signal = {"signal": "LONG", "confidence": 0.70, "flow": flow}
-                    elif flow["direction"] == "outflow" and flow["net_flow_eth"] < -50:
-                        signal = {"signal": "SHORT", "confidence": 0.70, "flow": flow}
-                    else:
-                        continue
-                    
-                    if not best_signal or signal["confidence"] > best_signal["confidence"]:
-                        best_signal = signal
-                        
-                except:
-                    continue
+            # Determine signal based on net flow
+            if net_flow > 500:  # Strong accumulation (>500 ETH net inflow)
+                signal = "LONG"
+                confidence = min(0.85, 0.5 + (net_flow / 5000))
+                reasoning = f"Whale accumulation: +{net_flow:.0f} ETH net inflow"
+            elif net_flow < -500:  # Strong distribution (>500 ETH net outflow)
+                signal = "SHORT"
+                confidence = min(0.85, 0.5 + (abs(net_flow) / 5000))
+                reasoning = f"Whale distribution: {net_flow:.0f} ETH net outflow"
+            elif net_flow > 100:  # Mild accumulation
+                signal = "LONG"
+                confidence = 0.55
+                reasoning = f"Mild whale accumulation: +{net_flow:.0f} ETH"
+            elif net_flow < -100:  # Mild distribution
+                signal = "SHORT"
+                confidence = 0.55
+                reasoning = f"Mild whale distribution: {net_flow:.0f} ETH"
+            else:
+                signal = "NEUTRAL"
+                confidence = 0.4
+                reasoning = f"Whale activity balanced: {net_flow:+.0f} ETH"
             
-            if best_signal:
-                return {
-                    "persona": self.name,
-                    "signal": best_signal["signal"],
-                    "confidence": best_signal["confidence"],
-                    "reasoning": f"Whale {best_signal['flow']['direction']}: {best_signal['flow']['net_flow_eth']:.1f} ETH",
-                    "data": best_signal["flow"],
-                }
+            if whale_signals:
+                reasoning += f" | {'; '.join(whale_signals[:3])}"
             
             return {
                 "persona": self.name,
-                "signal": "NEUTRAL",
-                "confidence": 0.4,
-                "reasoning": "Mixed whale activity",
+                "signal": signal,
+                "confidence": confidence,
+                "reasoning": reasoning,
+                "data": {
+                    "net_flow": net_flow,
+                    "inflow": total_inflow,
+                    "outflow": total_outflow,
+                    "whales_analyzed": whales_analyzed,
+                },
             }
             
         except Exception as e:
@@ -331,50 +427,68 @@ class WhalePersona:
                 "reasoning": f"Whale analysis error: {str(e)}",
             }
     
-    def _fetch_large_transactions(self, min_eth: float, hours: int) -> List[Dict]:
-        # Simplified - return empty for non-ETH analysis
-        return []
-    
-    def _discover_whales(self, transactions: List[Dict]) -> List[str]:
-        addresses = set()
-        for tx in transactions:
-            if tx.get("from"):
-                addresses.add(tx["from"].lower())
-            if tx.get("to"):
-                addresses.add(tx["to"].lower())
-        return list(addresses)
-    
-    def _fetch_history(self, address: str, days: int) -> List[Dict]:
+    def _analyze_whale_flow(self, address: str, label: str) -> Optional[Dict]:
+        """Fetch recent transactions for a whale and calculate flow"""
+        
+        # Check cache
+        cache_key = f"{address}_{int(time.time() // self.cache_ttl)}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
         try:
+            # Fetch recent transactions from Etherscan
             params = {
                 "chainid": CHAIN_ID,
                 "module": "account",
                 "action": "txlist",
                 "address": address,
                 "page": 1,
-                "offset": 100,
+                "offset": 50,  # Last 50 transactions
                 "sort": "desc",
                 "apikey": ETHERSCAN_API_KEY,
             }
-            r = requests.get(ETHERSCAN_BASE_URL, params=params, timeout=30)
+            
+            r = requests.get(ETHERSCAN_BASE_URL, params=params, timeout=15)
             data = r.json()
-            if data.get("status") == "1":
-                return [{"from": tx["from"], "to": tx["to"], 
-                        "value": float(tx.get("value", 0)) / 1e18,
-                        "timestamp": int(tx.get("timeStamp", 0))}
-                       for tx in data["result"][:50]]
-        except:
-            pass
-        return []
-    
-    def _analyze_flow(self, address: str, txs: List[Dict]) -> Dict:
-        recent = [tx for tx in txs if tx["timestamp"] > time.time() - 6*3600]
-        inflow = sum(tx["value"] for tx in recent if tx["to"].lower() == address.lower())
-        outflow = sum(tx["value"] for tx in recent if tx["from"].lower() == address.lower())
-        net = inflow - outflow
-        
-        direction = "inflow" if net > 10 else "outflow" if net < -10 else "mixed"
-        return {"direction": direction, "net_flow_eth": net, "inflow": inflow, "outflow": outflow}
+            
+            if data.get("status") != "1" or not data.get("result"):
+                return None
+            
+            # Calculate flow in last 24 hours
+            cutoff = time.time() - (24 * 3600)
+            inflow = 0
+            outflow = 0
+            
+            for tx in data["result"]:
+                tx_time = int(tx.get("timeStamp", 0))
+                if tx_time < cutoff:
+                    continue
+                
+                value_eth = float(tx.get("value", 0)) / 1e18
+                
+                if value_eth < 1:  # Ignore small transactions
+                    continue
+                
+                if tx.get("to", "").lower() == address.lower():
+                    inflow += value_eth
+                elif tx.get("from", "").lower() == address.lower():
+                    outflow += value_eth
+            
+            result = {
+                "address": address,
+                "label": label,
+                "inflow": inflow,
+                "outflow": outflow,
+                "net": inflow - outflow,
+            }
+            
+            # Cache result
+            self.cache[cache_key] = result
+            return result
+            
+        except Exception as e:
+            print(f"  [WHALE] Etherscan error for {label}: {e}")
+            return None
 
 
 # ============================================================
@@ -382,24 +496,19 @@ class WhalePersona:
 # ============================================================
 
 class SentimentPersona:
-    """
-    Uses Gemini with Google Search grounding for market sentiment.
-    """
+    """Uses Gemini with Google Search grounding for market sentiment."""
     
     def __init__(self):
         self.name = "SENTIMENT"
-        self.weight = 1.5
+        self.weight = 2.0
     
     def analyze(self, pair: str, pair_info: Dict, competition_status: Dict) -> Dict:
-        """Get market sentiment from Gemini search"""
-        
         try:
             from google import genai
             from google.genai.types import GenerateContentConfig, GoogleSearch, Tool
             
             client = genai.Client()
             
-            # Search for sentiment
             search_query = f"{pair} cryptocurrency price prediction sentiment today news"
             
             grounding_config = GenerateContentConfig(
@@ -415,7 +524,6 @@ class SentimentPersona:
             
             market_context = response.text[:1500] if response.text else ""
             
-            # Analyze sentiment
             sentiment_prompt = f"""Based on this market context, determine sentiment for {pair}:
 
 {market_context}
@@ -444,75 +552,85 @@ Respond with JSON only:
                 "confidence": data.get("confidence", 0.5),
                 "reasoning": data.get("key_factor", "Market sentiment analysis"),
                 "sentiment": data["sentiment"],
-                "market_context": market_context[:800],  # ADDED: full market analysis for AI logs
+                "market_context": market_context[:800],
             }
             
         except Exception as e:
             return {
                 "persona": self.name,
                 "signal": "NEUTRAL",
-                "confidence": 0.0,
+                "confidence": 0.3,
                 "reasoning": f"Sentiment analysis error: {str(e)}",
             }
 
 
 # ============================================================
-# PERSONA 3: ORDER FLOW ANALYSIS
+# PERSONA 3: ORDER FLOW
 # ============================================================
 
 class FlowPersona:
-    """
-    Analyzes taker buy/sell ratio and orderbook depth.
-    This is what competitors use for momentum detection.
-    """
+    """Analyzes order flow (taker ratio, depth)."""
     
     def __init__(self):
         self.name = "FLOW"
-        self.weight = 1.5
+        self.weight = 1.0
     
     def analyze(self, pair: str, pair_info: Dict) -> Dict:
-        """Analyze order flow for trading signal"""
-        
         symbol = pair_info["symbol"]
         
         try:
-            # Get taker ratio
-            taker = self._get_taker_ratio(symbol)
+            depth = self._get_order_book_depth(symbol)
+            taker_ratio = self._get_taker_ratio(symbol)
+            funding = self._get_funding_rate(symbol)
             
-            # Get depth imbalance
-            depth = self._get_depth_imbalance(symbol)
+            signals = []
             
-            # Combine signals
-            bullish = 0
-            bearish = 0
+            if depth["bid_strength"] > 1.3:
+                signals.append(("LONG", 0.6, "Strong bid depth"))
+            elif depth["ask_strength"] > 1.3:
+                signals.append(("SHORT", 0.6, "Strong ask depth"))
             
-            if taker["pressure"] == "BUY":
-                bullish += 2
-            elif taker["pressure"] == "SELL":
-                bearish += 2
+            if taker_ratio > 1.2:
+                signals.append(("LONG", 0.5, f"Taker buy pressure: {taker_ratio:.2f}"))
+            elif taker_ratio < 0.8:
+                signals.append(("SHORT", 0.5, f"Taker sell pressure: {taker_ratio:.2f}"))
             
-            if depth["wall_side"] == "BUY":
-                bullish += 1
-            elif depth["wall_side"] == "SELL":
-                bearish += 1
+            if funding > 0.0005:
+                signals.append(("SHORT", 0.4, f"High funding: {funding:.4f}"))
+            elif funding < -0.0003:
+                signals.append(("LONG", 0.4, f"Negative funding: {funding:.4f}"))
             
-            if bullish > bearish + 1:
-                signal = "LONG"
-                confidence = min(0.75, 0.50 + bullish * 0.10)
-            elif bearish > bullish + 1:
-                signal = "SHORT"
-                confidence = min(0.75, 0.50 + bearish * 0.10)
-            else:
-                signal = "NEUTRAL"
-                confidence = 0.40
+            if not signals:
+                return {
+                    "persona": self.name,
+                    "signal": "NEUTRAL",
+                    "confidence": 0.3,
+                    "reasoning": "No clear flow signal",
+                }
+            
+            long_score = sum(s[1] for s in signals if s[0] == "LONG")
+            short_score = sum(s[1] for s in signals if s[0] == "SHORT")
+            
+            if long_score > short_score and long_score > 0.5:
+                return {
+                    "persona": self.name,
+                    "signal": "LONG",
+                    "confidence": min(0.75, long_score),
+                    "reasoning": "; ".join(s[2] for s in signals if s[0] == "LONG"),
+                }
+            elif short_score > long_score and short_score > 0.5:
+                return {
+                    "persona": self.name,
+                    "signal": "SHORT",
+                    "confidence": min(0.75, short_score),
+                    "reasoning": "; ".join(s[2] for s in signals if s[0] == "SHORT"),
+                }
             
             return {
                 "persona": self.name,
-                "signal": signal,
-                "confidence": confidence,
-                "reasoning": f"Taker: {taker['pressure']} ({taker['taker_buy_ratio']:.0f}%/{taker['taker_sell_ratio']:.0f}%), Depth: {depth['wall_side']}",
-                "taker": taker,
-                "depth": depth,
+                "signal": "NEUTRAL",
+                "confidence": 0.4,
+                "reasoning": "Mixed flow signals",
             }
             
         except Exception as e:
@@ -523,40 +641,9 @@ class FlowPersona:
                 "reasoning": f"Flow analysis error: {str(e)}",
             }
     
-    def _get_taker_ratio(self, symbol: str) -> Dict:
-        """Calculate taker buy/sell ratio from recent trades"""
+    def _get_order_book_depth(self, symbol: str) -> Dict:
         try:
-            url = f"{WEEX_BASE_URL}/capi/v2/market/trades?symbol={symbol}&limit=200"
-            r = requests.get(url, timeout=10)
-            trades = r.json() if isinstance(r.json(), list) else []
-            
-            taker_buy = 0
-            taker_sell = 0
-            
-            for trade in trades:
-                value = float(trade.get("value", 0))
-                if trade.get("isBuyerMaker", False):
-                    taker_sell += value  # Buyer was maker = taker sold
-                else:
-                    taker_buy += value   # Seller was maker = taker bought
-            
-            total = taker_buy + taker_sell
-            buy_ratio = (taker_buy / total * 100) if total > 0 else 50
-            sell_ratio = (taker_sell / total * 100) if total > 0 else 50
-            
-            pressure = "BUY" if buy_ratio > 60 else "SELL" if sell_ratio > 60 else "NEUTRAL"
-            
-            return {
-                "taker_buy_ratio": round(buy_ratio, 1),
-                "taker_sell_ratio": round(sell_ratio, 1),
-                "pressure": pressure,
-            }
-        except:
-            return {"taker_buy_ratio": 50, "taker_sell_ratio": 50, "pressure": "NEUTRAL"}
-    
-    def _get_depth_imbalance(self, symbol: str) -> Dict:
-        """Calculate orderbook imbalance"""
-        try:
+            # WEEX uses limit=15 or limit=200
             url = f"{WEEX_BASE_URL}/capi/v2/market/depth?symbol={symbol}&limit=15"
             r = requests.get(url, timeout=10)
             data = r.json()
@@ -564,139 +651,43 @@ class FlowPersona:
             bids = data.get("bids", [])
             asks = data.get("asks", [])
             
-            bid_vol = sum(float(b[1]) for b in bids) if bids else 0
-            ask_vol = sum(float(a[1]) for a in asks) if asks else 0
+            # WEEX format: [[price, quantity], ...]
+            bid_volume = sum(float(b[1]) for b in bids[:10]) if bids else 0
+            ask_volume = sum(float(a[1]) for a in asks[:10]) if asks else 0
             
-            ratio = bid_vol / ask_vol if ask_vol > 0 else 1.0
-            wall_side = "BUY" if ratio > 1.5 else "SELL" if ratio < 0.67 else "BALANCED"
+            ratio = bid_volume / ask_volume if ask_volume > 0 else 1.0
             
-            return {"imbalance_ratio": round(ratio, 2), "wall_side": wall_side}
-        except:
-            return {"imbalance_ratio": 1.0, "wall_side": "BALANCED"}
-
-
-# ============================================================
-# PERSONA 4: TECHNICAL ANALYSIS
-# ============================================================
-
-class TechnicalPersona:
-    """
-    Calculates RSI, SMA, momentum from price data.
-    """
-    
-    def __init__(self):
-        self.name = "TECHNICAL"
-        self.weight = 1.0
-    
-    def analyze(self, pair: str, pair_info: Dict) -> Dict:
-        """Technical analysis for trading signal"""
-        
-        symbol = pair_info["symbol"]
-        
-        try:
-            # Get candles
-            candles = self._get_candles(symbol, "15m", 100)
-            
-            if not candles:
-                return {
-                    "persona": self.name,
-                    "signal": "NEUTRAL",
-                    "confidence": 0.0,
-                    "reasoning": "No candle data available",
-                }
-            
-            closes = [c["close"] for c in candles]
-            current = closes[-1]
-            
-            # Calculate indicators
-            rsi = self._calculate_rsi(closes, 14)
-            sma_20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else current
-            sma_50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else current
-            momentum = ((closes[-1] / closes[-6]) - 1) * 100 if len(closes) >= 6 else 0
-            
-            # Get funding rate
-            funding = self._get_funding_rate(symbol)
-            
-            # Count signals
-            bullish = 0
-            bearish = 0
-            
-            if rsi < 35:
-                bullish += 1  # Oversold
-            elif rsi > 65:
-                bearish += 1  # Overbought
-            
-            if current > sma_20:
-                bullish += 1
-            else:
-                bearish += 1
-            
-            if sma_20 > sma_50:
-                bullish += 1  # Golden cross
-            else:
-                bearish += 1
-            
-            if momentum > 1:
-                bullish += 1
-            elif momentum < -1:
-                bearish += 1
-            
-            if funding < -0.0001:
-                bullish += 1  # Contrarian - shorts pay longs
-            elif funding > 0.0002:
-                bearish += 1  # Contrarian - longs pay shorts
-            
-            if bullish > bearish + 1:
-                signal = "LONG"
-                confidence = min(0.70, 0.45 + bullish * 0.08)
-            elif bearish > bullish + 1:
-                signal = "SHORT"
-                confidence = min(0.70, 0.45 + bearish * 0.08)
-            else:
-                signal = "NEUTRAL"
-                confidence = 0.40
+            print(f"  [FLOW] Depth - Bids: {bid_volume:.2f}, Asks: {ask_volume:.2f}, Ratio: {ratio:.2f}")
             
             return {
-                "persona": self.name,
-                "signal": signal,
-                "confidence": confidence,
-                "reasoning": f"RSI={rsi:.1f}, SMA20/50={'golden' if sma_20 > sma_50 else 'death'}, Mom={momentum:+.2f}%, Fund={funding:.6f}",
-                "rsi": rsi,
-                "sma_20": sma_20,
-                "sma_50": sma_50,
-                "momentum": momentum,
-                "funding_rate": funding,
+                "bid_volume": bid_volume,
+                "ask_volume": ask_volume,
+                "bid_strength": ratio,
+                "ask_strength": 1/ratio if ratio > 0 else 1.0,
             }
-            
         except Exception as e:
-            return {
-                "persona": self.name,
-                "signal": "NEUTRAL",
-                "confidence": 0.0,
-                "reasoning": f"Technical error: {str(e)}",
-            }
+            print(f"  [FLOW] Depth error: {e}")
+            return {"bid_strength": 1.0, "ask_strength": 1.0}
     
-    def _get_candles(self, symbol: str, granularity: str, limit: int) -> List[Dict]:
+    def _get_taker_ratio(self, symbol: str) -> float:
         try:
-            url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity={granularity}&limit={limit}"
+            url = f"{WEEX_BASE_URL}/capi/v2/market/trades?symbol={symbol}&limit=100"
             r = requests.get(url, timeout=10)
             data = r.json()
-            return [{"close": float(c[4])} for c in data] if isinstance(data, list) else []
-        except:
-            return []
-    
-    def _calculate_rsi(self, closes: List[float], period: int = 14) -> float:
-        if len(closes) < period + 1:
-            return 50.0
-        deltas = np.diff(closes)
-        gains = np.where(deltas > 0, deltas, 0)
-        losses = np.where(deltas < 0, -deltas, 0)
-        avg_gain = np.mean(gains[-period:])
-        avg_loss = np.mean(losses[-period:])
-        if avg_loss == 0:
-            return 100.0
-        rs = avg_gain / avg_loss
-        return round(100 - (100 / (1 + rs)), 1)
+            
+            if isinstance(data, list) and len(data) > 0:
+                # WEEX uses isBuyerMaker: true = seller was taker, false = buyer was taker
+                buyer_taker_vol = sum(float(t.get("size", 0)) for t in data if not t.get("isBuyerMaker", True))
+                seller_taker_vol = sum(float(t.get("size", 0)) for t in data if t.get("isBuyerMaker", False))
+                
+                total = buyer_taker_vol + seller_taker_vol
+                if total > 0:
+                    ratio = buyer_taker_vol / seller_taker_vol if seller_taker_vol > 0 else 2.0
+                    print(f"  [FLOW] Taker - Buy: {buyer_taker_vol:.4f}, Sell: {seller_taker_vol:.4f}, Ratio: {ratio:.2f}")
+                    return ratio
+        except Exception as e:
+            print(f"  [FLOW] Taker error: {e}")
+        return 1.0
     
     def _get_funding_rate(self, symbol: str) -> float:
         try:
@@ -704,28 +695,167 @@ class TechnicalPersona:
             r = requests.get(url, timeout=10)
             data = r.json()
             if isinstance(data, list) and len(data) > 0:
-                return float(data[0].get("fundingRate", 0))
-        except:
-            pass
+                rate = float(data[0].get("fundingRate", 0))
+                print(f"  [FLOW] Funding rate: {rate:.6f}")
+                return rate
+        except Exception as e:
+            print(f"  [FLOW] Funding error: {e}")
         return 0.0
 
 
 # ============================================================
-# JUDGE: FINAL DECISION MAKER
+# PERSONA 4: TECHNICAL ANALYSIS
+# ============================================================
+
+class TechnicalPersona:
+    """Simple technical indicators (RSI, SMA, momentum)."""
+    
+    def __init__(self):
+        self.name = "TECHNICAL"
+        self.weight = 0.8
+    
+    def analyze(self, pair: str, pair_info: Dict) -> Dict:
+        symbol = pair_info["symbol"]
+        
+        try:
+            candles = self._get_candles(symbol, "1H", 50)
+            
+            if len(candles) < 20:
+                return {
+                    "persona": self.name,
+                    "signal": "NEUTRAL",
+                    "confidence": 0.0,
+                    "reasoning": "Insufficient data",
+                }
+            
+            closes = [c["close"] for c in candles]
+            
+            rsi = self._calculate_rsi(closes, 14)
+            sma_20 = np.mean(closes[-20:])
+            sma_50 = np.mean(closes[-50:]) if len(closes) >= 50 else sma_20
+            current_price = closes[-1]
+            
+            momentum = (closes[-1] - closes[-5]) / closes[-5] * 100 if closes[-5] > 0 else 0
+            
+            signals = []
+            
+            if rsi < 30:
+                signals.append(("LONG", 0.7, f"RSI oversold: {rsi:.1f}"))
+            elif rsi > 70:
+                signals.append(("SHORT", 0.7, f"RSI overbought: {rsi:.1f}"))
+            
+            if current_price > sma_20 > sma_50:
+                signals.append(("LONG", 0.5, "Price above SMAs (uptrend)"))
+            elif current_price < sma_20 < sma_50:
+                signals.append(("SHORT", 0.5, "Price below SMAs (downtrend)"))
+            
+            if momentum > 2:
+                signals.append(("LONG", 0.4, f"Strong momentum: +{momentum:.1f}%"))
+            elif momentum < -2:
+                signals.append(("SHORT", 0.4, f"Weak momentum: {momentum:.1f}%"))
+            
+            if not signals:
+                return {
+                    "persona": self.name,
+                    "signal": "NEUTRAL",
+                    "confidence": 0.4,
+                    "reasoning": f"No clear technical signal. RSI: {rsi:.1f}",
+                }
+            
+            long_score = sum(s[1] for s in signals if s[0] == "LONG")
+            short_score = sum(s[1] for s in signals if s[0] == "SHORT")
+            
+            if long_score > short_score:
+                return {
+                    "persona": self.name,
+                    "signal": "LONG",
+                    "confidence": min(0.8, long_score),
+                    "reasoning": "; ".join(s[2] for s in signals if s[0] == "LONG"),
+                }
+            elif short_score > long_score:
+                return {
+                    "persona": self.name,
+                    "signal": "SHORT",
+                    "confidence": min(0.8, short_score),
+                    "reasoning": "; ".join(s[2] for s in signals if s[0] == "SHORT"),
+                }
+            
+            return {
+                "persona": self.name,
+                "signal": "NEUTRAL",
+                "confidence": 0.4,
+                "reasoning": "Mixed technical signals",
+            }
+            
+        except Exception as e:
+            return {
+                "persona": self.name,
+                "signal": "NEUTRAL",
+                "confidence": 0.0,
+                "reasoning": f"Technical analysis error: {str(e)}",
+            }
+    
+    def _get_candles(self, symbol: str, interval: str, limit: int) -> List[Dict]:
+        try:
+            # WEEX uses 'granularity' not 'period', and format like '1h' not '1H'
+            granularity = interval.lower()  # '1H' -> '1h'
+            url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity={granularity}&limit={limit}"
+            r = requests.get(url, timeout=10)
+            data = r.json()
+            
+            if isinstance(data, list) and len(data) > 0:
+                # WEEX candle format: [timestamp, open, high, low, close, volume, value]
+                # Index: 0=time, 1=open, 2=high, 3=low, 4=close, 5=volume, 6=value
+                candles = []
+                for c in data:
+                    if len(c) >= 5:
+                        candles.append({
+                            "close": float(c[4]),
+                            "high": float(c[2]),
+                            "low": float(c[3]),
+                            "open": float(c[1]),
+                            "volume": float(c[5]) if len(c) > 5 else 0
+                        })
+                return candles
+        except Exception as e:
+            print(f"  [TECHNICAL] Candle fetch error: {e}")
+        return []
+    
+    def _calculate_rsi(self, prices: List[float], period: int = 14) -> float:
+        if len(prices) < period + 1:
+            return 50.0
+        
+        deltas = np.diff(prices)
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+        
+        avg_gain = np.mean(gains[-period:])
+        avg_loss = np.mean(losses[-period:])
+        
+        if avg_loss == 0:
+            return 100.0
+        
+        rs = avg_gain / avg_loss
+        return 100 - (100 / (1 + rs))
+
+
+# ============================================================
+# JUDGE: FINAL DECISION MAKER (V3.1.1 - Tier-Based)
 # ============================================================
 
 class JudgePersona:
-    """
-    Weighs all persona votes and makes final decision.
-    Like Hypothesis Arena's AI Judge.
-    """
+    """Weighs all persona votes and makes final decision with tier-based TP/SL."""
     
     def __init__(self):
         self.name = "JUDGE"
     
     def decide(self, persona_votes: List[Dict], pair: str, balance: float, 
                competition_status: Dict) -> Dict:
-        """Make final trading decision based on all persona votes"""
+        """Make final trading decision with TIER-BASED TP/SL"""
+        
+        # Get tier config for this pair
+        tier_config = get_tier_config_for_pair(pair)
+        tier = get_tier_for_pair(pair)
         
         # Calculate weighted votes
         long_score = 0
@@ -739,8 +869,7 @@ class JudgePersona:
             signal = vote["signal"]
             confidence = vote["confidence"]
             
-            # Get persona weight
-            weights = {"WHALE": 2.0, "SENTIMENT": 2.0, "FLOW": 1.0, "TECHNICAL": 0.8}  # FIXED: SENTIMENT equal to WHALE
+            weights = {"WHALE": 2.0, "SENTIMENT": 2.0, "FLOW": 1.0, "TECHNICAL": 0.8}
             weight = weights.get(persona, 1.0)
             
             weighted_conf = confidence * weight
@@ -756,52 +885,47 @@ class JudgePersona:
         
         total = long_score + short_score + neutral_score
         
-        # Decision logic
         if total == 0:
             return self._wait_decision("No valid persona votes")
         
         long_pct = long_score / total
         short_pct = short_score / total
         
-        # Adjust threshold based on number of votes (3 or 4 personas)
         num_votes = len(persona_votes)
-        threshold = 0.35 if num_votes <= 3 else 0.40  # Lower for 3-persona votes
+        threshold = 0.35 if num_votes <= 3 else 0.40
         ratio_req = 1.1 if num_votes <= 3 else 1.15
         
-        # Need clear consensus
-        if long_pct > threshold and long_score > short_score * ratio_req:  # FIXED: lowered threshold
+        if long_pct > threshold and long_score > short_score * ratio_req:
             decision = "LONG"
-            confidence = min(0.90, long_pct)  # FIXED: allow higher confidence
-        elif short_pct > threshold and short_score > long_score * ratio_req:  # FIXED: lowered threshold
+            confidence = min(0.90, long_pct)
+        elif short_pct > threshold and short_score > long_score * ratio_req:
             decision = "SHORT"
-            confidence = min(0.90, short_pct)  # FIXED: allow higher confidence
+            confidence = min(0.90, short_pct)
         else:
             return self._wait_decision(f"No consensus: LONG={long_pct:.0%}, SHORT={short_pct:.0%}")
         
-        # Final confidence check
         if confidence < MIN_CONFIDENCE_TO_TRADE:
             return self._wait_decision(f"Confidence too low: {confidence:.0%}")
         
-        # Calculate position size based on confidence
-        # V3.1 CONSERVATIVE: Smaller but meaningful positions
-        base_size = balance * 0.07  # 7% base ($70 on $1000)
+        # Position sizing
+        base_size = balance * 0.07
         
         if confidence > 0.80:
-            position_usdt = base_size * 1.5  # 10.5% = $105
+            position_usdt = base_size * 1.5
         elif confidence > 0.70:
-            position_usdt = base_size * 1.3  # 9% = $90
+            position_usdt = base_size * 1.3
         elif confidence > 0.60:
-            position_usdt = base_size * 1.0  # 7% = $70
+            position_usdt = base_size * 1.0
         else:
-            position_usdt = base_size * 0.8  # 5.6% = $56
+            position_usdt = base_size * 0.8
         
-        # Apply min/max limits - CONSERVATIVE
-        position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)  # At least 5%
-        position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)  # At most 12%
+        position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
+        position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
         
-        # TP/SL based on competition phase
-        tp_pct = competition_status.get("default_tp_pct", 5.0)
-        sl_pct = competition_status.get("default_sl_pct", 2.5)
+        # V3.1.1: TIER-BASED TP/SL
+        tp_pct = tier_config["tp_pct"]
+        sl_pct = tier_config["sl_pct"]
+        max_hold = tier_config["max_hold_hours"]
         
         return {
             "decision": decision,
@@ -809,15 +933,16 @@ class JudgePersona:
             "recommended_position_usdt": position_usdt,
             "take_profit_percent": tp_pct,
             "stop_loss_percent": sl_pct,
-            "hold_time_hours": competition_status.get("max_hold_hours", 24),
-            "reasoning": f"Judge decision: {decision} @ {confidence:.0%}. Votes: {', '.join(vote_summary)}",
-            "persona_votes": persona_votes,  # Include votes so daemon can extract market_context
+            "hold_time_hours": max_hold,
+            "tier": tier,
+            "tier_name": tier_config["name"],
+            "reasoning": f"Judge: {decision} @ {confidence:.0%}. Tier {tier} ({tier_config['name']}): TP {tp_pct}%, SL {sl_pct}%, Hold {max_hold}h. Votes: {', '.join(vote_summary)}",
+            "persona_votes": persona_votes,
             "vote_breakdown": {
                 "long_score": round(long_score, 2),
                 "short_score": round(short_score, 2),
                 "neutral_score": round(neutral_score, 2),
             },
-            "persona_votes": persona_votes,
         }
     
     def _wait_decision(self, reason: str) -> Dict:
@@ -833,9 +958,7 @@ class JudgePersona:
 # ============================================================
 
 class MultiPersonaAnalyzer:
-    """
-    Coordinates all personas and produces final signal.
-    """
+    """Coordinates all personas and produces final signal."""
     
     def __init__(self):
         self.whale = WhalePersona()
@@ -848,11 +971,14 @@ class MultiPersonaAnalyzer:
                 competition_status: Dict, open_positions: List[Dict]) -> Dict:
         """Run all personas and get final decision"""
         
-        print(f"\n  === Multi-Persona Analysis: {pair} ===")
+        tier = pair_info.get("tier", 2)
+        tier_config = get_tier_config(tier)
+        
+        print(f"\n  === Multi-Persona Analysis: {pair} (Tier {tier}: {tier_config['name']}) ===")
         
         votes = []
         
-        # 1. Whale Persona (ONLY for ETH/BTC - our unique edge)
+        # 1. Whale Persona (ONLY for ETH/BTC)
         if pair in ("ETH", "BTC"):
             print(f"  [WHALE] Analyzing...")
             whale_vote = self.whale.analyze(pair, pair_info)
@@ -882,7 +1008,10 @@ class MultiPersonaAnalyzer:
         # 5. Judge makes final decision
         print(f"  [JUDGE] Deciding...")
         final = self.judge.decide(votes, pair, balance, competition_status)
-        print(f"  [JUDGE] Final: {final['decision']} ({final['confidence']:.0%})")
+        print(f"  [JUDGE] Final: {final['decision']} ({final.get('confidence', 0):.0%})")
+        
+        if final['decision'] in ("LONG", "SHORT"):
+            print(f"  [JUDGE] TP: {final.get('take_profit_percent')}%, SL: {final.get('stop_loss_percent')}%, Max Hold: {final.get('hold_time_hours')}h")
         
         return final
 
@@ -892,6 +1021,7 @@ class MultiPersonaAnalyzer:
 # ============================================================
 
 def get_competition_status(balance: float) -> Dict:
+    """Get competition status (phase tracking only, TP/SL now tier-based)"""
     now = datetime.now(timezone.utc)
     days_left = (COMPETITION_END - now).days
     pnl = balance - STARTING_BALANCE
@@ -900,23 +1030,15 @@ def get_competition_status(balance: float) -> Dict:
     if days_left > 15:
         phase = "early"
         strategy = "growth"
-        tp, sl = 5.0, 2.5
-        max_hold = 48
     elif days_left > 7:
         phase = "mid"
         strategy = "balanced"
-        tp, sl = 4.0, 2.0
-        max_hold = 24
     elif days_left > 3:
         phase = "late"
         strategy = "conservative"
-        tp, sl = 3.0, 1.5
-        max_hold = 12
     else:
         phase = "final"
         strategy = "protect" if pnl > 0 else "push"
-        tp, sl = 2.0, 1.0
-        max_hold = 6
     
     return {
         "days_left": days_left,
@@ -924,9 +1046,6 @@ def get_competition_status(balance: float) -> Dict:
         "strategy_mode": strategy,
         "pnl": pnl,
         "pnl_pct": pnl_pct,
-        "default_tp_pct": tp,
-        "default_sl_pct": sl,
-        "max_hold_hours": max_hold,
     }
 
 
@@ -954,7 +1073,7 @@ def place_order(symbol: str, side: str, size: float, tp_price: float = None, sl_
         
         order = {
             "symbol": symbol,
-            "client_oid": f"smtv31_{int(time.time()*1000)}",
+            "client_oid": f"smtv311_{int(time.time()*1000)}",
             "size": str(rounded_size),
             "type": side,
             "order_type": "0",
@@ -968,7 +1087,7 @@ def place_order(symbol: str, side: str, size: float, tp_price: float = None, sl_
     else:
         order = {
             "symbol": symbol,
-            "client_oid": f"smtv31_{int(time.time()*1000)}",
+            "client_oid": f"smtv311_{int(time.time()*1000)}",
             "size": str(rounded_size),
             "type": side,
             "order_type": "0",
@@ -986,12 +1105,12 @@ def place_order(symbol: str, side: str, size: float, tp_price: float = None, sl_
 
 
 # ============================================================
-# AI LOG UPLOAD (with order_id fix)
+# AI LOG UPLOAD
 # ============================================================
 
 def upload_ai_log_to_weex(stage: str, input_data: Dict, output_data: Dict, 
                           explanation: str, order_id: int = None) -> Dict:
-    """Upload AI decision log to WEEX - WITH order_id for 'AI order' display"""
+    """Upload AI decision log to WEEX"""
     endpoint = "/capi/v2/order/uploadAiLog"
     
     payload = {
@@ -1002,7 +1121,6 @@ def upload_ai_log_to_weex(stage: str, input_data: Dict, output_data: Dict,
         "explanation": explanation[:500]
     }
     
-    # CRITICAL: Include order_id to show "AI order" on leaderboard
     if order_id:
         payload["orderId"] = int(order_id)
     
@@ -1028,14 +1146,16 @@ def upload_ai_log_to_weex(stage: str, input_data: Dict, output_data: Dict,
 
 
 # ============================================================
-# TRADE EXECUTION
+# TRADE EXECUTION (V3.1.1 - Tier-Based)
 # ============================================================
 
 def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
-    """Execute trade based on Judge decision"""
+    """Execute trade with TIER-BASED TP/SL"""
     
     symbol = pair_info["symbol"]
     signal = decision["decision"]
+    tier = pair_info.get("tier", 2)
+    tier_config = get_tier_config(tier)
     
     if signal not in ("LONG", "SHORT"):
         return {"executed": False, "reason": "No trade signal"}
@@ -1044,31 +1164,26 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     if current_price == 0:
         return {"executed": False, "reason": "Could not get price"}
     
-    # V3.1 CONSERVATIVE: Get position size with min/max
     position_usdt = decision.get("recommended_position_usdt", balance * 0.07)
-    position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)  # At least 5%
-    position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)  # At most 12%
+    position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
+    position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
     
-    # FIXED: position_usdt is MARGIN, multiply by leverage for notional position
     notional_usdt = position_usdt * MAX_LEVERAGE
     raw_size = notional_usdt / current_price
     
-    # SAFETY: Size must be positive
     if raw_size <= 0:
-        print(f"  [ERROR] Invalid raw_size: {raw_size} (notional={notional_usdt}, price={current_price})")
-        return {"executed": False, "reason": f"Invalid size calculation: {raw_size}"}
+        return {"executed": False, "reason": f"Invalid size: {raw_size}"}
     
     size = round_size_to_step(raw_size, symbol)
     
-    # Double check after rounding
     if size <= 0:
-        print(f"  [ERROR] Size rounded to 0 or negative: {size}")
-        return {"executed": False, "reason": f"Size too small after rounding: {size}"}
+        return {"executed": False, "reason": f"Size too small: {size}"}
     
     order_type = "1" if signal == "LONG" else "2"
     
-    tp_pct = decision.get("take_profit_percent", 5.0) / 100
-    sl_pct = decision.get("stop_loss_percent", 2.5) / 100
+    # V3.1.1: Use tier-based TP/SL from decision (set by Judge)
+    tp_pct = decision.get("take_profit_percent", tier_config["tp_pct"]) / 100
+    sl_pct = decision.get("stop_loss_percent", tier_config["sl_pct"]) / 100
     
     if signal == "LONG":
         tp_price = current_price * (1 + tp_pct)
@@ -1080,7 +1195,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     set_leverage(symbol, MAX_LEVERAGE)
     
     print(f"  [TRADE] {signal} {symbol}: {size} @ ${current_price:.4f}")
-    print(f"  [TRADE] TP: ${tp_price:.4f}, SL: ${sl_price:.4f}")
+    print(f"  [TRADE] Tier {tier} ({tier_config['name']}): TP ${tp_price:.4f} ({tp_pct*100:.1f}%), SL ${sl_price:.4f} ({sl_pct*100:.1f}%)")
     
     result = place_order(symbol, order_type, size, tp_price, sl_price)
     
@@ -1089,13 +1204,14 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     if not order_id:
         return {"executed": False, "reason": f"Order failed: {result}"}
     
-    # Upload AI log WITH order_id
+    # Upload AI log
     upload_ai_log_to_weex(
-        stage=f"V3.1 Trade: {signal} {symbol.replace('cmt_', '').upper()}",
+        stage=f"V3.1.1 Trade: {signal} {symbol.replace('cmt_', '').upper()}",
         input_data={
             "pair": symbol,
             "balance": balance,
-            "personas": [v["persona"] for v in decision.get("persona_votes", [])],
+            "tier": tier,
+            "tier_name": tier_config["name"],
         },
         output_data={
             "signal": signal,
@@ -1104,9 +1220,11 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
             "entry_price": current_price,
             "tp_price": tp_price,
             "sl_price": sl_price,
+            "tp_pct": tp_pct * 100,
+            "sl_pct": sl_pct * 100,
         },
         explanation=decision.get("reasoning", "")[:500],
-        order_id=int(order_id) if str(order_id).isdigit() else None  # FIXED: pass order_id
+        order_id=int(order_id) if str(order_id).isdigit() else None
     )
     
     return {
@@ -1121,18 +1239,60 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         "tp_pct": tp_pct * 100,
         "sl_pct": sl_pct * 100,
         "position_usdt": position_usdt,
+        "tier": tier,
+        "tier_name": tier_config["name"],
+        "max_hold_hours": tier_config["max_hold_hours"],
     }
 
 
 # ============================================================
-# TRADE TRACKER
+# TRADE TRACKER (with Cooldown for Losing Trades)
 # ============================================================
+
+# Cooldown periods by tier (prevents revenge trading)
+COOLDOWN_HOURS = {
+    1: 6,   # Tier 1 (BTC, ETH, BNB, LTC): 6 hour cooldown
+    2: 8,   # Tier 2 (SOL): 8 hour cooldown  
+    3: 12,  # Tier 3 (DOGE, XRP, ADA): 12 hour cooldown (2x max hold time)
+}
+
+# ============================================================
+# V3.1.2: RUNNER LOGIC CONFIGURATION
+# ============================================================
+# When position hits 50% of TP, close half and let rest run
+# Only for Tier 1 and Tier 2 - Tier 3 is scalp only
+
+RUNNER_CONFIG = {
+    1: {  # BTC, ETH, BNB, LTC
+        "enabled": True,
+        "trigger_pct": 2.0,      # Trigger at +2% (50% of 4% TP)
+        "close_pct": 50,         # Close 50% of position
+        "move_sl_to_entry": True,  # Move SL to breakeven
+        "remove_tp": True,       # Let remaining 50% run
+    },
+    2: {  # SOL
+        "enabled": True,
+        "trigger_pct": 1.5,      # Trigger at +1.5% (50% of 3% TP)
+        "close_pct": 50,
+        "move_sl_to_entry": True,
+        "remove_tp": True,
+    },
+    3: {  # DOGE, XRP, ADA - NO RUNNERS (too volatile)
+        "enabled": False,
+    },
+}
+
+
+def get_runner_config(tier: int) -> Dict:
+    """Get runner configuration for a tier"""
+    return RUNNER_CONFIG.get(tier, {"enabled": False})
 
 class TradeTracker:
     def __init__(self, state_file: str = "trade_state_v3_1.json"):
         self.state_file = state_file
         self.active_trades: Dict = {}
         self.closed_trades: List = []
+        self.cooldowns: Dict = {}  # symbol -> cooldown_until timestamp
         self.load_state()
     
     def load_state(self):
@@ -1142,12 +1302,17 @@ class TradeTracker:
                     data = json.load(f)
                     self.active_trades = data.get("active", {})
                     self.closed_trades = data.get("closed", [])
+                    self.cooldowns = data.get("cooldowns", {})
         except:
             pass
     
     def save_state(self):
         with open(self.state_file, 'w') as f:
-            json.dump({"active": self.active_trades, "closed": self.closed_trades}, f, indent=2, default=str)
+            json.dump({
+                "active": self.active_trades, 
+                "closed": self.closed_trades,
+                "cooldowns": self.cooldowns
+            }, f, indent=2, default=str)
     
     def add_trade(self, symbol: str, trade_data: Dict):
         self.active_trades[symbol] = {
@@ -1159,6 +1324,8 @@ class TradeTracker:
             "tp_price": trade_data.get("tp_price"),
             "sl_price": trade_data.get("sl_price"),
             "position_usdt": trade_data.get("position_usdt"),
+            "tier": trade_data.get("tier"),
+            "max_hold_hours": trade_data.get("max_hold_hours"),
         }
         self.save_state()
     
@@ -1168,7 +1335,51 @@ class TradeTracker:
             trade["closed_at"] = datetime.now(timezone.utc).isoformat()
             trade["close_data"] = close_data
             self.closed_trades.append(trade)
+            
+            # Check if it was a losing trade - add cooldown
+            pnl_pct = close_data.get("final_pnl_pct", 0) if close_data else 0
+            reason = close_data.get("reason", "") if close_data else ""
+            
+            # Add cooldown if closed at a loss or force-exited
+            if pnl_pct < 0 or "early_exit" in reason or "force_stop" in reason or "max_hold" in reason:
+                tier = trade.get("tier", 2)
+                cooldown_hours = COOLDOWN_HOURS.get(tier, 12)
+                cooldown_until = datetime.now(timezone.utc) + timedelta(hours=cooldown_hours)
+                self.cooldowns[symbol] = cooldown_until.isoformat()
+                print(f"  [COOLDOWN] {symbol} on cooldown for {cooldown_hours}h until {cooldown_until.strftime('%Y-%m-%d %H:%M UTC')}")
+            
             self.save_state()
+    
+    def is_on_cooldown(self, symbol: str) -> bool:
+        """Check if a symbol is on cooldown (recently closed at loss)"""
+        if symbol not in self.cooldowns:
+            return False
+        
+        try:
+            cooldown_until = datetime.fromisoformat(self.cooldowns[symbol].replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) < cooldown_until:
+                remaining = (cooldown_until - datetime.now(timezone.utc)).total_seconds() / 3600
+                print(f"  [COOLDOWN] {symbol} still on cooldown ({remaining:.1f}h remaining)")
+                return True
+            else:
+                # Cooldown expired, remove it
+                del self.cooldowns[symbol]
+                self.save_state()
+                return False
+        except:
+            return False
+    
+    def get_cooldown_remaining(self, symbol: str) -> float:
+        """Get remaining cooldown hours for a symbol"""
+        if symbol not in self.cooldowns:
+            return 0
+        
+        try:
+            cooldown_until = datetime.fromisoformat(self.cooldowns[symbol].replace("Z", "+00:00"))
+            remaining = (cooldown_until - datetime.now(timezone.utc)).total_seconds() / 3600
+            return max(0, remaining)
+        except:
+            return 0
     
     def get_active_symbols(self) -> List[str]:
         return list(self.active_trades.keys())
@@ -1199,7 +1410,6 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
     """Cancel all pending orders for a symbol"""
     result = {"cancelled": []}
     
-    # Cancel regular orders
     try:
         endpoint = "/capi/v2/order/orders"
         if symbol:
@@ -1219,7 +1429,6 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
     except:
         pass
     
-    # Cancel plan orders
     try:
         endpoint = "/capi/v2/order/plan_orders"
         if symbol:
@@ -1247,13 +1456,85 @@ def close_position_manually(symbol: str, side: str, size: float) -> Dict:
     return place_order(symbol, close_type, size)
 
 
+def execute_runner_partial_close(symbol: str, side: str, current_size: float, 
+                                  entry_price: float, current_price: float) -> Dict:
+    """
+    Execute Runner Logic: Close 50% of position, move SL to breakeven
+    
+    Returns: {"executed": True/False, "closed_size": X, "remaining_size": X, ...}
+    """
+    tier = get_tier_for_symbol(symbol)
+    runner_config = get_runner_config(tier)
+    
+    if not runner_config.get("enabled"):
+        return {"executed": False, "reason": "Runner not enabled for this tier"}
+    
+    # Calculate close size (50% of position)
+    close_pct = runner_config.get("close_pct", 50) / 100
+    close_size = round_size_to_step(current_size * close_pct, symbol)
+    remaining_size = current_size - close_size
+    
+    if close_size <= 0:
+        return {"executed": False, "reason": "Close size too small"}
+    
+    # Close 50% at market
+    close_type = "3" if side == "LONG" else "4"  # Close long = 3, Close short = 4
+    
+    print(f"  [RUNNER] Closing {close_pct*100:.0f}% of {symbol}: {close_size} units")
+    print(f"  [RUNNER] Entry: ${entry_price:.4f}, Current: ${current_price:.4f}")
+    
+    # Place partial close order (NO TP/SL on close order)
+    close_result = place_order(symbol, close_type, close_size, tp_price=None, sl_price=None)
+    
+    if not close_result.get("order_id"):
+        return {"executed": False, "reason": f"Partial close failed: {close_result}"}
+    
+    # Calculate profit locked
+    if side == "LONG":
+        profit_pct = ((current_price - entry_price) / entry_price) * 100
+    else:
+        profit_pct = ((entry_price - current_price) / entry_price) * 100
+    
+    profit_locked = (close_size * current_price * profit_pct / 100) / 20  # Divide by leverage for margin profit
+    
+    # Upload AI log
+    upload_ai_log_to_weex(
+        stage=f"V3.1.2 Runner: Partial Close {symbol.replace('cmt_', '').upper()}",
+        input_data={
+            "symbol": symbol,
+            "tier": tier,
+            "original_size": current_size,
+            "entry_price": entry_price,
+            "trigger_price": current_price,
+        },
+        output_data={
+            "closed_size": close_size,
+            "remaining_size": remaining_size,
+            "profit_pct": profit_pct,
+            "profit_locked": profit_locked,
+            "sl_moved_to": entry_price if runner_config.get("move_sl_to_entry") else "unchanged",
+        },
+        explanation=f"Runner triggered at +{profit_pct:.1f}%. Closed {close_pct*100:.0f}% to lock ${profit_locked:.2f}. Remaining {remaining_size} units running with SL at breakeven."
+    )
+    
+    return {
+        "executed": True,
+        "close_order_id": close_result.get("order_id"),
+        "closed_size": close_size,
+        "remaining_size": remaining_size,
+        "profit_pct": profit_pct,
+        "profit_locked": profit_locked,
+        "new_sl_price": entry_price if runner_config.get("move_sl_to_entry") else None,
+    }
+
+
 # ============================================================
 # LOCAL LOGGING
 # ============================================================
 
 def save_local_log(log_data: Dict, timestamp: str):
     os.makedirs("logs", exist_ok=True)
-    filename = f"logs/v3_1_{timestamp}.json"
+    filename = f"logs/v3_1_1_{timestamp}.json"
     with open(filename, 'w') as f:
         json.dump(log_data, f, indent=2, default=str)
     print(f"  [LOG] Saved: {filename}")
@@ -1265,8 +1546,14 @@ def save_local_log(log_data: Dict, timestamp: str):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("SMT V3.1 - Multi-Persona Trading System")
+    print("SMT V3.1.1 - Tier-Based Multi-Persona Trading")
     print("=" * 60)
+    
+    print("\nTier Configuration:")
+    for tier, config in TIER_CONFIG.items():
+        pairs = [p for p, info in TRADING_PAIRS.items() if info["tier"] == tier]
+        print(f"  Tier {tier} ({config['name']}): {', '.join(pairs)}")
+        print(f"    TP: {config['tp_pct']}%, SL: {config['sl_pct']}%, Max Hold: {config['max_hold_hours']}h")
     
     balance = get_balance()
     positions = get_open_positions()
@@ -1276,11 +1563,10 @@ if __name__ == "__main__":
     print(f"Positions: {len(positions)}")
     print(f"Phase: {competition['phase']}, Days left: {competition['days_left']}")
     
-    # Test multi-persona analysis on one pair
+    # Test analysis on one pair from each tier
     analyzer = MultiPersonaAnalyzer()
     
-    for pair in ["ETH", "SOL"]:
+    for pair in ["BTC", "SOL", "DOGE"]:
         print(f"\n{'='*60}")
         result = analyzer.analyze(pair, TRADING_PAIRS[pair], balance, competition, positions)
         print(f"\nFINAL for {pair}: {result['decision']} ({result.get('confidence', 0):.0%})")
-        print(f"Reasoning: {result.get('reasoning', 'N/A')}")

@@ -1,0 +1,1286 @@
+"""
+SMT Nightly Trade V3.1 - Multi-Persona Analysis
+================================================
+Enhanced trading with multiple AI personas voting on decisions.
+
+Personas:
+1. WHALE - On-chain whale intelligence (our unique edge)
+2. SENTIMENT - Market sentiment via Gemini search
+3. FLOW - Order flow analysis (taker ratio + depth)
+4. TECHNICAL - RSI, SMA, momentum indicators
+5. JUDGE - Final validator that weighs all personas
+
+Features over V3:
+- Multi-persona voting system
+- Order flow analysis (like competitors)
+- Smarter exit logic (don't hold losers too long)
+- AI logs with order_id for "AI order" display
+
+Run: python3 smt_nightly_trade_v3_1.py
+Test: python3 smt_nightly_trade_v3_1.py --test
+"""
+
+import os
+import sys
+import json
+import time
+import hmac
+import hashlib
+import base64
+import pickle
+import requests
+import numpy as np
+from datetime import datetime, timezone, timedelta
+from typing import Dict, List, Optional, Tuple
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+TEST_MODE = "--test" in sys.argv or os.getenv("SMT_TEST_MODE", "false").lower() == "true"
+SIMULATED_BALANCE = 1000.0
+
+# WEEX API
+WEEX_API_KEY = os.getenv('WEEX_API_KEY', 'weex_cda1971e60e00a1f6ce7393c1fa2cf86')
+WEEX_API_SECRET = os.getenv('WEEX_API_SECRET', '15068d295eb937704e13b07f75f34ce30b6e279ec1e19bff44558915ef0d931c')
+WEEX_API_PASSPHRASE = os.getenv('WEEX_API_PASSPHRASE', 'weex8282888')
+WEEX_BASE_URL = "https://api-contract.weex.com"
+
+# Etherscan
+ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY', 'W7GTUDUM9BMBQPJUZXXMDBJH4JDPUQS9UR')
+ETHERSCAN_BASE_URL = "https://api.etherscan.io/v2/api"
+CHAIN_ID = 1
+
+# Google Cloud
+PROJECT_ID = os.getenv('GOOGLE_CLOUD_PROJECT', 'smt-weex-2025')
+GCS_BUCKET = os.getenv('GCS_BUCKET', 'smt-weex-2025-models')
+
+# Competition
+COMPETITION_START = datetime(2026, 1, 12, tzinfo=timezone.utc)
+COMPETITION_END = datetime(2026, 2, 2, tzinfo=timezone.utc)
+STARTING_BALANCE = 1000.0
+FLOOR_BALANCE = 950.0  # Protect principal - stop trading below this
+
+# Trading Parameters
+MAX_LEVERAGE = 20
+MAX_OPEN_POSITIONS = 8  # Increased from 5 to compete
+MAX_SINGLE_POSITION_PCT = 0.08  # 12% per trade max ($120 on $1000) - CONSERVATIVE
+MIN_SINGLE_POSITION_PCT = 0.03  # 5% minimum ($50 on $1000) - CONSERVATIVE
+MIN_CONFIDENCE_TO_TRADE = 0.55  # FIXED: lowered from 0.60  # Need 60% confidence from Judge
+
+# V3.1: Smarter exit thresholds
+EARLY_EXIT_LOSS_PCT = -3.0      # Exit if losing more than 3%
+EARLY_EXIT_TIME_HOURS = 4       # Check for early exit after 4 hours
+TRAILING_PROFIT_LOCK_PCT = 2.0  # If we were up 2%+, don't let it go negative
+
+# Trading Pairs
+TRADING_PAIRS = {
+    "ETH": {"symbol": "cmt_ethusdt", "tier": 1, "has_whale_data": True},
+    "BTC": {"symbol": "cmt_btcusdt", "tier": 1, "has_whale_data": True},
+    "SOL": {"symbol": "cmt_solusdt", "tier": 2, "has_whale_data": False},
+    "DOGE": {"symbol": "cmt_dogeusdt", "tier": 2, "has_whale_data": False},
+    "XRP": {"symbol": "cmt_xrpusdt", "tier": 2, "has_whale_data": False},
+    "ADA": {"symbol": "cmt_adausdt", "tier": 2, "has_whale_data": False},
+    "BNB": {"symbol": "cmt_bnbusdt", "tier": 2, "has_whale_data": False},
+    "LTC": {"symbol": "cmt_ltcusdt", "tier": 2, "has_whale_data": False},
+}
+
+# Pipeline Version
+PIPELINE_VERSION = "SMT-v3.1-MultiPersona"
+MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1"
+
+# Known step sizes
+KNOWN_STEP_SIZES = {
+    "cmt_btcusdt": 0.0001,
+    "cmt_ethusdt": 0.01,    # WEEX wants 0.01
+    "cmt_solusdt": 0.1,
+    "cmt_dogeusdt": 100,    # WEEX error confirmed
+    "cmt_xrpusdt": 10,      # WEEX error confirmed
+    "cmt_adausdt": 10,      # WEEX error: stepSize '10'
+    "cmt_bnbusdt": 0.1,
+    "cmt_ltcusdt": 0.1,     # WEEX error: stepSize '0.1'
+}
+
+CEX_ADDRESSES = {
+    "0x28c6c06298d514db089934071355e5743bf21d60": "Binance",
+    "0x21a31ee1afc51d94c2efccaa2092ad1028285549": "Binance",
+    "0xdfd5293d8e347dfe59e90efd55b2956a1343963d": "Binance",
+    "0xf977814e90da44bfa03b6295a0616a897441acec": "Binance",
+}
+
+CONTRACT_INFO_CACHE = {}
+
+
+# ============================================================
+# WEEX API HELPERS
+# ============================================================
+
+def weex_sign(timestamp: str, method: str, path: str, body: str = "") -> str:
+    message = timestamp + method.upper() + path + body
+    sig = hmac.new(WEEX_API_SECRET.encode(), message.encode(), hashlib.sha256).digest()
+    return base64.b64encode(sig).decode()
+
+
+def weex_headers(method: str, path: str, body: str = "") -> Dict:
+    ts = str(int(time.time() * 1000))
+    return {
+        "ACCESS-KEY": WEEX_API_KEY,
+        "ACCESS-SIGN": weex_sign(ts, method, path, body),
+        "ACCESS-TIMESTAMP": ts,
+        "ACCESS-PASSPHRASE": WEEX_API_PASSPHRASE,
+        "Content-Type": "application/json"
+    }
+
+
+def get_price(symbol: str) -> float:
+    try:
+        r = requests.get(f"{WEEX_BASE_URL}/capi/v2/market/ticker?symbol={symbol}", timeout=10)
+        return float(r.json().get("last", 0))
+    except:
+        return 0.0
+
+
+def get_balance() -> float:
+    """Get available USDT balance from WEEX using /assets endpoint"""
+    try:
+        # Use /assets endpoint which returns correct available balance
+        endpoint = "/capi/v2/account/assets"
+        r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=15)
+        data = r.json()
+        
+        # Response is a list: [{"coinName": "USDT", "available": "xxx", "equity": "xxx", ...}]
+        if isinstance(data, list):
+            for asset in data:
+                if asset.get("coinName") == "USDT":
+                    available = float(asset.get("available", 0))
+                    if available > 0:
+                        return available
+        
+        # Fallback to old endpoint if assets doesn't work
+        endpoint2 = "/capi/v2/account/accounts"
+        r2 = requests.get(f"{WEEX_BASE_URL}{endpoint2}", headers=weex_headers("GET", endpoint2), timeout=15)
+        data2 = r2.json()
+        if "collateral" in data2 and len(data2["collateral"]) > 0:
+            amount = float(data2["collateral"][0].get("amount", 0))
+            if amount > 0:
+                return amount
+        
+        if TEST_MODE:
+            return SIMULATED_BALANCE
+        return SIMULATED_BALANCE
+    except Exception as e:
+        print(f"  [ERROR] get_balance: {e}")
+        return SIMULATED_BALANCE
+
+
+def get_open_positions() -> List[Dict]:
+    try:
+        endpoint = "/capi/v2/account/position/allPosition"
+        r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=15)
+        data = r.json()
+        positions = []
+        if isinstance(data, list):
+            for pos in data:
+                size = float(pos.get("size", 0))
+                if size > 0:
+                    margin = float(pos.get("marginSize", 0))
+                    open_value = float(pos.get("open_value", 0))
+                    entry_price = open_value / size if size > 0 else 0
+                    positions.append({
+                        "symbol": pos.get("symbol"),
+                        "side": pos.get("side", "").upper(),
+                        "size": size,
+                        "entry_price": entry_price,
+                        "unrealized_pnl": float(pos.get("unrealizePnl", 0)),
+                        "margin": margin,
+                    })
+        return positions
+    except:
+        return []
+
+
+def get_contract_info(symbol: str) -> Dict:
+    global CONTRACT_INFO_CACHE
+    if symbol in CONTRACT_INFO_CACHE:
+        return CONTRACT_INFO_CACHE[symbol]
+    try:
+        r = requests.get(f"{WEEX_BASE_URL}/capi/v2/market/contracts?symbol={symbol}", timeout=10)
+        data = r.json()
+        if isinstance(data, list) and len(data) > 0:
+            info = data[0]
+            step_size = KNOWN_STEP_SIZES.get(symbol, 0.001)
+            contract_info = {
+                "symbol": symbol,
+                "tick_size": info.get("tick_size", "2"),
+                "min_order_size": float(info.get("minOrderSize", "0.001")),
+                "step_size": step_size,
+            }
+            CONTRACT_INFO_CACHE[symbol] = contract_info
+            return contract_info
+    except:
+        pass
+    return {"symbol": symbol, "step_size": KNOWN_STEP_SIZES.get(symbol, 0.001), "tick_size": "2"}
+
+
+def round_size_to_step(size: float, symbol: str) -> float:
+    """Round size DOWN to nearest step - FIXED for all step sizes"""
+    contract_info = get_contract_info(symbol)
+    step = contract_info.get("step_size", 0.001)
+    
+    import math
+    # Floor to nearest step (works for step=10, step=0.1, etc)
+    floored = math.floor(size / step) * step
+    
+    # Handle precision
+    if step >= 1:
+        return int(floored)  # Return as integer for large steps
+    else:
+        decimals = len(str(step).split('.')[-1]) if '.' in str(step) else 0
+        return round(floored, decimals)
+
+
+def round_price_to_tick(price: float, symbol: str) -> float:
+    contract_info = get_contract_info(symbol)
+    tick_size = int(contract_info.get("tick_size", "2"))
+    return round(price, tick_size)
+
+
+# ============================================================
+# PERSONA 1: WHALE INTELLIGENCE
+# ============================================================
+
+class WhalePersona:
+    """
+    Analyzes on-chain whale behavior for ETH/BTC signals.
+    Our unique competitive advantage.
+    """
+    
+    def __init__(self):
+        self.name = "WHALE"
+        self.weight = 2.0  # Higher weight - our edge
+    
+    def analyze(self, pair: str, pair_info: Dict) -> Dict:
+        """Analyze whale activity for trading signal"""
+        
+        if pair not in ("ETH", "BTC"):
+            return {
+                "persona": self.name,
+                "signal": "NEUTRAL",
+                "confidence": 0.0,
+                "reasoning": f"No whale data for {pair}",
+            }
+        
+        try:
+            # Fetch recent large transactions
+            large_txs = self._fetch_large_transactions(100.0, 6)
+            
+            if not large_txs:
+                return {
+                    "persona": self.name,
+                    "signal": "NEUTRAL",
+                    "confidence": 0.3,
+                    "reasoning": "No recent large transactions found",
+                }
+            
+            # Analyze whale addresses
+            whale_addresses = self._discover_whales(large_txs)
+            
+            best_signal = None
+            for addr in whale_addresses[:5]:
+                try:
+                    txs = self._fetch_history(addr, 90)
+                    if not txs:
+                        continue
+                    
+                    flow = self._analyze_flow(addr, txs)
+                    
+                    if flow["direction"] == "inflow" and flow["net_flow_eth"] > 50:
+                        signal = {"signal": "LONG", "confidence": 0.70, "flow": flow}
+                    elif flow["direction"] == "outflow" and flow["net_flow_eth"] < -50:
+                        signal = {"signal": "SHORT", "confidence": 0.70, "flow": flow}
+                    else:
+                        continue
+                    
+                    if not best_signal or signal["confidence"] > best_signal["confidence"]:
+                        best_signal = signal
+                        
+                except:
+                    continue
+            
+            if best_signal:
+                return {
+                    "persona": self.name,
+                    "signal": best_signal["signal"],
+                    "confidence": best_signal["confidence"],
+                    "reasoning": f"Whale {best_signal['flow']['direction']}: {best_signal['flow']['net_flow_eth']:.1f} ETH",
+                    "data": best_signal["flow"],
+                }
+            
+            return {
+                "persona": self.name,
+                "signal": "NEUTRAL",
+                "confidence": 0.4,
+                "reasoning": "Mixed whale activity",
+            }
+            
+        except Exception as e:
+            return {
+                "persona": self.name,
+                "signal": "NEUTRAL",
+                "confidence": 0.0,
+                "reasoning": f"Whale analysis error: {str(e)}",
+            }
+    
+    def _fetch_large_transactions(self, min_eth: float, hours: int) -> List[Dict]:
+        # Simplified - return empty for non-ETH analysis
+        return []
+    
+    def _discover_whales(self, transactions: List[Dict]) -> List[str]:
+        addresses = set()
+        for tx in transactions:
+            if tx.get("from"):
+                addresses.add(tx["from"].lower())
+            if tx.get("to"):
+                addresses.add(tx["to"].lower())
+        return list(addresses)
+    
+    def _fetch_history(self, address: str, days: int) -> List[Dict]:
+        try:
+            params = {
+                "chainid": CHAIN_ID,
+                "module": "account",
+                "action": "txlist",
+                "address": address,
+                "page": 1,
+                "offset": 100,
+                "sort": "desc",
+                "apikey": ETHERSCAN_API_KEY,
+            }
+            r = requests.get(ETHERSCAN_BASE_URL, params=params, timeout=30)
+            data = r.json()
+            if data.get("status") == "1":
+                return [{"from": tx["from"], "to": tx["to"], 
+                        "value": float(tx.get("value", 0)) / 1e18,
+                        "timestamp": int(tx.get("timeStamp", 0))}
+                       for tx in data["result"][:50]]
+        except:
+            pass
+        return []
+    
+    def _analyze_flow(self, address: str, txs: List[Dict]) -> Dict:
+        recent = [tx for tx in txs if tx["timestamp"] > time.time() - 6*3600]
+        inflow = sum(tx["value"] for tx in recent if tx["to"].lower() == address.lower())
+        outflow = sum(tx["value"] for tx in recent if tx["from"].lower() == address.lower())
+        net = inflow - outflow
+        
+        direction = "inflow" if net > 10 else "outflow" if net < -10 else "mixed"
+        return {"direction": direction, "net_flow_eth": net, "inflow": inflow, "outflow": outflow}
+
+
+# ============================================================
+# PERSONA 2: MARKET SENTIMENT (Gemini)
+# ============================================================
+
+class SentimentPersona:
+    """
+    Uses Gemini with Google Search grounding for market sentiment.
+    """
+    
+    def __init__(self):
+        self.name = "SENTIMENT"
+        self.weight = 1.5
+    
+    def analyze(self, pair: str, pair_info: Dict, competition_status: Dict) -> Dict:
+        """Get market sentiment from Gemini search"""
+        
+        try:
+            from google import genai
+            from google.genai.types import GenerateContentConfig, GoogleSearch, Tool
+            
+            client = genai.Client()
+            
+            # Search for sentiment
+            search_query = f"{pair} cryptocurrency price prediction sentiment today news"
+            
+            grounding_config = GenerateContentConfig(
+                tools=[Tool(google_search=GoogleSearch())],
+                temperature=0.3
+            )
+            
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=search_query,
+                config=grounding_config
+            )
+            
+            market_context = response.text[:1500] if response.text else ""
+            
+            # Analyze sentiment
+            sentiment_prompt = f"""Based on this market context, determine sentiment for {pair}:
+
+{market_context}
+
+Respond with JSON only:
+{{"sentiment": "BULLISH" or "BEARISH" or "NEUTRAL", "confidence": 0.0-1.0, "key_factor": "main reason"}}"""
+            
+            json_config = GenerateContentConfig(
+                temperature=0.1,
+                response_mime_type="application/json"
+            )
+            
+            result = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=sentiment_prompt,
+                config=json_config
+            )
+            
+            data = json.loads(result.text)
+            
+            signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
+            
+            return {
+                "persona": self.name,
+                "signal": signal,
+                "confidence": data.get("confidence", 0.5),
+                "reasoning": data.get("key_factor", "Market sentiment analysis"),
+                "sentiment": data["sentiment"],
+                "market_context": market_context[:800],  # ADDED: full market analysis for AI logs
+            }
+            
+        except Exception as e:
+            return {
+                "persona": self.name,
+                "signal": "NEUTRAL",
+                "confidence": 0.0,
+                "reasoning": f"Sentiment analysis error: {str(e)}",
+            }
+
+
+# ============================================================
+# PERSONA 3: ORDER FLOW ANALYSIS
+# ============================================================
+
+class FlowPersona:
+    """
+    Analyzes taker buy/sell ratio and orderbook depth.
+    This is what competitors use for momentum detection.
+    """
+    
+    def __init__(self):
+        self.name = "FLOW"
+        self.weight = 1.5
+    
+    def analyze(self, pair: str, pair_info: Dict) -> Dict:
+        """Analyze order flow for trading signal"""
+        
+        symbol = pair_info["symbol"]
+        
+        try:
+            # Get taker ratio
+            taker = self._get_taker_ratio(symbol)
+            
+            # Get depth imbalance
+            depth = self._get_depth_imbalance(symbol)
+            
+            # Combine signals
+            bullish = 0
+            bearish = 0
+            
+            if taker["pressure"] == "BUY":
+                bullish += 2
+            elif taker["pressure"] == "SELL":
+                bearish += 2
+            
+            if depth["wall_side"] == "BUY":
+                bullish += 1
+            elif depth["wall_side"] == "SELL":
+                bearish += 1
+            
+            if bullish > bearish + 1:
+                signal = "LONG"
+                confidence = min(0.75, 0.50 + bullish * 0.10)
+            elif bearish > bullish + 1:
+                signal = "SHORT"
+                confidence = min(0.75, 0.50 + bearish * 0.10)
+            else:
+                signal = "NEUTRAL"
+                confidence = 0.40
+            
+            return {
+                "persona": self.name,
+                "signal": signal,
+                "confidence": confidence,
+                "reasoning": f"Taker: {taker['pressure']} ({taker['taker_buy_ratio']:.0f}%/{taker['taker_sell_ratio']:.0f}%), Depth: {depth['wall_side']}",
+                "taker": taker,
+                "depth": depth,
+            }
+            
+        except Exception as e:
+            return {
+                "persona": self.name,
+                "signal": "NEUTRAL",
+                "confidence": 0.0,
+                "reasoning": f"Flow analysis error: {str(e)}",
+            }
+    
+    def _get_taker_ratio(self, symbol: str) -> Dict:
+        """Calculate taker buy/sell ratio from recent trades"""
+        try:
+            url = f"{WEEX_BASE_URL}/capi/v2/market/trades?symbol={symbol}&limit=200"
+            r = requests.get(url, timeout=10)
+            trades = r.json() if isinstance(r.json(), list) else []
+            
+            taker_buy = 0
+            taker_sell = 0
+            
+            for trade in trades:
+                value = float(trade.get("value", 0))
+                if trade.get("isBuyerMaker", False):
+                    taker_sell += value  # Buyer was maker = taker sold
+                else:
+                    taker_buy += value   # Seller was maker = taker bought
+            
+            total = taker_buy + taker_sell
+            buy_ratio = (taker_buy / total * 100) if total > 0 else 50
+            sell_ratio = (taker_sell / total * 100) if total > 0 else 50
+            
+            pressure = "BUY" if buy_ratio > 60 else "SELL" if sell_ratio > 60 else "NEUTRAL"
+            
+            return {
+                "taker_buy_ratio": round(buy_ratio, 1),
+                "taker_sell_ratio": round(sell_ratio, 1),
+                "pressure": pressure,
+            }
+        except:
+            return {"taker_buy_ratio": 50, "taker_sell_ratio": 50, "pressure": "NEUTRAL"}
+    
+    def _get_depth_imbalance(self, symbol: str) -> Dict:
+        """Calculate orderbook imbalance"""
+        try:
+            url = f"{WEEX_BASE_URL}/capi/v2/market/depth?symbol={symbol}&limit=15"
+            r = requests.get(url, timeout=10)
+            data = r.json()
+            
+            bids = data.get("bids", [])
+            asks = data.get("asks", [])
+            
+            bid_vol = sum(float(b[1]) for b in bids) if bids else 0
+            ask_vol = sum(float(a[1]) for a in asks) if asks else 0
+            
+            ratio = bid_vol / ask_vol if ask_vol > 0 else 1.0
+            wall_side = "BUY" if ratio > 1.5 else "SELL" if ratio < 0.67 else "BALANCED"
+            
+            return {"imbalance_ratio": round(ratio, 2), "wall_side": wall_side}
+        except:
+            return {"imbalance_ratio": 1.0, "wall_side": "BALANCED"}
+
+
+# ============================================================
+# PERSONA 4: TECHNICAL ANALYSIS
+# ============================================================
+
+class TechnicalPersona:
+    """
+    Calculates RSI, SMA, momentum from price data.
+    """
+    
+    def __init__(self):
+        self.name = "TECHNICAL"
+        self.weight = 1.0
+    
+    def analyze(self, pair: str, pair_info: Dict) -> Dict:
+        """Technical analysis for trading signal"""
+        
+        symbol = pair_info["symbol"]
+        
+        try:
+            # Get candles
+            candles = self._get_candles(symbol, "15m", 100)
+            
+            if not candles:
+                return {
+                    "persona": self.name,
+                    "signal": "NEUTRAL",
+                    "confidence": 0.0,
+                    "reasoning": "No candle data available",
+                }
+            
+            closes = [c["close"] for c in candles]
+            current = closes[-1]
+            
+            # Calculate indicators
+            rsi = self._calculate_rsi(closes, 14)
+            sma_20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else current
+            sma_50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else current
+            momentum = ((closes[-1] / closes[-6]) - 1) * 100 if len(closes) >= 6 else 0
+            
+            # Get funding rate
+            funding = self._get_funding_rate(symbol)
+            
+            # Count signals
+            bullish = 0
+            bearish = 0
+            
+            if rsi < 35:
+                bullish += 1  # Oversold
+            elif rsi > 65:
+                bearish += 1  # Overbought
+            
+            if current > sma_20:
+                bullish += 1
+            else:
+                bearish += 1
+            
+            if sma_20 > sma_50:
+                bullish += 1  # Golden cross
+            else:
+                bearish += 1
+            
+            if momentum > 1:
+                bullish += 1
+            elif momentum < -1:
+                bearish += 1
+            
+            if funding < -0.0001:
+                bullish += 1  # Contrarian - shorts pay longs
+            elif funding > 0.0002:
+                bearish += 1  # Contrarian - longs pay shorts
+            
+            if bullish > bearish + 1:
+                signal = "LONG"
+                confidence = min(0.70, 0.45 + bullish * 0.08)
+            elif bearish > bullish + 1:
+                signal = "SHORT"
+                confidence = min(0.70, 0.45 + bearish * 0.08)
+            else:
+                signal = "NEUTRAL"
+                confidence = 0.40
+            
+            return {
+                "persona": self.name,
+                "signal": signal,
+                "confidence": confidence,
+                "reasoning": f"RSI={rsi:.1f}, SMA20/50={'golden' if sma_20 > sma_50 else 'death'}, Mom={momentum:+.2f}%, Fund={funding:.6f}",
+                "rsi": rsi,
+                "sma_20": sma_20,
+                "sma_50": sma_50,
+                "momentum": momentum,
+                "funding_rate": funding,
+            }
+            
+        except Exception as e:
+            return {
+                "persona": self.name,
+                "signal": "NEUTRAL",
+                "confidence": 0.0,
+                "reasoning": f"Technical error: {str(e)}",
+            }
+    
+    def _get_candles(self, symbol: str, granularity: str, limit: int) -> List[Dict]:
+        try:
+            url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity={granularity}&limit={limit}"
+            r = requests.get(url, timeout=10)
+            data = r.json()
+            return [{"close": float(c[4])} for c in data] if isinstance(data, list) else []
+        except:
+            return []
+    
+    def _calculate_rsi(self, closes: List[float], period: int = 14) -> float:
+        if len(closes) < period + 1:
+            return 50.0
+        deltas = np.diff(closes)
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+        avg_gain = np.mean(gains[-period:])
+        avg_loss = np.mean(losses[-period:])
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return round(100 - (100 / (1 + rs)), 1)
+    
+    def _get_funding_rate(self, symbol: str) -> float:
+        try:
+            url = f"{WEEX_BASE_URL}/capi/v2/market/currentFundRate?symbol={symbol}"
+            r = requests.get(url, timeout=10)
+            data = r.json()
+            if isinstance(data, list) and len(data) > 0:
+                return float(data[0].get("fundingRate", 0))
+        except:
+            pass
+        return 0.0
+
+
+# ============================================================
+# JUDGE: FINAL DECISION MAKER
+# ============================================================
+
+class JudgePersona:
+    """
+    Weighs all persona votes and makes final decision.
+    Like Hypothesis Arena's AI Judge.
+    """
+    
+    def __init__(self):
+        self.name = "JUDGE"
+    
+    def decide(self, persona_votes: List[Dict], pair: str, balance: float, 
+               competition_status: Dict) -> Dict:
+        """Make final trading decision based on all persona votes"""
+        
+        # Calculate weighted votes
+        long_score = 0
+        short_score = 0
+        neutral_score = 0
+        
+        vote_summary = []
+        
+        for vote in persona_votes:
+            persona = vote["persona"]
+            signal = vote["signal"]
+            confidence = vote["confidence"]
+            
+            # Get persona weight
+            weights = {"WHALE": 2.0, "SENTIMENT": 2.0, "FLOW": 1.0, "TECHNICAL": 0.8}  # FIXED: SENTIMENT equal to WHALE
+            weight = weights.get(persona, 1.0)
+            
+            weighted_conf = confidence * weight
+            
+            if signal == "LONG":
+                long_score += weighted_conf
+            elif signal == "SHORT":
+                short_score += weighted_conf
+            else:
+                neutral_score += weighted_conf
+            
+            vote_summary.append(f"{persona}={signal}({confidence:.0%})")
+        
+        total = long_score + short_score + neutral_score
+        
+        # Decision logic
+        if total == 0:
+            return self._wait_decision("No valid persona votes")
+        
+        long_pct = long_score / total
+        short_pct = short_score / total
+        
+        # Adjust threshold based on number of votes (3 or 4 personas)
+        num_votes = len(persona_votes)
+        threshold = 0.35 if num_votes <= 3 else 0.40  # Lower for 3-persona votes
+        ratio_req = 1.1 if num_votes <= 3 else 1.15
+        
+        # Need clear consensus
+        if long_pct > threshold and long_score > short_score * ratio_req:  # FIXED: lowered threshold
+            decision = "LONG"
+            confidence = min(0.90, long_pct)  # FIXED: allow higher confidence
+        elif short_pct > threshold and short_score > long_score * ratio_req:  # FIXED: lowered threshold
+            decision = "SHORT"
+            confidence = min(0.90, short_pct)  # FIXED: allow higher confidence
+        else:
+            return self._wait_decision(f"No consensus: LONG={long_pct:.0%}, SHORT={short_pct:.0%}")
+        
+        # Final confidence check
+        if confidence < MIN_CONFIDENCE_TO_TRADE:
+            return self._wait_decision(f"Confidence too low: {confidence:.0%}")
+        
+        # Calculate position size based on confidence
+        # V3.1 CONSERVATIVE: Smaller but meaningful positions
+        base_size = balance * 0.07  # 7% base ($70 on $1000)
+        
+        if confidence > 0.80:
+            position_usdt = base_size * 1.5  # 10.5% = $105
+        elif confidence > 0.70:
+            position_usdt = base_size * 1.3  # 9% = $90
+        elif confidence > 0.60:
+            position_usdt = base_size * 1.0  # 7% = $70
+        else:
+            position_usdt = base_size * 0.8  # 5.6% = $56
+        
+        # Apply min/max limits - CONSERVATIVE
+        position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)  # At least 5%
+        position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)  # At most 12%
+        
+        # TP/SL based on competition phase
+        tp_pct = competition_status.get("default_tp_pct", 5.0)
+        sl_pct = competition_status.get("default_sl_pct", 2.5)
+        
+        return {
+            "decision": decision,
+            "confidence": confidence,
+            "recommended_position_usdt": position_usdt,
+            "take_profit_percent": tp_pct,
+            "stop_loss_percent": sl_pct,
+            "hold_time_hours": competition_status.get("max_hold_hours", 24),
+            "reasoning": f"Judge decision: {decision} @ {confidence:.0%}. Votes: {', '.join(vote_summary)}",
+            "persona_votes": persona_votes,  # Include votes so daemon can extract market_context
+            "vote_breakdown": {
+                "long_score": round(long_score, 2),
+                "short_score": round(short_score, 2),
+                "neutral_score": round(neutral_score, 2),
+            },
+            "persona_votes": persona_votes,
+        }
+    
+    def _wait_decision(self, reason: str) -> Dict:
+        return {
+            "decision": "WAIT",
+            "confidence": 0.0,
+            "reasoning": reason,
+        }
+
+
+# ============================================================
+# MULTI-PERSONA ANALYZER
+# ============================================================
+
+class MultiPersonaAnalyzer:
+    """
+    Coordinates all personas and produces final signal.
+    """
+    
+    def __init__(self):
+        self.whale = WhalePersona()
+        self.sentiment = SentimentPersona()
+        self.flow = FlowPersona()
+        self.technical = TechnicalPersona()
+        self.judge = JudgePersona()
+    
+    def analyze(self, pair: str, pair_info: Dict, balance: float, 
+                competition_status: Dict, open_positions: List[Dict]) -> Dict:
+        """Run all personas and get final decision"""
+        
+        print(f"\n  === Multi-Persona Analysis: {pair} ===")
+        
+        votes = []
+        
+        # 1. Whale Persona (ONLY for ETH/BTC - our unique edge)
+        if pair in ("ETH", "BTC"):
+            print(f"  [WHALE] Analyzing...")
+            whale_vote = self.whale.analyze(pair, pair_info)
+            votes.append(whale_vote)
+            print(f"  [WHALE] {whale_vote['signal']} ({whale_vote['confidence']:.0%}): {whale_vote['reasoning']}")
+        else:
+            print(f"  [WHALE] Skipped (no whale data for {pair})")
+        
+        # 2. Sentiment Persona
+        print(f"  [SENTIMENT] Analyzing...")
+        sentiment_vote = self.sentiment.analyze(pair, pair_info, competition_status)
+        votes.append(sentiment_vote)
+        print(f"  [SENTIMENT] {sentiment_vote['signal']} ({sentiment_vote['confidence']:.0%}): {sentiment_vote['reasoning']}")
+        
+        # 3. Flow Persona
+        print(f"  [FLOW] Analyzing...")
+        flow_vote = self.flow.analyze(pair, pair_info)
+        votes.append(flow_vote)
+        print(f"  [FLOW] {flow_vote['signal']} ({flow_vote['confidence']:.0%}): {flow_vote['reasoning']}")
+        
+        # 4. Technical Persona
+        print(f"  [TECHNICAL] Analyzing...")
+        tech_vote = self.technical.analyze(pair, pair_info)
+        votes.append(tech_vote)
+        print(f"  [TECHNICAL] {tech_vote['signal']} ({tech_vote['confidence']:.0%}): {tech_vote['reasoning']}")
+        
+        # 5. Judge makes final decision
+        print(f"  [JUDGE] Deciding...")
+        final = self.judge.decide(votes, pair, balance, competition_status)
+        print(f"  [JUDGE] Final: {final['decision']} ({final['confidence']:.0%})")
+        
+        return final
+
+
+# ============================================================
+# COMPETITION STATUS
+# ============================================================
+
+def get_competition_status(balance: float) -> Dict:
+    now = datetime.now(timezone.utc)
+    days_left = (COMPETITION_END - now).days
+    pnl = balance - STARTING_BALANCE
+    pnl_pct = (pnl / STARTING_BALANCE) * 100
+    
+    if days_left > 15:
+        phase = "early"
+        strategy = "growth"
+        tp, sl = 5.0, 2.5
+        max_hold = 48
+    elif days_left > 7:
+        phase = "mid"
+        strategy = "balanced"
+        tp, sl = 4.0, 2.0
+        max_hold = 24
+    elif days_left > 3:
+        phase = "late"
+        strategy = "conservative"
+        tp, sl = 3.0, 1.5
+        max_hold = 12
+    else:
+        phase = "final"
+        strategy = "protect" if pnl > 0 else "push"
+        tp, sl = 2.0, 1.0
+        max_hold = 6
+    
+    return {
+        "days_left": days_left,
+        "phase": phase,
+        "strategy_mode": strategy,
+        "pnl": pnl,
+        "pnl_pct": pnl_pct,
+        "default_tp_pct": tp,
+        "default_sl_pct": sl,
+        "max_hold_hours": max_hold,
+    }
+
+
+# ============================================================
+# ORDER PLACEMENT
+# ============================================================
+
+def set_leverage(symbol: str, leverage: int) -> Dict:
+    endpoint = "/capi/v2/account/leverage"
+    body = json.dumps({"symbol": symbol, "leverage": leverage})
+    r = requests.post(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("POST", endpoint, body), data=body, timeout=15)
+    return r.json()
+
+
+def place_order(symbol: str, side: str, size: float, tp_price: float = None, sl_price: float = None) -> Dict:
+    endpoint = "/capi/v2/order/placeOrder"
+    rounded_size = round_size_to_step(size, symbol)
+    current_price = get_price(symbol)
+    
+    if tp_price and current_price > 0:
+        if side in ("1", "4"):
+            limit_price = round_price_to_tick(current_price * 1.002, symbol)
+        else:
+            limit_price = round_price_to_tick(current_price * 0.998, symbol)
+        
+        order = {
+            "symbol": symbol,
+            "client_oid": f"smtv31_{int(time.time()*1000)}",
+            "size": str(rounded_size),
+            "type": side,
+            "order_type": "0",
+            "match_price": "0",
+            "price": str(limit_price),
+        }
+        if tp_price:
+            order["presetTakeProfitPrice"] = str(round_price_to_tick(tp_price, symbol))
+        if sl_price:
+            order["presetStopLossPrice"] = str(round_price_to_tick(sl_price, symbol))
+    else:
+        order = {
+            "symbol": symbol,
+            "client_oid": f"smtv31_{int(time.time()*1000)}",
+            "size": str(rounded_size),
+            "type": side,
+            "order_type": "0",
+            "match_price": "1"
+        }
+    
+    body = json.dumps(order)
+    
+    if TEST_MODE:
+        print(f"  [TEST] Would place: {order}")
+        return {"order_id": f"test_{int(time.time())}", "test_mode": True}
+    
+    r = requests.post(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("POST", endpoint, body), data=body, timeout=15)
+    return r.json()
+
+
+# ============================================================
+# AI LOG UPLOAD (with order_id fix)
+# ============================================================
+
+def upload_ai_log_to_weex(stage: str, input_data: Dict, output_data: Dict, 
+                          explanation: str, order_id: int = None) -> Dict:
+    """Upload AI decision log to WEEX - WITH order_id for 'AI order' display"""
+    endpoint = "/capi/v2/order/uploadAiLog"
+    
+    payload = {
+        "stage": stage,
+        "model": MODEL_NAME,
+        "input": input_data,
+        "output": output_data,
+        "explanation": explanation[:500]
+    }
+    
+    # CRITICAL: Include order_id to show "AI order" on leaderboard
+    if order_id:
+        payload["orderId"] = int(order_id)
+    
+    body = json.dumps(payload)
+    
+    if TEST_MODE:
+        print(f"  [TEST] Would upload AI log: {stage}")
+        return {"test_mode": True}
+    
+    try:
+        r = requests.post(
+            f"{WEEX_BASE_URL}{endpoint}",
+            headers=weex_headers("POST", endpoint, body),
+            data=body,
+            timeout=15
+        )
+        result = r.json()
+        print(f"  [AI LOG] Uploaded: {stage}" + (f" (order: {order_id})" if order_id else ""))
+        return result
+    except Exception as e:
+        print(f"  [AI LOG] Error: {e}")
+        return {"error": str(e)}
+
+
+# ============================================================
+# TRADE EXECUTION
+# ============================================================
+
+def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
+    """Execute trade based on Judge decision"""
+    
+    symbol = pair_info["symbol"]
+    signal = decision["decision"]
+    
+    if signal not in ("LONG", "SHORT"):
+        return {"executed": False, "reason": "No trade signal"}
+    
+    current_price = get_price(symbol)
+    if current_price == 0:
+        return {"executed": False, "reason": "Could not get price"}
+    
+    # V3.1 CONSERVATIVE: Get position size with min/max
+    position_usdt = decision.get("recommended_position_usdt", balance * 0.07)
+    position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)  # At least 5%
+    position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)  # At most 12%
+    
+    # FIXED: position_usdt is MARGIN, multiply by leverage for notional position
+    notional_usdt = position_usdt * MAX_LEVERAGE
+    raw_size = notional_usdt / current_price
+    
+    # SAFETY: Size must be positive
+    if raw_size <= 0:
+        print(f"  [ERROR] Invalid raw_size: {raw_size} (notional={notional_usdt}, price={current_price})")
+        return {"executed": False, "reason": f"Invalid size calculation: {raw_size}"}
+    
+    size = round_size_to_step(raw_size, symbol)
+    
+    # Double check after rounding
+    if size <= 0:
+        print(f"  [ERROR] Size rounded to 0 or negative: {size}")
+        return {"executed": False, "reason": f"Size too small after rounding: {size}"}
+    
+    order_type = "1" if signal == "LONG" else "2"
+    
+    tp_pct = decision.get("take_profit_percent", 5.0) / 100
+    sl_pct = decision.get("stop_loss_percent", 2.5) / 100
+    
+    if signal == "LONG":
+        tp_price = current_price * (1 + tp_pct)
+        sl_price = current_price * (1 - sl_pct)
+    else:
+        tp_price = current_price * (1 - tp_pct)
+        sl_price = current_price * (1 + sl_pct)
+    
+    set_leverage(symbol, MAX_LEVERAGE)
+    
+    print(f"  [TRADE] {signal} {symbol}: {size} @ ${current_price:.4f}")
+    print(f"  [TRADE] TP: ${tp_price:.4f}, SL: ${sl_price:.4f}")
+    
+    result = place_order(symbol, order_type, size, tp_price, sl_price)
+    
+    order_id = result.get("order_id")
+    
+    if not order_id:
+        return {"executed": False, "reason": f"Order failed: {result}"}
+    
+    # Upload AI log WITH order_id
+    upload_ai_log_to_weex(
+        stage=f"V3.1 Trade: {signal} {symbol.replace('cmt_', '').upper()}",
+        input_data={
+            "pair": symbol,
+            "balance": balance,
+            "personas": [v["persona"] for v in decision.get("persona_votes", [])],
+        },
+        output_data={
+            "signal": signal,
+            "confidence": decision["confidence"],
+            "size": size,
+            "entry_price": current_price,
+            "tp_price": tp_price,
+            "sl_price": sl_price,
+        },
+        explanation=decision.get("reasoning", "")[:500],
+        order_id=int(order_id) if str(order_id).isdigit() else None  # FIXED: pass order_id
+    )
+    
+    return {
+        "executed": True,
+        "order_id": order_id,
+        "symbol": symbol,
+        "signal": signal,
+        "size": size,
+        "entry_price": current_price,
+        "tp_price": tp_price,
+        "sl_price": sl_price,
+        "tp_pct": tp_pct * 100,
+        "sl_pct": sl_pct * 100,
+        "position_usdt": position_usdt,
+    }
+
+
+# ============================================================
+# TRADE TRACKER
+# ============================================================
+
+class TradeTracker:
+    def __init__(self, state_file: str = "trade_state_v3_1.json"):
+        self.state_file = state_file
+        self.active_trades: Dict = {}
+        self.closed_trades: List = []
+        self.load_state()
+    
+    def load_state(self):
+        try:
+            if os.path.exists(self.state_file):
+                with open(self.state_file, 'r') as f:
+                    data = json.load(f)
+                    self.active_trades = data.get("active", {})
+                    self.closed_trades = data.get("closed", [])
+        except:
+            pass
+    
+    def save_state(self):
+        with open(self.state_file, 'w') as f:
+            json.dump({"active": self.active_trades, "closed": self.closed_trades}, f, indent=2, default=str)
+    
+    def add_trade(self, symbol: str, trade_data: Dict):
+        self.active_trades[symbol] = {
+            "opened_at": datetime.now(timezone.utc).isoformat(),
+            "order_id": trade_data.get("order_id"),
+            "side": trade_data.get("signal"),
+            "size": trade_data.get("size"),
+            "entry_price": trade_data.get("entry_price"),
+            "tp_price": trade_data.get("tp_price"),
+            "sl_price": trade_data.get("sl_price"),
+            "position_usdt": trade_data.get("position_usdt"),
+        }
+        self.save_state()
+    
+    def close_trade(self, symbol: str, close_data: Dict = None):
+        if symbol in self.active_trades:
+            trade = self.active_trades.pop(symbol)
+            trade["closed_at"] = datetime.now(timezone.utc).isoformat()
+            trade["close_data"] = close_data
+            self.closed_trades.append(trade)
+            self.save_state()
+    
+    def get_active_symbols(self) -> List[str]:
+        return list(self.active_trades.keys())
+    
+    def get_active_trade(self, symbol: str) -> Optional[Dict]:
+        return self.active_trades.get(symbol)
+
+
+# ============================================================
+# POSITION MANAGEMENT
+# ============================================================
+
+def check_position_status(symbol: str) -> Dict:
+    positions = get_open_positions()
+    for pos in positions:
+        if pos["symbol"] == symbol:
+            return {
+                "is_open": True,
+                "side": pos["side"],
+                "size": pos["size"],
+                "entry_price": pos["entry_price"],
+                "unrealized_pnl": pos["unrealized_pnl"],
+            }
+    return {"is_open": False}
+
+
+def cancel_all_orders_for_symbol(symbol: str) -> Dict:
+    """Cancel all pending orders for a symbol"""
+    result = {"cancelled": []}
+    
+    # Cancel regular orders
+    try:
+        endpoint = "/capi/v2/order/orders"
+        if symbol:
+            endpoint += f"?symbol={symbol}"
+        r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=15)
+        orders = r.json() if isinstance(r.json(), list) else []
+        
+        for order in orders:
+            oid = order.get("order_id")
+            if oid:
+                cancel_endpoint = "/capi/v2/order/cancel"
+                body = json.dumps({"order_id": oid})
+                requests.post(f"{WEEX_BASE_URL}{cancel_endpoint}", 
+                            headers=weex_headers("POST", cancel_endpoint, body), 
+                            data=body, timeout=15)
+                result["cancelled"].append(oid)
+    except:
+        pass
+    
+    # Cancel plan orders
+    try:
+        endpoint = "/capi/v2/order/plan_orders"
+        if symbol:
+            endpoint += f"?symbol={symbol}"
+        r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=15)
+        orders = r.json() if isinstance(r.json(), list) else []
+        
+        for order in orders:
+            oid = order.get("order_id")
+            if oid:
+                cancel_endpoint = "/capi/v2/order/cancel_plan"
+                body = json.dumps({"order_id": oid})
+                requests.post(f"{WEEX_BASE_URL}{cancel_endpoint}", 
+                            headers=weex_headers("POST", cancel_endpoint, body), 
+                            data=body, timeout=15)
+                result["cancelled"].append(f"plan_{oid}")
+    except:
+        pass
+    
+    return result
+
+
+def close_position_manually(symbol: str, side: str, size: float) -> Dict:
+    close_type = "3" if side == "LONG" else "4"
+    return place_order(symbol, close_type, size)
+
+
+# ============================================================
+# LOCAL LOGGING
+# ============================================================
+
+def save_local_log(log_data: Dict, timestamp: str):
+    os.makedirs("logs", exist_ok=True)
+    filename = f"logs/v3_1_{timestamp}.json"
+    with open(filename, 'w') as f:
+        json.dump(log_data, f, indent=2, default=str)
+    print(f"  [LOG] Saved: {filename}")
+
+
+# ============================================================
+# MAIN (for testing)
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("SMT V3.1 - Multi-Persona Trading System")
+    print("=" * 60)
+    
+    balance = get_balance()
+    positions = get_open_positions()
+    competition = get_competition_status(balance)
+    
+    print(f"\nBalance: {balance:.2f} USDT")
+    print(f"Positions: {len(positions)}")
+    print(f"Phase: {competition['phase']}, Days left: {competition['days_left']}")
+    
+    # Test multi-persona analysis on one pair
+    analyzer = MultiPersonaAnalyzer()
+    
+    for pair in ["ETH", "SOL"]:
+        print(f"\n{'='*60}")
+        result = analyzer.analyze(pair, TRADING_PAIRS[pair], balance, competition, positions)
+        print(f"\nFINAL for {pair}: {result['decision']} ({result.get('confidence', 0):.0%})")
+        print(f"Reasoning: {result.get('reasoning', 'N/A')}")
