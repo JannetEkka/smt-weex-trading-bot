@@ -1183,7 +1183,14 @@ def place_order(symbol: str, side: str, size: float, tp_price: float = None, sl_
 
 def upload_ai_log_to_weex(stage: str, input_data: Dict, output_data: Dict, 
                           explanation: str, order_id: int = None) -> Dict:
-    """Upload AI decision log to WEEX"""
+    """
+    Upload AI decision log to WEEX
+    
+    V3.1.5 FIX: Proper error logging and response validation
+    - Uses flush=True for immediate output visibility in daemon.log
+    - Checks WEEX response code ("00000" = success)
+    - Logs detailed error info when upload fails
+    """
     endpoint = "/capi/v2/order/uploadAiLog"
     
     payload = {
@@ -1191,7 +1198,7 @@ def upload_ai_log_to_weex(stage: str, input_data: Dict, output_data: Dict,
         "model": MODEL_NAME,
         "input": input_data,
         "output": output_data,
-        "explanation": explanation[:2500]  # WEEX allows 500 words (~2500 chars), not 500 chars
+        "explanation": explanation[:1000]  # WEEX allows 500 words (~2500 chars)
     }
     
     if order_id:
@@ -1200,8 +1207,8 @@ def upload_ai_log_to_weex(stage: str, input_data: Dict, output_data: Dict,
     body = json.dumps(payload)
     
     if TEST_MODE:
-        print(f"  [TEST] Would upload AI log: {stage}")
-        return {"test_mode": True}
+        print(f"  [AI LOG TEST] Would upload: {stage}", flush=True)
+        return {"test_mode": True, "code": "00000"}
     
     try:
         r = requests.post(
@@ -1210,12 +1217,35 @@ def upload_ai_log_to_weex(stage: str, input_data: Dict, output_data: Dict,
             data=body,
             timeout=15
         )
+        
         result = r.json()
-        print(f"  [AI LOG] Uploaded: {stage}" + (f" (order: {order_id})" if order_id else ""))
+        code = result.get("code", "unknown")
+        msg = result.get("msg", "")
+        
+        if code == "00000":
+            # SUCCESS
+            order_str = f" (order: {order_id})" if order_id else ""
+            print(f"  [AI LOG OK] {stage}{order_str}", flush=True)
+        else:
+            # FAILURE - log detailed error
+            print(f"  [AI LOG FAIL] {stage}", flush=True)
+            print(f"  [AI LOG FAIL] code={code}, msg={msg}", flush=True)
+        
+        sys.stdout.flush()
         return result
+        
+    except requests.exceptions.Timeout:
+        print(f"  [AI LOG TIMEOUT] {stage}", flush=True)
+        sys.stdout.flush()
+        return {"error": "timeout", "code": "timeout"}
+    except requests.exceptions.RequestException as e:
+        print(f"  [AI LOG NET ERROR] {stage}: {e}", flush=True)
+        sys.stdout.flush()
+        return {"error": str(e), "code": "network_error"}
     except Exception as e:
-        print(f"  [AI LOG] Error: {e}")
-        return {"error": str(e)}
+        print(f"  [AI LOG ERROR] {stage}: {type(e).__name__}: {e}", flush=True)
+        sys.stdout.flush()
+        return {"error": str(e), "code": "unknown"}
 
 
 # ============================================================

@@ -348,17 +348,17 @@ def check_trading_signals():
                         persona = vote.get("persona", "?")
                         vote_signal = vote.get("signal", "?")
                         conf = vote.get("confidence", 0)
-                        reason = vote.get("reasoning", "")[:400]  # Allow more chars per persona
+                        reason = vote.get("reasoning", "")[:80]  # Allow more chars per persona
                         vote_details.append(f"{persona}={vote_signal}({conf:.0%}): {reason}")
                         
                         # Capture Sentiment's market context (Gemini analysis)
                         if persona == "SENTIMENT" and vote.get("market_context"):
-                            market_analysis = vote.get("market_context", "")[:1200]
+                            market_analysis = ""
                 
                 judge_summary = decision.get("reasoning", "")
                 
                 # Build full explanation with ALL details
-                explanation_parts = [f"Judge: {judge_summary}"]
+                explanation_parts = [judge_summary]
                 
                 if vote_details:
                     explanation_parts.append(f"\n\nPersona Votes:\n" + "\n".join(f"- {v}" for v in vote_details))
@@ -387,7 +387,7 @@ def check_trading_signals():
                         "can_trade": can_trade_this,
                         "trade_type": trade_type,
                     },
-                    explanation=full_explanation[:2500]  # WEEX allows 500 words
+                    explanation=full_explanation[:1000]  # WEEX allows 500 words
                 )
                 
                 # Save to local log
