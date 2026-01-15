@@ -421,38 +421,66 @@ def check_trading_signals():
             except Exception as e:
                 logger.error(f"Error analyzing {pair}: {e}")
         
-        # Execute best trade
+# Execute ALL qualifying trades (up to available slots)
         if trade_opportunities:
+            # Sort by confidence (highest first)
             trade_opportunities.sort(key=lambda x: x["decision"]["confidence"], reverse=True)
-            best = trade_opportunities[0]
             
-            tier = best["tier"]
-            tier_config = get_tier_config(tier)
-            trade_type = best["trade_type"]
+            # Calculate available slots
+            current_positions = len(open_positions)
+            available_slots = MAX_OPEN_POSITIONS - current_positions
             
-            logger.info(f"")
-            type_label = "[HEDGE] " if trade_type == "hedge" else ""
-            logger.info(f"EXECUTING {type_label}{best['pair']} {best['decision']['decision']} (T{tier})")
+            trades_executed = 0
             
-            trade_result = run_with_retry(
-                execute_trade,
-                best["pair_info"], best["decision"], balance
-            )
-            
-            if trade_result.get("executed"):
-                logger.info(f"Trade executed: {trade_result.get('order_id')}")
-                logger.info(f"  TP: {trade_result.get('tp_pct'):.1f}%, SL: {trade_result.get('sl_pct'):.1f}%")
+            for opportunity in trade_opportunities:
+                # Check if we still have slots
+                if trades_executed >= available_slots:
+                    logger.info(f"Max positions reached, skipping remaining opportunities")
+                    break
                 
-                # Use symbol_side as key for tracker to support hedge
-                tracker.add_trade(best["pair_info"]["symbol"], trade_result)
-                state.trades_opened += 1
-                ai_log["trades"].append(trade_result)
-            else:
-                logger.warning(f"Trade failed: {trade_result.get('reason')}")
+                tier = opportunity["tier"]
+                tier_config = get_tier_config(tier)
+                trade_type = opportunity["trade_type"]
+                pair = opportunity["pair"]
+                signal = opportunity["decision"]["decision"]
+                confidence = opportunity["decision"]["confidence"]
+                
+                logger.info(f"")
+                type_label = "[HEDGE] " if trade_type == "hedge" else ""
+                logger.info(f"EXECUTING {type_label}{pair} {signal} (T{tier}) - {confidence:.0%}")
+                
+                try:
+                    trade_result = run_with_retry(
+                        execute_trade,
+                        opportunity["pair_info"], opportunity["decision"], balance
+                    )
+                    
+                    if trade_result.get("executed"):
+                        logger.info(f"Trade executed: {trade_result.get('order_id')}")
+                        logger.info(f"  TP: {trade_result.get('tp_pct'):.1f}%, SL: {trade_result.get('sl_pct'):.1f}%")
+                        
+                        tracker.add_trade(opportunity["pair_info"]["symbol"], trade_result)
+                        state.trades_opened += 1
+                        ai_log["trades"].append(trade_result)
+                        trades_executed += 1
+                        
+                        # Update available balance for next trade
+                        balance = get_balance()
+                        
+                    else:
+                        logger.warning(f"Trade failed: {trade_result.get('reason')}")
+                        
+                except Exception as e:
+                    logger.error(f"Error executing {pair}: {e}")
+                
+                time.sleep(1)  # Small delay between trades
+            
+            if trades_executed > 0:
+                logger.info(f"")
+                logger.info(f"Executed {trades_executed} trades this cycle")
         else:
             logger.info(f"")
-            logger.info("No trade opportunities")
-        
+            logger.info("No trade opportunities")        
         save_local_log(ai_log, run_timestamp)
         
     except Exception as e:
@@ -662,6 +690,62 @@ def log_health():
 
 # ============================================================
 # MAIN LOOP
+
+# ============================================================
+# POSITION SYNC ON STARTUP
+# ============================================================
+
+def sync_tracker_with_weex():
+    """Sync TradeTracker with actual WEEX positions on startup.
+    
+    This fixes the issue where daemon restart loses track of positions.
+    """
+    logger.info("Syncing tracker with WEEX positions...")
+    
+    try:
+        positions = get_open_positions()
+        
+        weex_symbols = {p['symbol'] for p in positions}
+        tracker_symbols = set(tracker.get_active_symbols())
+        
+        # Find positions on WEEX but not in tracker
+        missing = weex_symbols - tracker_symbols
+        
+        if missing:
+            logger.warning(f"Found {len(missing)} untracked positions: {missing}")
+            
+            for pos in positions:
+                if pos['symbol'] in missing:
+                    tier = get_tier_for_symbol(pos['symbol'])
+                    tier_config = get_tier_config(tier)
+                    
+                    # Add to tracker with current time (conservative - may exit sooner than needed)
+                    tracker.active_trades[pos['symbol']] = {
+                        "opened_at": datetime.now(timezone.utc).isoformat(),
+                        "side": pos['side'],
+                        "entry_price": pos['entry_price'],
+                        "tier": tier,
+                        "max_hold_hours": tier_config['max_hold_hours'],
+                        "synced": True,
+                    }
+                    logger.info(f"  Added {pos['symbol']} (Tier {tier}, {pos['side']} @ {pos['entry_price']:.4f})")
+            
+            tracker.save_state()
+        
+        # Find orphan trades in tracker (position closed but tracker didn't know)
+        orphans = tracker_symbols - weex_symbols
+        
+        if orphans:
+            logger.warning(f"Found {len(orphans)} orphan trades: {orphans}")
+            
+            for symbol in orphans:
+                tracker.close_trade(symbol, {"reason": "sync_cleanup", "note": "Position not found on WEEX"})
+                logger.info(f"  Removed orphan {symbol}")
+        
+        logger.info(f"Sync complete. Tracking {len(tracker.get_active_symbols())} positions.")
+        
+    except Exception as e:
+        logger.error(f"Sync error: {e}")
 # ============================================================
 
 def run_daemon():
@@ -682,6 +766,9 @@ def run_daemon():
         logger.info(f"    TP: {config['tp_pct']}%, SL: {config['sl_pct']}%, Hold: {config['max_hold_hours']}h | {runner_str}")
     logger.info("Cooldown Override: 85%+ confidence bypasses cooldown")
     logger.info("=" * 60)
+
+    # V3.1.5: Sync with WEEX on startup
+    sync_tracker_with_weex()
     
     last_signal = 0
     last_position = 0

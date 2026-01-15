@@ -73,7 +73,7 @@ FLOOR_BALANCE = 950.0  # Protect principal - stop trading below this
 
 # Trading Parameters - V3.1.4 UPDATES
 MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 8  # REDUCED from 8 - less exposure, better management
+MAX_OPEN_POSITIONS = 5  # REDUCED from 8 - less exposure, better management
 MAX_SINGLE_POSITION_PCT = 0.08  # 8% per trade max
 MIN_SINGLE_POSITION_PCT = 0.03  # 3% minimum
 MIN_CONFIDENCE_TO_TRADE = 0.65  # INCREASED from 0.55 - stop taking weak signals!
@@ -1564,13 +1564,10 @@ def execute_runner_partial_close(symbol: str, side: str, current_size: float,
     """
     Execute Runner Logic: Close 50% of position, move SL to breakeven
     
-    V3.1.5 FIX: Cancel old TP/SL orders and place new ones with remaining size
-    
     Returns: {"executed": True/False, "closed_size": X, "remaining_size": X, ...}
     """
     tier = get_tier_for_symbol(symbol)
     runner_config = get_runner_config(tier)
-    tier_config = get_tier_config(tier)
     
     if not runner_config.get("enabled"):
         return {"executed": False, "reason": "Runner not enabled for this tier"}
@@ -1578,7 +1575,7 @@ def execute_runner_partial_close(symbol: str, side: str, current_size: float,
     # Calculate close size (50% of position)
     close_pct = runner_config.get("close_pct", 50) / 100
     close_size = round_size_to_step(current_size * close_pct, symbol)
-    remaining_size = round_size_to_step(current_size - close_size, symbol)
+    remaining_size = current_size - close_size
     
     if close_size <= 0:
         return {"executed": False, "reason": "Close size too small"}
@@ -1593,104 +1590,50 @@ def execute_runner_partial_close(symbol: str, side: str, current_size: float,
     close_result = place_order(symbol, close_type, close_size, tp_price=None, sl_price=None)
     
     if not close_result.get("order_id"):
-        return {"executed": False, "reason": f"Close order failed: {close_result}"}
+        return {"executed": False, "reason": f"Partial close failed: {close_result}"}
     
     # Calculate profit locked
     if side == "LONG":
-        profit_per_unit = current_price - entry_price
+        profit_pct = ((current_price - entry_price) / entry_price) * 100
     else:
-        profit_per_unit = entry_price - current_price
+        profit_pct = ((entry_price - current_price) / entry_price) * 100
     
-    profit_locked = profit_per_unit * close_size
+    profit_locked = (close_size * current_price * profit_pct / 100) / 20  # Divide by leverage for margin profit
     
-    # Upload AI log for runner
+    # Upload AI log
     upload_ai_log_to_weex(
         stage=f"V3.1.2 Runner: Partial Close {symbol.replace('cmt_', '').upper()}",
         input_data={
             "symbol": symbol,
-            "side": side,
+            "tier": tier,
             "original_size": current_size,
-            "close_size": close_size,
-            "remaining_size": remaining_size,
             "entry_price": entry_price,
-            "current_price": current_price,
+            "trigger_price": current_price,
         },
         output_data={
+            "closed_size": close_size,
+            "remaining_size": remaining_size,
+            "profit_pct": profit_pct,
             "profit_locked": profit_locked,
-            "close_order_id": close_result.get("order_id"),
+            "sl_moved_to": entry_price if runner_config.get("move_sl_to_entry") else "unchanged",
         },
-        explanation=f"Runner triggered at +{((current_price/entry_price - 1) * 100):.1f}%. Closed {close_pct*100:.0f}% ({close_size} units), locked ${profit_locked:.2f} profit. Remaining {remaining_size} units running free."
+        explanation=f"Runner triggered at +{profit_pct:.1f}%. Closed {close_pct*100:.0f}% to lock ${profit_locked:.2f}. Remaining {remaining_size} units running with SL at breakeven."
     )
-    
-    # V3.1.5: Cancel old TP/SL orders and place new ones for remaining size
-    try:
-        # Cancel existing plan orders for this symbol
-        plan_endpoint = f'/capi/v2/order/currentPlan?symbol={symbol}'
-        r = requests.get(f"{WEEX_BASE_URL}{plan_endpoint}", headers=weex_headers("GET", plan_endpoint), timeout=10)
-        old_orders = r.json() if isinstance(r.json(), list) else []
-        
-        for order in old_orders:
-            order_id = order.get('order_id')
-            if order_id:
-                cancel_endpoint = '/capi/v2/order/cancel_plan'
-                cancel_body = json.dumps({'orderId': str(order_id)})
-                requests.post(f"{WEEX_BASE_URL}{cancel_endpoint}",
-                            headers=weex_headers('POST', cancel_endpoint, cancel_body),
-                            data=cancel_body, timeout=10)
-                print(f"  [RUNNER] Cancelled old order {order_id}")
-        
-        # Place new SL order at breakeven (entry price) for remaining size
-        if runner_config.get("move_sl_to_entry") and remaining_size > 0:
-            new_sl_price = entry_price
-            plan_order_endpoint = '/capi/v2/order/plan_order'
-            sl_body = json.dumps({
-                'symbol': symbol,
-                'client_oid': f'smt_runner_sl_{int(time.time()*1000)}',
-                'size': str(remaining_size),
-                'type': close_type,
-                'match_type': '1',
-                'execute_price': '0',
-                'trigger_price': str(round_price_to_tick(new_sl_price, symbol))
-            })
-            sl_r = requests.post(f"{WEEX_BASE_URL}{plan_order_endpoint}",
-                               headers=weex_headers('POST', plan_order_endpoint, sl_body),
-                               data=sl_body, timeout=10)
-            print(f"  [RUNNER] New SL at breakeven ${new_sl_price:.2f}: {sl_r.status_code}")
-        
-        # Place new TP order for remaining size (let it run to full TP)
-        if remaining_size > 0:
-            tp_pct = tier_config["tp_pct"] / 100
-            if side == "LONG":
-                new_tp_price = entry_price * (1 + tp_pct)
-            else:
-                new_tp_price = entry_price * (1 - tp_pct)
-            
-            tp_body = json.dumps({
-                'symbol': symbol,
-                'client_oid': f'smt_runner_tp_{int(time.time()*1000)}',
-                'size': str(remaining_size),
-                'type': close_type,
-                'match_type': '1',
-                'execute_price': '0',
-                'trigger_price': str(round_price_to_tick(new_tp_price, symbol))
-            })
-            tp_r = requests.post(f"{WEEX_BASE_URL}{plan_order_endpoint}",
-                               headers=weex_headers('POST', plan_order_endpoint, tp_body),
-                               data=tp_body, timeout=10)
-            print(f"  [RUNNER] New TP at ${new_tp_price:.2f}: {tp_r.status_code}")
-            
-    except Exception as e:
-        print(f"  [RUNNER] Warning: Could not update TP/SL orders: {e}")
     
     return {
         "executed": True,
+        "close_order_id": close_result.get("order_id"),
         "closed_size": close_size,
         "remaining_size": remaining_size,
+        "profit_pct": profit_pct,
         "profit_locked": profit_locked,
-        "close_order_id": close_result.get("order_id"),
         "new_sl_price": entry_price if runner_config.get("move_sl_to_entry") else None,
     }
 
+
+# ============================================================
+# LOCAL LOGGING
+# ============================================================
 
 def save_local_log(log_data: Dict, timestamp: str):
     os.makedirs("logs", exist_ok=True)
