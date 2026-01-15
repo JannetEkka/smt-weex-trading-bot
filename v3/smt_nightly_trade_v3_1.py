@@ -942,7 +942,7 @@ class JudgePersona:
         total = long_score + short_score + neutral_score
         
         if total == 0:
-            return self._wait_decision("No valid persona votes")
+            return self._wait_decision("No valid persona votes", persona_votes, vote_summary)
         
         long_pct = long_score / total
         short_pct = short_score / total
@@ -959,17 +959,17 @@ class JudgePersona:
             decision = "SHORT"
             confidence = min(0.90, short_pct)
         else:
-            return self._wait_decision(f"No consensus: LONG={long_pct:.0%}, SHORT={short_pct:.0%}")
+            return self._wait_decision(f"No consensus: LONG={long_pct:.0%}, SHORT={short_pct:.0%}", persona_votes, vote_summary)
         
         if confidence < MIN_CONFIDENCE_TO_TRADE:
-            return self._wait_decision(f"Confidence too low: {confidence:.0%} (need {MIN_CONFIDENCE_TO_TRADE:.0%})")
+            return self._wait_decision(f"Confidence too low: {confidence:.0%} (need {MIN_CONFIDENCE_TO_TRADE:.0%})", persona_votes, vote_summary)
         
         # V3.1.4: MARKET TREND FILTER - Don't fight the trend!
         if pair != "BTC":  # Don't check BTC against itself
             btc_trend = self._get_btc_trend()
             
             if decision == "LONG" and btc_trend == "DOWN":
-                return self._wait_decision(f"BLOCKED: LONG signal but BTC trending DOWN. Don't fight the market!")
+                return self._wait_decision(f"BLOCKED: LONG signal but BTC trending DOWN. Don't fight the market!", persona_votes, vote_summary)
             
             if decision == "SHORT" and btc_trend == "UP":
                 # Less strict for shorts - only block if very strong uptrend
@@ -1014,11 +1014,15 @@ class JudgePersona:
             },
         }
     
-    def _wait_decision(self, reason: str) -> Dict:
+    def _wait_decision(self, reason: str, persona_votes: List[Dict] = None, vote_summary: List[str] = None) -> Dict:
+        """Return WAIT decision with full vote details for logging"""
+        votes_str = ', '.join(vote_summary) if vote_summary else "No votes"
         return {
             "decision": "WAIT",
             "confidence": 0.0,
-            "reasoning": reason,
+            "reasoning": f"{reason}. Votes: {votes_str}",
+            "persona_votes": persona_votes or [],
+            "vote_summary": vote_summary or [],
         }
 
 

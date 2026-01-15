@@ -97,6 +97,7 @@ try:
         # Config
         TEST_MODE, TRADING_PAIRS, MAX_LEVERAGE, STARTING_BALANCE,
         PIPELINE_VERSION, MODEL_NAME, MAX_OPEN_POSITIONS,
+        MIN_CONFIDENCE_TO_TRADE,  # Added for trade filtering
         TIER_CONFIG, get_tier_for_symbol, get_tier_config,
         RUNNER_CONFIG, get_runner_config,
         
@@ -333,27 +334,41 @@ def check_trading_signals():
                             can_trade_this = True
                             trade_type = "new"
                 
-                # Build vote details
+                # Build comprehensive vote details with FULL reasoning
                 vote_details = []
-                for vote in decision.get("persona_votes", []):
-                    persona = vote.get("persona", "?")
-                    vote_signal = vote.get("signal", "?")
-                    conf = vote.get("confidence", 0)
-                    reason = vote.get("reasoning", "")[:300]
-                    vote_details.append(f"{persona}={vote_signal}({conf:.0%}): {reason}")
+                market_analysis = ""
+                
+                persona_votes = decision.get("persona_votes", [])
+                
+                # If no persona_votes, try to get from vote_summary
+                if not persona_votes and decision.get("vote_summary"):
+                    vote_details = decision.get("vote_summary", [])
+                else:
+                    for vote in persona_votes:
+                        persona = vote.get("persona", "?")
+                        vote_signal = vote.get("signal", "?")
+                        conf = vote.get("confidence", 0)
+                        reason = vote.get("reasoning", "")[:400]  # Allow more chars per persona
+                        vote_details.append(f"{persona}={vote_signal}({conf:.0%}): {reason}")
+                        
+                        # Capture Sentiment's market context (Gemini analysis)
+                        if persona == "SENTIMENT" and vote.get("market_context"):
+                            market_analysis = vote.get("market_context", "")[:1200]
                 
                 judge_summary = decision.get("reasoning", "")
-                market_ctx = ""
-                for vote in decision.get("persona_votes", []):
-                    if vote.get("persona") == "SENTIMENT" and vote.get("market_context"):
-                        market_ctx = vote.get("market_context", "")[:1500]
-                        break
                 
-                full_explanation = f"{judge_summary}\n\nVotes: {'; '.join(vote_details)}"
-                if market_ctx:
-                    full_explanation += f"\n\nMarket: {market_ctx}"
+                # Build full explanation with ALL details
+                explanation_parts = [f"Judge: {judge_summary}"]
                 
-                # Upload AI log
+                if vote_details:
+                    explanation_parts.append(f"\n\nPersona Votes:\n" + "\n".join(f"- {v}" for v in vote_details))
+                
+                if market_analysis:
+                    explanation_parts.append(f"\n\nMarket Analysis (Gemini):\n{market_analysis}")
+                
+                full_explanation = "".join(explanation_parts)
+                
+                # Upload AI log with comprehensive explanation
                 upload_ai_log_to_weex(
                     stage=f"V3.1.4 Analysis - {pair} (Tier {tier})",
                     input_data={
@@ -372,7 +387,7 @@ def check_trading_signals():
                         "can_trade": can_trade_this,
                         "trade_type": trade_type,
                     },
-                    explanation=full_explanation[:2500]
+                    explanation=full_explanation[:2500]  # WEEX allows 500 words
                 )
                 
                 # Save to local log
