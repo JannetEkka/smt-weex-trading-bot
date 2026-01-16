@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.1.7 - Tier-Based Multi-Persona Analysis
+SMT Nightly Trade V3.1.9 - Bigger Positions, Longer Holds
 =============================================================
 Enhanced trading with tier-based risk management.
 
@@ -74,9 +74,9 @@ FLOOR_BALANCE = 950.0  # Protect principal - stop trading below this
 # Trading Parameters - V3.1.4 UPDATES
 MAX_LEVERAGE = 20
 MAX_OPEN_POSITIONS = 8  # REDUCED from 8 - less exposure, better management
-MAX_SINGLE_POSITION_PCT = 0.08  # 8% per trade max
-MIN_SINGLE_POSITION_PCT = 0.03  # 3% minimum
-MIN_CONFIDENCE_TO_TRADE = 0.65  # INCREASED from 0.55 - stop taking weak signals!
+MAX_SINGLE_POSITION_PCT = 0.20  # V3.1.9: 20% per trade max (was 8%)
+MIN_SINGLE_POSITION_PCT = 0.10  # V3.1.9: 10% minimum (was 3%)
+MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.1.8: INCREASED from 0.65 - only take high confidence signals!
 
 # ============================================================
 # V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
@@ -88,29 +88,29 @@ MIN_CONFIDENCE_TO_TRADE = 0.65  # INCREASED from 0.55 - stop taking weak signals
 TIER_CONFIG = {
     1: {  # BTC, ETH, BNB, LTC - Stable, slow movers
         "name": "STABLE",
-        "tp_pct": 4.0,           # Take profit at 4%
+        "tp_pct": 5.0,           # V3.1.9: Increased from 4% - let winners run
         "sl_pct": 2.0,           # Stop loss at 2%
-        "max_hold_hours": 48,    # Allow 48h for slow grind
-        "early_exit_hours": 6,   # Check early exit after 6h
-        "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 6h
+        "max_hold_hours": 72,    # V3.1.9: Extended to 72h (3 days) like Team 2
+        "early_exit_hours": 12,  # V3.1.9: Check early exit after 12h
+        "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 12h
         "force_exit_loss_pct": -4.0,  # Hard stop at -4%
     },
     2: {  # SOL - Mid volatility
         "name": "MID",
-        "tp_pct": 3.0,           # Take profit at 3%
+        "tp_pct": 4.0,           # V3.1.9: Increased from 3%
         "sl_pct": 1.75,          # Stop loss at 1.75%
-        "max_hold_hours": 12,    # 12h max hold
-        "early_exit_hours": 3,   # Check early exit after 3h
-        "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 3h
+        "max_hold_hours": 48,    # V3.1.9: Extended to 48h (2 days)
+        "early_exit_hours": 6,   # Check early exit after 6h
+        "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 6h
         "force_exit_loss_pct": -4.0,  # Hard stop at -4%
     },
-    3: {  # DOGE, XRP, ADA - V3.1.4: WIDENED SL, HIGHER TP
+    3: {  # DOGE, XRP, ADA - V3.1.9: Extended hold for winners
         "name": "FAST",
-        "tp_pct": 3.0,           # INCREASED from 2.5% - better R:R
-        "sl_pct": 2.0,           # INCREASED from 1.5% - stop getting whipsawed!
-        "max_hold_hours": 12,  # V3.1.7: Extended from 4h     # REDUCED from 6h - get out faster
-        "early_exit_hours": 4,  # V3.1.7: Extended from 1.5h # REDUCED from 2h - check earlier
-        "early_exit_loss_pct": -1.5,  # V3.1.7: More room  # Exit if -1% after 1.5h
+        "tp_pct": 4.0,           # V3.1.9: Increased from 3%
+        "sl_pct": 2.0,           # Keep at 2%
+        "max_hold_hours": 24,    # V3.1.9: Extended to 24h
+        "early_exit_hours": 6,   # Check early exit after 6h
+        "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 6h
         "force_exit_loss_pct": -4.0,  # Hard stop at -4%
     },
 }
@@ -872,9 +872,9 @@ class JudgePersona:
         """
         import time as time_module
         
-        # Cache for 15 minutes
+        # Cache for 5 minutes (was 15 - too slow for volatile markets)
         cache_valid = (
-            time_module.time() - self._btc_trend_cache.get("timestamp", 0) < 900
+            time_module.time() - self._btc_trend_cache.get("timestamp", 0) < 300
             and "regime" in self._btc_trend_cache
         )
         if cache_valid:
@@ -906,17 +906,18 @@ class JudgePersona:
                 result["change_4h"] = change_4h
                 result["change_24h"] = change_24h
                 
+                # V3.1.8: STRICTER regime thresholds
                 # Determine regime based on 24h trend (primary) and 4h (secondary)
-                if change_24h < -2.0:
+                if change_24h < -1.0:  # Was -2.0, now -1.0
                     result["regime"] = "BEARISH"
                     result["bias"] = "SHORT"
-                elif change_24h > 2.0:
+                elif change_24h > 1.5:  # Was 2.0, now 1.5
                     result["regime"] = "BULLISH"
                     result["bias"] = "LONG"
-                elif change_4h < -1.5:
+                elif change_4h < -1.0:  # Was -1.5, now -1.0
                     result["regime"] = "BEARISH"
                     result["bias"] = "SHORT"
-                elif change_4h > 1.5:
+                elif change_4h > 1.0:  # Was 1.5, now 1.0
                     result["regime"] = "BULLISH"
                     result["bias"] = "LONG"
                 
@@ -1009,29 +1010,33 @@ class JudgePersona:
         if confidence < min_confidence:
             return self._wait_decision(f"Confidence too low: {confidence:.0%} (Tier {tier} needs {min_confidence:.0%})", persona_votes, vote_summary)
         
-        # V3.1.4: MARKET TREND FILTER - Don't fight the trend!
-        if pair != "BTC":  # Don't check BTC against itself
-            regime = self._get_market_regime()
-            
-            if decision == "LONG" and regime["regime"] == "BEARISH":
-                return self._wait_decision(f"BLOCKED: LONG in BEARISH regime (24h: {regime['change_24h']:+.1f}%)", persona_votes, vote_summary)
-            
-            if decision == "SHORT" and btc_trend == "UP":
-                # Less strict for shorts - only block if very strong uptrend
-                # This allows shorting during mild uptrends (mean reversion)
-                pass  # Allow shorts even in uptrend for now
+        # V3.1.8: STRICTER MARKET TREND FILTER - Don't fight the trend!
+        # Now applies to ALL pairs including BTC
+        regime = self._get_market_regime()
         
-        # Position sizing
-        base_size = balance * 0.07
+        # Block LONGs in bearish regime (ANY negative 24h = bearish for safety)
+        if decision == "LONG":
+            if regime["regime"] == "BEARISH":
+                return self._wait_decision(f"BLOCKED: LONG in BEARISH regime (24h: {regime['change_24h']:+.1f}%)", persona_votes, vote_summary)
+            # V3.1.8: Also block if 24h is negative even if not "BEARISH" threshold
+            if regime["change_24h"] < -0.5:
+                return self._wait_decision(f"BLOCKED: LONG while BTC dropping (24h: {regime['change_24h']:+.1f}%)", persona_votes, vote_summary)
+        
+        # Block SHORTs in strong bullish regime
+        if decision == "SHORT" and regime["regime"] == "BULLISH" and regime["change_24h"] > 3.0:
+            return self._wait_decision(f"BLOCKED: SHORT in strong BULLISH regime (24h: {regime['change_24h']:+.1f}%)", persona_votes, vote_summary)
+        
+        # V3.1.9: Increased position sizing (was 7%)
+        base_size = balance * 0.15
         
         if confidence > 0.80:
-            position_usdt = base_size * 1.5
+            position_usdt = base_size * 1.3  # 19.5%
         elif confidence > 0.70:
-            position_usdt = base_size * 1.3
+            position_usdt = base_size * 1.15  # 17.25%
         elif confidence > 0.60:
-            position_usdt = base_size * 1.0
+            position_usdt = base_size * 1.0  # 15%
         else:
-            position_usdt = base_size * 0.8
+            position_usdt = base_size * 0.85  # 12.75%
         
         position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
         position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
@@ -1413,20 +1418,24 @@ COOLDOWN_HOURS = {
 RUNNER_CONFIG = {
     1: {  # BTC, ETH, BNB, LTC
         "enabled": True,
-        "trigger_pct": 2.0,      # Trigger at +2% (50% of 4% TP)
+        "trigger_pct": 2.5,      # V3.1.9: Trigger at +2.5% (50% of 5% TP)
         "close_pct": 50,         # Close 50% of position
         "move_sl_to_entry": True,  # Move SL to breakeven
         "remove_tp": True,       # Let remaining 50% run
     },
     2: {  # SOL
         "enabled": True,
-        "trigger_pct": 1.5,      # Trigger at +1.5% (50% of 3% TP)
+        "trigger_pct": 2.0,      # V3.1.9: Trigger at +2% (50% of 4% TP)
         "close_pct": 50,
         "move_sl_to_entry": True,
         "remove_tp": True,
     },
-    3: {  # DOGE, XRP, ADA - NO RUNNERS (too volatile)
-        "enabled": False,
+    3: {  # DOGE, XRP, ADA - V3.1.9: ENABLED runners
+        "enabled": True,
+        "trigger_pct": 2.0,      # Trigger at +2% (50% of 4% TP)
+        "close_pct": 50,
+        "move_sl_to_entry": True,
+        "remove_tp": True,
     },
 }
 

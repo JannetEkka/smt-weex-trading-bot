@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.7
+SMT Trading Daemon V3.1.9
 =========================
 Tier-based trading daemon with smart exits per tier.
 CRITICAL FIXES: Reduced positions, higher confidence, market trend filter.
 
-V3.1.7 Changes:
+V3.1.9 Changes:
+- CRITICAL FIX: Fixed undefined btc_trend variable in regime filter
+- CRITICAL FIX: Regime filter now applies to ALL pairs including BTC
+- Stricter thresholds: BEARISH at -1% (was -2%), BULLISH at +1.5% (was +2%)
+- Block LONGs when BTC 24h change is even slightly negative (-0.5%)
+- Reduced regime cache from 15min to 5min for faster response
 - MAX_OPEN_POSITIONS: 8 -> 5
 - MIN_CONFIDENCE_TO_TRADE: 55% -> 65%
 - Tier 3 SL: 1.5% -> 2.0% (stop whipsaw)
@@ -124,7 +129,7 @@ try:
         # Logging
         save_local_log,
     )
-    logger.info("V3.1.7 imports successful (Market Trend Filter + Stricter Signals)")
+    logger.info("V3.1.9 imports successful (Market Trend Filter + Stricter Signals)")
 except ImportError as e:
     logger.error(f"Import error: {e}")
     logger.error(traceback.format_exc())
@@ -200,11 +205,11 @@ def run_with_retry(func, *args, max_retries=MAX_RETRIES, **kwargs):
 
 
 # ============================================================
-# V3.1.7 SIGNAL CHECKING - HEDGE MODE SUPPORT
+# V3.1.9 SIGNAL CHECKING - HEDGE MODE SUPPORT
 # ============================================================
 
 def check_trading_signals():
-    """V3.1.7: Tier-based signal check with HEDGE MODE
+    """V3.1.9: Tier-based signal check with HEDGE MODE
     
     ALWAYS analyzes ALL pairs and uploads AI logs.
     HEDGE MODE: Can open LONG while SHORT is running (and vice versa)
@@ -213,7 +218,7 @@ def check_trading_signals():
     
     run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     logger.info("=" * 60)
-    logger.info(f"V3.1.7 SIGNAL CHECK - {run_timestamp}")
+    logger.info(f"V3.1.9 SIGNAL CHECK - {run_timestamp}")
     logger.info("=" * 60)
     
     state.signals_checked += 1
@@ -372,7 +377,7 @@ def check_trading_signals():
                 
                 # Upload AI log with comprehensive explanation
                 upload_ai_log_to_weex(
-                    stage=f"V3.1.7 Analysis - {pair} (Tier {tier})",
+                    stage=f"V3.1.9 Analysis - {pair} (Tier {tier})",
                     input_data={
                         "pair": pair,
                         "tier": tier,
@@ -492,7 +497,7 @@ def check_trading_signals():
 
 
 # ============================================================
-# V3.1.7 TIER-BASED POSITION MONITORING
+# V3.1.9 TIER-BASED POSITION MONITORING
 # ============================================================
 
 def monitor_positions():
@@ -592,8 +597,22 @@ def monitor_positions():
                 should_exit = False
                 exit_reason = ""
                 
+                # Track peak PnL for trailing protection
+                peak_pnl_pct = trade.get("peak_pnl_pct", 0)
+                if pnl_pct > peak_pnl_pct:
+                    trade["peak_pnl_pct"] = pnl_pct
+                    peak_pnl_pct = pnl_pct
+                    tracker.save_state()
+                
+                # V3.1.9: TRAILING PROTECTION - if was winning but now losing significantly
+                # If peak was +2% or more but now negative, exit to protect gains
+                if peak_pnl_pct >= 2.0 and pnl_pct < 0:
+                    should_exit = True
+                    exit_reason = f"trailing_protection (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
+                    state.early_exits += 1
+                
                 # 1. Max hold time exceeded (tier-specific)
-                if hours_open >= max_hold:
+                elif hours_open >= max_hold:
                     should_exit = True
                     exit_reason = f"max_hold_T{tier} ({hours_open:.1f}h > {max_hold}h)"
                 
@@ -630,7 +649,7 @@ def monitor_positions():
                     state.trades_closed += 1
                     
                     upload_ai_log_to_weex(
-                        stage=f"V3.1.7 Smart Exit - {symbol_clean}",
+                        stage=f"V3.1.9 Smart Exit - {symbol_clean}",
                         input_data={"symbol": symbol, "tier": tier, "hours_open": hours_open},
                         output_data={"reason": exit_reason, "pnl_pct": pnl_pct},
                         explanation=f"Tier {tier} smart exit: {exit_reason}. PnL: {pnl_pct:+.2f}%"
@@ -682,7 +701,7 @@ def log_health():
     active = len(tracker.get_active_symbols())
     
     logger.info(
-        f"V3.1.7 HEALTH | Up: {uptime_str} | "
+        f"V3.1.9 HEALTH | Up: {uptime_str} | "
         f"Signals: {state.signals_checked} | "
         f"Trades: {state.trades_opened}/{state.trades_closed} | "
         f"Runners: {state.runners_triggered} | "
@@ -756,11 +775,11 @@ def sync_tracker_with_weex():
 
 
 # ============================================================
-# V3.1.7: REGIME-AWARE SMART EXIT
+# V3.1.9: REGIME-AWARE SMART EXIT
 # ============================================================
 
 def get_market_regime_for_exit():
-    """Get BTC 24h trend for regime-based exits"""
+    """Get BTC 24h trend for regime-based exits - V3.1.9 stricter thresholds"""
     try:
         url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol=cmt_btcusdt&granularity=4h&limit=7"
         r = requests.get(url, timeout=10)
@@ -771,21 +790,26 @@ def get_market_regime_for_exit():
             change_24h = ((closes[0] - closes[6]) / closes[6]) * 100
             change_4h = ((closes[0] - closes[1]) / closes[1]) * 100
             
-            # BEARISH if 24h down >2% OR (24h down and 4h down >1.5%)
-            if change_24h < -2 or (change_24h < 0 and change_4h < -1.5):
+            # V3.1.9: STRICTER thresholds
+            # BEARISH if 24h down >1% OR 4h down >1%
+            if change_24h < -1.0 or change_4h < -1.0:
                 return {"regime": "BEARISH", "change_24h": change_24h, "change_4h": change_4h}
-            # BULLISH if 24h up >2% OR (24h up and 4h up >1.5%)
-            elif change_24h > 2 or (change_24h > 0 and change_4h > 1.5):
+            # BULLISH if 24h up >1.5% OR 4h up >1%
+            elif change_24h > 1.5 or change_4h > 1.0:
                 return {"regime": "BULLISH", "change_24h": change_24h, "change_4h": change_4h}
+            else:
+                return {"regime": "NEUTRAL", "change_24h": change_24h, "change_4h": change_4h}
+        else:
+            logger.warning(f"[REGIME] API returned unexpected data: {type(data)}")
     except Exception as e:
-        logger.debug(f"Regime check error: {e}")
+        logger.error(f"[REGIME] API error: {e}")
     
-    return {"regime": "NEUTRAL", "change_24h": 0, "change_4h": 0}
+    return {"regime": "UNKNOWN", "change_24h": 0, "change_4h": 0}
 
 
 def regime_aware_exit_check():
     """
-    V3.1.7: AI cuts positions fighting the market regime.
+    V3.1.9: AI cuts positions fighting the market regime.
     
     Logic:
     - BEARISH market + LONG losing > $8 = AI closes position
@@ -802,9 +826,11 @@ def regime_aware_exit_check():
         
         logger.info(f"[REGIME] Market: {regime['regime']} | 24h: {regime['change_24h']:+.1f}% | 4h: {regime['change_4h']:+.1f}%")
         
-        if regime["regime"] == "NEUTRAL":
-            logger.info("[REGIME] Neutral market - no regime exits needed")
+        if regime["regime"] == "UNKNOWN":
+            logger.warning("[REGIME] Could not determine market regime - API issue")
             return
+        
+        # Don't return on NEUTRAL - we still check for weak market exits below
         
         closed_count = 0
         
@@ -820,14 +846,19 @@ def regime_aware_exit_check():
             reason = ""
             
             # LONG losing in BEARISH market
-            if regime["regime"] == "BEARISH" and side == "LONG" and pnl < -8:
+            if regime["regime"] == "BEARISH" and side == "LONG" and pnl < -5:
                 should_close = True
                 reason = f"LONG losing ${abs(pnl):.1f} in BEARISH market (24h: {regime['change_24h']:+.1f}%)"
             
             # SHORT losing in BULLISH market
-            elif regime["regime"] == "BULLISH" and side == "SHORT" and pnl < -8:
+            elif regime["regime"] == "BULLISH" and side == "SHORT" and pnl < -5:
                 should_close = True
                 reason = f"SHORT losing ${abs(pnl):.1f} in BULLISH market (24h: {regime['change_24h']:+.1f}%)"
+            
+            # V3.1.9: Even in NEUTRAL, cut LONGs losing >$8 if BTC is slightly negative
+            elif regime["regime"] == "NEUTRAL" and side == "LONG" and pnl < -8 and regime["change_24h"] < 0:
+                should_close = True
+                reason = f"LONG losing ${abs(pnl):.1f} while BTC weak (24h: {regime['change_24h']:+.1f}%)"
             
             if should_close:
                 logger.warning(f"[REGIME EXIT] {symbol_clean}: {reason}")
@@ -849,7 +880,7 @@ def regime_aware_exit_check():
                 
                 # Upload AI log
                 upload_ai_log_to_weex(
-                    stage=f"V3.1.7 Regime Exit: {side} {symbol_clean}",
+                    stage=f"V3.1.9 Regime Exit: {side} {symbol_clean}",
                     input_data={
                         "symbol": symbol,
                         "side": side,
@@ -886,13 +917,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.7 - Market Trend Filter + Stricter Signals")
+    logger.info("SMT Daemon V3.1.9 - CRITICAL Regime Filter Fix")
     logger.info("=" * 60)
-    logger.info("V3.1.7 CRITICAL FIXES:")
-    logger.info("  - MAX_POSITIONS: 5 (was 8)")
-    logger.info("  - MIN_CONFIDENCE: 65% (was 55%)")
-    logger.info("  - Tier 3 SL: 2% (was 1.5%)")
-    logger.info("  - BTC Trend Filter: No LONG when BTC dumps")
+    logger.info("V3.1.9 CRITICAL FIXES:")
+    logger.info("  - FIXED: undefined btc_trend bug blocking regime filter")
+    logger.info("  - FIXED: Regime filter now applies to ALL pairs incl BTC")
+    logger.info("  - BEARISH threshold: -1% (was -2%)")
+    logger.info("  - Block LONGs when BTC 24h < -0.5%")
+    logger.info("  - Regime cache: 5min (was 15min)")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         pairs = [p for p, info in TRADING_PAIRS.items() if info["tier"] == tier]
@@ -903,7 +935,7 @@ def run_daemon():
     logger.info("Cooldown Override: 85%+ confidence bypasses cooldown")
     logger.info("=" * 60)
 
-    # V3.1.7: Sync with WEEX on startup
+    # V3.1.9: Sync with WEEX on startup
     sync_tracker_with_weex()
     
     last_signal = 0
@@ -933,7 +965,7 @@ def run_daemon():
             
             if now - last_position >= POSITION_MONITOR_INTERVAL:
                 monitor_positions()
-                regime_aware_exit_check()  # V3.1.7: Check for regime-fighting positions
+                regime_aware_exit_check()  # V3.1.9: Check for regime-fighting positions
                 last_position = now
             
             if now - last_cleanup >= CLEANUP_CHECK_INTERVAL:
@@ -953,7 +985,7 @@ def run_daemon():
             state.errors += 1
             time.sleep(30)
     
-    logger.info("V3.1.7 Daemon shutdown")
+    logger.info("V3.1.9 Daemon shutdown")
     logger.info(f"Stats: {json.dumps(state.to_dict(), indent=2)}")
 
 
