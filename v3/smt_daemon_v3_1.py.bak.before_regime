@@ -752,15 +752,12 @@ def sync_tracker_with_weex():
 
 
 
-
-
-
 # ============================================================
 # V3.1.7: REGIME-AWARE SMART EXIT
 # ============================================================
 
-def get_market_regime_for_exit():
-    """Get BTC 24h trend for regime-based exits"""
+def get_market_regime_for_exit() -> Dict:
+    """Get current market regime for exit decisions"""
     try:
         url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol=cmt_btcusdt&granularity=4h&limit=7"
         r = requests.get(url, timeout=10)
@@ -769,119 +766,133 @@ def get_market_regime_for_exit():
         if isinstance(data, list) and len(data) >= 7:
             closes = [float(c[4]) for c in data]
             change_24h = ((closes[0] - closes[6]) / closes[6]) * 100
-            change_4h = ((closes[0] - closes[1]) / closes[1]) * 100
             
-            # BEARISH if 24h down >2% OR (24h down and 4h down >1.5%)
-            if change_24h < -2 or (change_24h < 0 and change_4h < -1.5):
-                return {"regime": "BEARISH", "change_24h": change_24h, "change_4h": change_4h}
-            # BULLISH if 24h up >2% OR (24h up and 4h up >1.5%)
-            elif change_24h > 2 or (change_24h > 0 and change_4h > 1.5):
-                return {"regime": "BULLISH", "change_24h": change_24h, "change_4h": change_4h}
+            if change_24h < -2:
+                return {"regime": "BEARISH", "change_24h": change_24h, "bias": "SHORT"}
+            elif change_24h > 2:
+                return {"regime": "BULLISH", "change_24h": change_24h, "bias": "LONG"}
+            else:
+                return {"regime": "NEUTRAL", "change_24h": change_24h, "bias": "NONE"}
     except Exception as e:
         logger.debug(f"Regime check error: {e}")
     
-    return {"regime": "NEUTRAL", "change_24h": 0, "change_4h": 0}
+    return {"regime": "NEUTRAL", "change_24h": 0, "bias": "NONE"}
 
 
 def regime_aware_exit_check():
     """
-    V3.1.7: AI cuts positions fighting the market regime.
+    V3.1.7 Feature 10: Regime-Aware Smart Exit
     
-    Logic:
-    - BEARISH market + LONG losing > $8 = AI closes position
-    - BULLISH market + SHORT losing > $8 = AI closes position
+    AI analyzes positions against market regime and cuts losers that fight the trend.
+    - BEARISH regime + LONG losing > threshold = EXIT
+    - BULLISH regime + SHORT losing > threshold = EXIT
     
-    This frees margin for regime-aligned trades.
+    This frees up margin for regime-aligned trades.
     """
     try:
         positions = get_open_positions()
-        if not positions:
+        if len(positions) < MAX_OPEN_POSITIONS:
+            # Only cut losers if we're at max capacity
             return
         
         regime = get_market_regime_for_exit()
         
-        logger.info(f"[REGIME] Market: {regime['regime']} | 24h: {regime['change_24h']:+.1f}% | 4h: {regime['change_4h']:+.1f}%")
-        
         if regime["regime"] == "NEUTRAL":
-            logger.info("[REGIME] Neutral market - no regime exits needed")
-            return
+            return  # Don't cut in neutral regime
         
-        closed_count = 0
+        logger.info(f"[REGIME EXIT] Checking positions in {regime['regime']} regime (24h: {regime['change_24h']:+.1f}%)")
+        
+        # Find positions fighting the trend
+        candidates = []
         
         for pos in positions:
             symbol = pos['symbol']
             side = pos['side']
-            pnl = float(pos.get('unrealized_pnl', 0))
-            size = float(pos['size'])
+            pnl = pos['unrealized_pnl']
+            size = pos['size']
+            
+            # LONG in BEARISH regime and losing
+            if regime["regime"] == "BEARISH" and side == "LONG" and pnl < -10:
+                candidates.append({
+                    "symbol": symbol,
+                    "side": side,
+                    "size": size,
+                    "pnl": pnl,
+                    "reason": f"LONG fighting BEARISH trend, losing ${abs(pnl):.2f}"
+                })
+            
+            # SHORT in BULLISH regime and losing
+            elif regime["regime"] == "BULLISH" and side == "SHORT" and pnl < -10:
+                candidates.append({
+                    "symbol": symbol,
+                    "side": side,
+                    "size": size,
+                    "pnl": pnl,
+                    "reason": f"SHORT fighting BULLISH trend, losing ${abs(pnl):.2f}"
+                })
+        
+        if not candidates:
+            return
+        
+        # Sort by worst PnL first
+        candidates.sort(key=lambda x: x['pnl'])
+        
+        # Close the worst 1-2 positions to free up margin
+        max_to_close = min(2, len(candidates))
+        
+        for i in range(max_to_close):
+            pos = candidates[i]
+            symbol = pos['symbol']
+            side = pos['side']
+            size = pos['size']
+            pnl = pos['pnl']
+            reason = pos['reason']
             
             symbol_clean = symbol.replace('cmt_', '').upper()
             
-            should_close = False
-            reason = ""
+            logger.warning(f"[REGIME EXIT] AI closing {side} {symbol_clean}: {reason}")
             
-            # LONG losing in BEARISH market
-            if regime["regime"] == "BEARISH" and side == "LONG" and pnl < -8:
-                should_close = True
-                reason = f"LONG losing ${abs(pnl):.1f} in BEARISH market (24h: {regime['change_24h']:+.1f}%)"
+            # Execute close
+            close_result = close_position_manually(symbol, side, size)
             
-            # SHORT losing in BULLISH market
-            elif regime["regime"] == "BULLISH" and side == "SHORT" and pnl < -8:
-                should_close = True
-                reason = f"SHORT losing ${abs(pnl):.1f} in BULLISH market (24h: {regime['change_24h']:+.1f}%)"
+            # Update tracker
+            tracker.close_trade(symbol, {
+                "reason": f"regime_exit_{regime['regime'].lower()}",
+                "pnl": pnl,
+                "regime": regime['regime'],
+                "change_24h": regime['change_24h'],
+            })
             
-            if should_close:
-                logger.warning(f"[REGIME EXIT] {symbol_clean}: {reason}")
-                
-                # Close the position
-                close_result = close_position_manually(symbol, side, size)
-                order_id = close_result.get("order_id")
-                
-                # Update tracker
-                tracker.close_trade(symbol, {
-                    "reason": f"regime_exit_{regime['regime'].lower()}",
-                    "pnl": pnl,
-                    "regime": regime["regime"],
-                })
-                
-                state.trades_closed += 1
-                state.early_exits += 1
-                closed_count += 1
-                
-                # Upload AI log
-                upload_ai_log_to_weex(
-                    stage=f"V3.1.7 Regime Exit: {side} {symbol_clean}",
-                    input_data={
-                        "symbol": symbol,
-                        "side": side,
-                        "size": size,
-                        "unrealized_pnl": pnl,
-                        "market_regime": regime["regime"],
-                        "btc_24h_change": regime["change_24h"],
-                        "btc_4h_change": regime["change_4h"],
-                    },
-                    output_data={
-                        "action": "CLOSE",
-                        "ai_decision": "REGIME_EXIT",
-                        "reason": reason,
-                    },
-                    explanation=f"AI Regime Exit: {reason}. Cutting position fighting the trend to free margin for {regime['regime']}-aligned opportunities.",
-                    order_id=order_id
-                )
-                
-                logger.info(f"[REGIME EXIT] Closed {symbol_clean}, order: {order_id}")
+            state.trades_closed += 1
+            state.early_exits += 1
+            
+            # Upload AI log
+            upload_ai_log_to_weex(
+                stage=f"V3.1.7 Regime Exit: {side} {symbol_clean}",
+                input_data={
+                    "symbol": symbol,
+                    "side": side,
+                    "size": size,
+                    "unrealized_pnl": pnl,
+                    "market_regime": regime['regime'],
+                    "btc_24h_change": regime['change_24h'],
+                },
+                output_data={
+                    "action": "CLOSE",
+                    "ai_decision": "CUT_LOSER",
+                    "reason": reason,
+                },
+                explanation=f"AI Regime-Aware Exit: {reason}. Market is {regime['regime']} (BTC 24h: {regime['change_24h']:+.1f}%). Cutting position fighting the trend to free margin for {regime['bias']} opportunities."
+            )
+            
+            logger.info(f"[REGIME EXIT] Closed {symbol_clean}, freed ${abs(pnl):.2f} margin")
         
-        if closed_count > 0:
-            logger.info(f"[REGIME EXIT] Closed {closed_count} positions fighting the trend")
-            # Trigger signal check to find new opportunities
-            logger.info("[REGIME EXIT] Checking for new opportunities...")
-            check_trading_signals()
-        else:
-            logger.info("[REGIME] No positions need regime exit")
-            
+        # Trigger signal check to find new opportunities
+        logger.info("[REGIME EXIT] Checking for regime-aligned opportunities...")
+        check_trading_signals()
+        
     except Exception as e:
         logger.error(f"[REGIME EXIT] Error: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
 
 
 def run_daemon():
@@ -903,7 +914,7 @@ def run_daemon():
     logger.info("Cooldown Override: 85%+ confidence bypasses cooldown")
     logger.info("=" * 60)
 
-    # V3.1.7: Sync with WEEX on startup
+    # V3.1.5: Sync with WEEX on startup
     sync_tracker_with_weex()
     
     last_signal = 0

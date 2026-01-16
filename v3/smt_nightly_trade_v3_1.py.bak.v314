@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.1.7 - Tier-Based Multi-Persona Analysis
+SMT Nightly Trade V3.1.4 - Tier-Based Multi-Persona Analysis
 =============================================================
 Enhanced trading with tier-based risk management.
 
@@ -108,9 +108,9 @@ TIER_CONFIG = {
         "name": "FAST",
         "tp_pct": 3.0,           # INCREASED from 2.5% - better R:R
         "sl_pct": 2.0,           # INCREASED from 1.5% - stop getting whipsawed!
-        "max_hold_hours": 12,  # V3.1.7: Extended from 4h     # REDUCED from 6h - get out faster
-        "early_exit_hours": 4,  # V3.1.7: Extended from 1.5h # REDUCED from 2h - check earlier
-        "early_exit_loss_pct": -1.5,  # V3.1.7: More room  # Exit if -1% after 1.5h
+        "max_hold_hours": 4,     # REDUCED from 6h - get out faster
+        "early_exit_hours": 1.5, # REDUCED from 2h - check earlier
+        "early_exit_loss_pct": -1.0,  # Exit if -1% after 1.5h
         "force_exit_loss_pct": -4.0,  # Hard stop at -4%
     },
 }
@@ -128,8 +128,8 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.1.7-MultiPersonaAgreement"
-MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.7"
+PIPELINE_VERSION = "SMT-v3.1.4-TierBased"
+MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.4"
 
 # Known step sizes
 KNOWN_STEP_SIZES = {
@@ -511,7 +511,7 @@ class SentimentPersona:
     
     def __init__(self):
         self.name = "SENTIMENT"
-        self.weight = 1.5  # V3.1.7: Reduced from 2.0
+        self.weight = 2.0
     
     def analyze(self, pair: str, pair_info: Dict, competition_status: Dict) -> Dict:
         try:
@@ -723,7 +723,7 @@ class TechnicalPersona:
     
     def __init__(self):
         self.name = "TECHNICAL"
-        self.weight = 1.2  # V3.1.7: Increased from 0.8
+        self.weight = 0.8
     
     def analyze(self, pair: str, pair_info: Dict) -> Dict:
         symbol = pair_info["symbol"]
@@ -864,69 +864,46 @@ class JudgePersona:
         self.name = "JUDGE"
         self._btc_trend_cache = {"trend": None, "timestamp": 0}
     
-    def _get_market_regime(self) -> dict:
-        """Check BTC 24h trend for market regime detection.
+    def _get_btc_trend(self) -> str:
+        """Check BTC 4h trend - returns 'UP', 'DOWN', or 'NEUTRAL'
         
-        V3.1.7: Uses 24h trend (not just 4h) for better regime detection.
-        Returns dict with regime, bias, and change percentages.
+        This prevents going LONG on altcoins when BTC is dumping,
+        or going SHORT when BTC is pumping.
         """
         import time as time_module
         
         # Cache for 15 minutes
-        cache_valid = (
-            time_module.time() - self._btc_trend_cache.get("timestamp", 0) < 900
-            and "regime" in self._btc_trend_cache
-        )
-        if cache_valid:
-            return self._btc_trend_cache
-        
-        result = {
-            "regime": "NEUTRAL",
-            "bias": "NONE",
-            "change_4h": 0,
-            "change_24h": 0,
-            "timestamp": time_module.time()
-        }
+        if time_module.time() - self._btc_trend_cache["timestamp"] < 900:
+            return self._btc_trend_cache["trend"]
         
         try:
-            # Get BTC 4h candles (7 candles = 28h of data)
-            url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol=cmt_btcusdt&granularity=4h&limit=7"
+            # Get BTC 4h candles
+            url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol=cmt_btcusdt&granularity=4h&limit=6"
             r = requests.get(url, timeout=10)
             data = r.json()
             
-            if isinstance(data, list) and len(data) >= 7:
-                closes = [float(c[4]) for c in data]
+            if isinstance(data, list) and len(data) >= 3:
+                # Get last 3 candles closes (most recent first)
+                closes = [float(c[4]) for c in data[:3]]
                 
-                # 4h change
-                change_4h = ((closes[0] - closes[1]) / closes[1]) * 100
-                
-                # 24h change (6 candles ago)
-                change_24h = ((closes[0] - closes[6]) / closes[6]) * 100
-                
-                result["change_4h"] = change_4h
-                result["change_24h"] = change_24h
-                
-                # Determine regime based on 24h trend (primary) and 4h (secondary)
-                if change_24h < -2.0:
-                    result["regime"] = "BEARISH"
-                    result["bias"] = "SHORT"
-                elif change_24h > 2.0:
-                    result["regime"] = "BULLISH"
-                    result["bias"] = "LONG"
-                elif change_4h < -1.5:
-                    result["regime"] = "BEARISH"
-                    result["bias"] = "SHORT"
-                elif change_4h > 1.5:
-                    result["regime"] = "BULLISH"
-                    result["bias"] = "LONG"
-                
-                print(f"  [JUDGE] Market: {result['regime']} | 24h: {change_24h:+.1f}% | 4h: {change_4h:+.1f}%")
-                
+                # Calculate 4h change
+                if len(closes) >= 2:
+                    change_pct = ((closes[0] - closes[1]) / closes[1]) * 100
+                    
+                    if change_pct > 1.0:  # BTC up more than 1% in 4h
+                        trend = "UP"
+                    elif change_pct < -1.0:  # BTC down more than 1% in 4h
+                        trend = "DOWN"
+                    else:
+                        trend = "NEUTRAL"
+                    
+                    self._btc_trend_cache = {"trend": trend, "timestamp": time_module.time()}
+                    print(f"  [JUDGE] BTC 4h trend: {trend} ({change_pct:+.2f}%)")
+                    return trend
         except Exception as e:
-            print(f"  [JUDGE] Market regime error: {e}")
+            print(f"  [JUDGE] BTC trend check error: {e}")
         
-        self._btc_trend_cache = result
-        return result
+        return "NEUTRAL"
     
     def decide(self, persona_votes: List[Dict], pair: str, balance: float, 
                competition_status: Dict) -> Dict:
@@ -943,26 +920,20 @@ class JudgePersona:
         
         vote_summary = []
         
-        # V3.1.7: Count raw votes for agreement check
-        long_votes = 0
-        short_votes = 0
-        
         for vote in persona_votes:
             persona = vote["persona"]
             signal = vote["signal"]
             confidence = vote["confidence"]
             
-            weights = {"WHALE": 2.0, "SENTIMENT": 1.5, "FLOW": 1.0, "TECHNICAL": 1.2}  # V3.1.7
+            weights = {"WHALE": 2.0, "SENTIMENT": 2.0, "FLOW": 1.0, "TECHNICAL": 0.8}
             weight = weights.get(persona, 1.0)
             
             weighted_conf = confidence * weight
             
             if signal == "LONG":
                 long_score += weighted_conf
-                long_votes += 1
             elif signal == "SHORT":
                 short_score += weighted_conf
-                short_votes += 1
             else:
                 neutral_score += weighted_conf
             
@@ -984,37 +955,21 @@ class JudgePersona:
         if long_pct > threshold and long_score > short_score * ratio_req:
             decision = "LONG"
             confidence = min(0.90, long_pct)
-            agreeing_votes = long_votes
-            opposing_votes = short_votes
         elif short_pct > threshold and short_score > long_score * ratio_req:
             decision = "SHORT"
             confidence = min(0.90, short_pct)
-            agreeing_votes = short_votes
-            opposing_votes = long_votes
         else:
             return self._wait_decision(f"No consensus: LONG={long_pct:.0%}, SHORT={short_pct:.0%}", persona_votes, vote_summary)
         
-        # V3.1.7: TIER 3 MULTI-PERSONA AGREEMENT
-        if tier == 3:
-            if agreeing_votes < 2:
-                return self._wait_decision(f"Tier 3 requires 2+ agreeing votes (only {agreeing_votes} {decision})", persona_votes, vote_summary)
-            if opposing_votes >= 2:
-                return self._wait_decision(f"Tier 3 blocked: {opposing_votes} personas oppose {decision}", persona_votes, vote_summary)
-        
-        # V3.1.7: Tier-specific confidence
-        min_confidence = MIN_CONFIDENCE_TO_TRADE
-        if tier == 3:
-            min_confidence = 0.70  # Higher for meme coins
-        
-        if confidence < min_confidence:
-            return self._wait_decision(f"Confidence too low: {confidence:.0%} (Tier {tier} needs {min_confidence:.0%})", persona_votes, vote_summary)
+        if confidence < MIN_CONFIDENCE_TO_TRADE:
+            return self._wait_decision(f"Confidence too low: {confidence:.0%} (need {MIN_CONFIDENCE_TO_TRADE:.0%})", persona_votes, vote_summary)
         
         # V3.1.4: MARKET TREND FILTER - Don't fight the trend!
         if pair != "BTC":  # Don't check BTC against itself
-            regime = self._get_market_regime()
+            btc_trend = self._get_btc_trend()
             
-            if decision == "LONG" and regime["regime"] == "BEARISH":
-                return self._wait_decision(f"BLOCKED: LONG in BEARISH regime (24h: {regime['change_24h']:+.1f}%)", persona_votes, vote_summary)
+            if decision == "LONG" and btc_trend == "DOWN":
+                return self._wait_decision(f"BLOCKED: LONG signal but BTC trending DOWN. Don't fight the market!", persona_votes, vote_summary)
             
             if decision == "SHORT" and btc_trend == "UP":
                 # Less strict for shorts - only block if very strong uptrend
