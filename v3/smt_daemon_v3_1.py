@@ -227,6 +227,12 @@ def check_trading_signals():
     try:
         balance = get_balance()
         open_positions = get_open_positions()
+        
+        # V3.1.13: FLOOR BALANCE CHECK - No new trades if balance too low
+        FLOOR_BALANCE = 500.0
+        if balance < FLOOR_BALANCE:
+            logger.warning(f"[FLOOR] Balance ${balance:.2f} below floor ${FLOOR_BALANCE} - NO NEW TRADES")
+            return
         competition = get_competition_status(balance)
         
         logger.info(f"Balance: {balance:.2f} USDT")
@@ -252,7 +258,7 @@ def check_trading_signals():
         
         # Confidence thresholds
         COOLDOWN_OVERRIDE_CONFIDENCE = 0.85
-        HEDGE_CONFIDENCE_THRESHOLD = 0.75  # Need 75%+ to open opposite direction
+        HEDGE_CONFIDENCE_THRESHOLD = 0.90  # Need 75%+ to open opposite direction
         
         # Build map: symbol -> {side: position}
         # This tracks BOTH long and short for each symbol
@@ -871,15 +877,23 @@ def regime_aware_exit_check():
                 should_close = True
                 reason = f"LONG losing ${abs(pnl):.1f} while BTC weak (24h: {regime['change_24h']:+.1f}%)"
             
-            # V3.1.10: HARD STOP - Any LONG losing > $12 gets cut regardless of regime
-            elif side == "LONG" and pnl < -12:
+            # V3.1.13: HARD STOP - Any position losing > $10 gets cut
+            elif side == "LONG" and pnl < -10:
                 should_close = True
-                reason = f"HARD STOP: LONG losing ${abs(pnl):.1f} (max $12 loss per position)"
+                reason = f"HARD STOP: LONG losing ${abs(pnl):.1f}"
             
-            # V3.1.10: Cut LONGs when SHORTs clearly winning
-            elif side == "LONG" and pnl < -8 and shorts_winning:
+            elif side == "SHORT" and pnl < -10:
                 should_close = True
-                reason = f"LONG losing ${abs(pnl):.1f} while SHORTs winning +${total_short_gain:.1f}"
+                reason = f"HARD STOP: SHORT losing ${abs(pnl):.1f}"
+            
+            # V3.1.13: Cut losing positions > $6 when opposite side winning
+            elif side == "LONG" and pnl < -6 and shorts_winning:
+                should_close = True
+                reason = f"LONG -${abs(pnl):.1f} while SHORTs winning"
+            
+            elif side == "SHORT" and pnl < -6 and total_long_gain > 15:
+                should_close = True
+                reason = f"SHORT -${abs(pnl):.1f} while LONGs winning"
             
             if should_close:
                 logger.warning(f"[REGIME EXIT] {symbol_clean}: {reason}")

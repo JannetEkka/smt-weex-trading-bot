@@ -1123,9 +1123,9 @@ class JudgePersona:
             if is_bearish:
                 weights = {
                     "WHALE": 1.0,      # Was 2.0 - accumulation can be "catching falling knife"
-                    "SENTIMENT": 0.5,  # Was 1.5 - news is always bullish hopium
-                    "FLOW": 2.5,       # Was 1.0 - order flow is truth in panic
-                    "TECHNICAL": 1.8   # Was 1.2 - trends matter in downtrends
+                    "SENTIMENT": 1.5,  # V3.1.13 - Reality Check prompt now gives good SHORT signals
+                    "FLOW": 2.0,       # V3.1.13 - Still important but Sentiment now helps
+                    "TECHNICAL": 1.5   # V3.1.13 - Balanced with other signals
                 }
             elif is_bullish:
                 weights = {
