@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.1.12 - Bigger Positions, Longer Holds
+SMT Nightly Trade V3.1.10 - Bigger Positions, Longer Holds
 =============================================================
 Enhanced trading with tier-based risk management.
 
@@ -64,152 +64,6 @@ CHAIN_ID = 1
 # Google Cloud
 PROJECT_ID = os.getenv('GOOGLE_CLOUD_PROJECT', 'smt-weex-2025')
 GCS_BUCKET = os.getenv('GCS_BUCKET', 'smt-weex-2025-models')
-
-# ============================================================
-# V3.1.12: ENHANCED MULTI-FACTOR REGIME DETECTION
-# ============================================================
-
-def get_fear_greed_index() -> dict:
-    """
-    Fetch Fear & Greed Index from alternative.me
-    CONTRARIAN indicator:
-    - 0-25: Extreme Fear = BUY signal (others panic, we accumulate)
-    - 75-100: Extreme Greed = SELL signal (others euphoric, we take profit)
-    """
-    try:
-        import requests
-        r = requests.get("https://api.alternative.me/fng/?limit=1", timeout=10)
-        data = r.json()
-        if data.get("data"):
-            value = int(data["data"][0]["value"])
-            classification = data["data"][0]["value_classification"]
-            return {"value": value, "classification": classification, "error": None}
-    except Exception as e:
-        pass
-    return {"value": 50, "classification": "Neutral", "error": "API failed"}
-
-
-def get_aggregate_funding_rate() -> dict:
-    """
-    Average funding rate across all pairs.
-    High positive (>0.05%) = overleveraged longs = expect dump
-    Negative (<-0.03%) = overleveraged shorts = expect pump
-    """
-    try:
-        import requests
-        total_funding = 0
-        count = 0
-        
-        for pair in ["btcusdt", "ethusdt", "solusdt", "adausdt"]:
-            url = f"{WEEX_BASE_URL}/capi/v2/public/funding_rate?symbol=cmt_{pair}"
-            r = requests.get(url, timeout=5)
-            data = r.json()
-            if data.get("data"):
-                funding = float(data["data"].get("funding_rate", 0))
-                total_funding += funding
-                count += 1
-        
-        if count > 0:
-            return {"avg_funding": total_funding / count, "pairs_checked": count, "error": None}
-    except:
-        pass
-    return {"avg_funding": 0, "pairs_checked": 0, "error": "API failed"}
-
-
-def get_enhanced_market_regime() -> dict:
-    """
-    V3.1.12: Multi-factor regime detection
-    
-    Factors (with weights):
-    1. BTC 24h change: -3 to +3 (primary driver)
-    2. BTC 4h change: -1 to +1 (short-term momentum)
-    3. Fear & Greed: -2 to +2 (CONTRARIAN - fear=buy, greed=sell)
-    4. Funding Rate: -2 to +2 (leverage positioning)
-    
-    Total score determines regime:
-    - score <= -1: BEARISH
-    - score >= +1: BULLISH
-    - else: NEUTRAL
-    """
-    import requests
-    
-    result = {
-        "regime": "NEUTRAL",
-        "confidence": 0.5,
-        "btc_24h": 0,
-        "btc_4h": 0,
-        "fear_greed": 50,
-        "avg_funding": 0,
-        "factors": [],
-        "score": 0
-    }
-    
-    score = 0
-    factors = []
-    
-    # ===== Factor 1 & 2: BTC Price =====
-    try:
-        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol=cmt_btcusdt&granularity=4h&limit=7"
-        r = requests.get(url, timeout=10)
-        data = r.json()
-        
-        if isinstance(data, list) and len(data) >= 7:
-            closes = [float(c[4]) for c in data]
-            btc_24h = ((closes[0] - closes[6]) / closes[6]) * 100
-            btc_4h = ((closes[0] - closes[1]) / closes[1]) * 100
-            
-            result["btc_24h"] = btc_24h
-            result["btc_4h"] = btc_4h
-            
-            if btc_24h < -2: score -= 3; factors.append(f"BTC dumping: {btc_24h:+.1f}%")
-            elif btc_24h < -1: score -= 2; factors.append(f"BTC dropping: {btc_24h:+.1f}%")
-            elif btc_24h < -0.5: score -= 1; factors.append(f"BTC weak: {btc_24h:+.1f}%")
-            elif btc_24h > 2: score += 3; factors.append(f"BTC pumping: {btc_24h:+.1f}%")
-            elif btc_24h > 1: score += 2; factors.append(f"BTC rising: {btc_24h:+.1f}%")
-            elif btc_24h > 0.5: score += 1; factors.append(f"BTC up: {btc_24h:+.1f}%")
-            
-            if btc_4h < -1: score -= 1; factors.append(f"4h down: {btc_4h:+.1f}%")
-            elif btc_4h > 1: score += 1; factors.append(f"4h up: {btc_4h:+.1f}%")
-    except Exception as e:
-        factors.append(f"BTC error: {e}")
-    
-    # ===== Factor 3: Fear & Greed (CONTRARIAN) =====
-    fg = get_fear_greed_index()
-    result["fear_greed"] = fg["value"]
-    
-    if fg["error"] is None:
-        if fg["value"] <= 20: score += 2; factors.append(f"EXTREME FEAR ({fg['value']}): contrarian BUY")
-        elif fg["value"] <= 35: score += 1; factors.append(f"Fear ({fg['value']})")
-        elif fg["value"] >= 80: score -= 2; factors.append(f"EXTREME GREED ({fg['value']}): contrarian SELL")
-        elif fg["value"] >= 65: score -= 1; factors.append(f"Greed ({fg['value']})")
-    
-    # ===== Factor 4: Aggregate Funding =====
-    funding = get_aggregate_funding_rate()
-    result["avg_funding"] = funding["avg_funding"]
-    
-    if funding["error"] is None:
-        if funding["avg_funding"] > 0.0008: score -= 2; factors.append(f"High funding: longs overleveraged")
-        elif funding["avg_funding"] > 0.0004: score -= 1; factors.append(f"Elevated funding")
-        elif funding["avg_funding"] < -0.0004: score += 2; factors.append(f"Negative funding: shorts squeezable")
-        elif funding["avg_funding"] < -0.0001: score += 1; factors.append(f"Low funding")
-    
-    # ===== Final Regime =====
-    result["score"] = score
-    result["factors"] = factors
-    
-    if score <= -3: result["regime"] = "BEARISH"; result["confidence"] = 0.85
-    elif score <= -1: result["regime"] = "BEARISH"; result["confidence"] = 0.65
-    elif score >= 3: result["regime"] = "BULLISH"; result["confidence"] = 0.85
-    elif score >= 1: result["regime"] = "BULLISH"; result["confidence"] = 0.65
-    else: result["regime"] = "NEUTRAL"; result["confidence"] = 0.5
-    
-    print(f"  [REGIME] {result['regime']} (score: {score}, conf: {result['confidence']:.0%})")
-    print(f"  [REGIME] BTC 24h: {result['btc_24h']:+.1f}% | F&G: {result['fear_greed']} | Funding: {result['avg_funding']:.5f}")
-    for f in factors[:4]:
-        print(f"  [REGIME]   > {f}")
-    
-    return result
-
 
 # Competition
 COMPETITION_START = datetime(2026, 1, 12, tzinfo=timezone.utc)
@@ -666,8 +520,7 @@ class SentimentPersona:
             
             client = genai.Client()
             
-            # V3.1.11: Reality Check prompt - focus on SHORT-TERM price action, not "moon" news
-            search_query = f"{pair} cryptocurrency price action last 24 hours breaking support resistance selling pressure"
+            search_query = f"{pair} cryptocurrency price prediction sentiment today news"
             
             grounding_config = GenerateContentConfig(
                 tools=[Tool(google_search=GoogleSearch())],
@@ -682,22 +535,12 @@ class SentimentPersona:
             
             market_context = response.text[:1500] if response.text else ""
             
-            # V3.1.11: Reality Check - ignore long-term hopium, focus on 4-24h trading window
-            sentiment_prompt = f"""You are a SHORT-TERM crypto trader making a 4-24 hour trade decision for {pair}.
+            sentiment_prompt = f"""Based on this market context, determine sentiment for {pair}:
 
-IGNORE: Long-term "moon" predictions, "institutional adoption", "ETF hopes", price targets for next year.
-FOCUS ON: Last 24 hours price action, support/resistance breaks, volume on red vs green candles, liquidation data.
-
-Market Context:
 {market_context}
 
-Based ONLY on short-term price action and momentum:
-- If price is breaking DOWN through support or volume is spiking on RED candles = BEARISH
-- If price is breaking UP through resistance or volume is spiking on GREEN candles = BULLISH  
-- If choppy/sideways with no clear direction = NEUTRAL
-
 Respond with JSON only:
-{{"sentiment": "BULLISH" or "BEARISH" or "NEUTRAL", "confidence": 0.0-1.0, "key_factor": "short-term reason only"}}"""
+{{"sentiment": "BULLISH" or "BEARISH" or "NEUTRAL", "confidence": 0.0-1.0, "key_factor": "main reason"}}"""
             
             json_config = GenerateContentConfig(
                 temperature=0.1,
@@ -1105,41 +948,12 @@ class JudgePersona:
         long_votes = 0
         short_votes = 0
         
-        # V3.1.11: Get regime FIRST for dynamic weight adjustment
-        regime = self._get_market_regime()
-        is_bearish = regime["regime"] == "BEARISH" or regime["change_24h"] < -0.5
-        is_bullish = regime["regime"] == "BULLISH" or regime["change_24h"] > 1.0
-        
         for vote in persona_votes:
             persona = vote["persona"]
             signal = vote["signal"]
             confidence = vote["confidence"]
             
-            # V3.1.11: DYNAMIC WEIGHTS based on market regime
-            # In bearish markets: trust FLOW and TECHNICAL more, SENTIMENT less
-            # In bullish markets: normal weights
-            if is_bearish:
-                weights = {
-                    "WHALE": 1.0,      # Was 2.0 - accumulation can be "catching falling knife"
-                    "SENTIMENT": 0.5,  # Was 1.5 - news is always bullish hopium
-                    "FLOW": 2.5,       # Was 1.0 - order flow is truth in panic
-                    "TECHNICAL": 1.8   # Was 1.2 - trends matter in downtrends
-                }
-            elif is_bullish:
-                weights = {
-                    "WHALE": 2.0,      # Whales lead the way up
-                    "SENTIMENT": 1.5,  # News drives FOMO
-                    "FLOW": 1.0,       # Normal
-                    "TECHNICAL": 1.2   # Normal
-                }
-            else:  # NEUTRAL
-                weights = {
-                    "WHALE": 1.5,      # Slightly reduced
-                    "SENTIMENT": 1.0,  # Reduced - noise in chop
-                    "FLOW": 1.5,       # Increased - flow matters in chop
-                    "TECHNICAL": 1.5   # Increased - technicals guide in ranges
-                }
-            
+            weights = {"WHALE": 2.0, "SENTIMENT": 1.5, "FLOW": 1.0, "TECHNICAL": 1.2}  # V3.1.7
             weight = weights.get(persona, 1.0)
             
             weighted_conf = confidence * weight
@@ -1153,7 +967,7 @@ class JudgePersona:
             else:
                 neutral_score += weighted_conf
             
-            vote_summary.append(f"{persona}={signal}({confidence:.0%})x{weight:.1f}")
+            vote_summary.append(f"{persona}={signal}({confidence:.0%})")
         
         total = long_score + short_score + neutral_score
         
@@ -1198,7 +1012,7 @@ class JudgePersona:
         
         # V3.1.8: STRICTER MARKET TREND FILTER - Don't fight the trend!
         # Now applies to ALL pairs including BTC
-        # V3.1.11: regime already fetched above for dynamic weights
+        regime = self._get_market_regime()
         
         # Block LONGs in bearish regime (ANY negative 24h = bearish for safety)
         if decision == "LONG":

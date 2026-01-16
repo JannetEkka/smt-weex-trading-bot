@@ -938,7 +938,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.12 - AGGRESSIVE LONG EXIT")
+    logger.info("SMT Daemon V3.1.11 - AGGRESSIVE LONG EXIT")
     logger.info("=" * 60)
     logger.info("V3.1.9 CRITICAL FIXES:")
     logger.info("  - FIXED: undefined btc_trend bug blocking regime filter")
