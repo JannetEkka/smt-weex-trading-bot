@@ -1,7 +1,24 @@
 """
-SMT Nightly Trade V3.1.12 - Bigger Positions, Longer Holds
+SMT Nightly Trade V3.1.17 - TAKER VOLUME IS KING
 =============================================================
-Enhanced trading with tier-based risk management.
+Enhanced trading with advanced flow analysis.
+
+V3.1.17 Changes (CRITICAL FLOW FIX):
+- FLOW PERSONA OVERHAUL: Taker volume (ACTION) beats depth (INTENTION)
+  * Taker ratio < 0.3 = EXTREME SELL, ignore all bid depth (spoofing)
+  * Taker ratio < 0.5 = HEAVY SELL, taker 3x weight of depth
+  * Bid depth in bear market is often FAKE (spoofing/exit liquidity)
+- NEW: ALTCOIN MOMENTUM factor in regime detection
+  * If avg altcoin change < -4% = BEARISH regardless of BTC
+  * If avg altcoin change < -2% = score -2
+  * Catches "BTC flat but alts bleeding" scenarios
+- Regime now has 7 factors: BTC, 4h, F&G, Funding, OI, ATR, Altcoins
+
+V3.1.16 Changes:
+- Open Interest (OI) Sensor
+- ATR-based Volatility Position Sizing
+- Lower confidence threshold (85% -> 60%)
+- Add weak_bearish mode for slight negative BTC
 
 V3.1.4 Changes (CRITICAL FIXES):
 - Reduced MAX_OPEN_POSITIONS from 8 to 5 (less exposure)
@@ -118,6 +135,199 @@ def get_aggregate_funding_rate() -> dict:
     return {"avg_funding": 0, "pairs_checked": 0, "error": "API failed"}
 
 
+# ============================================================
+# V3.1.16: OPEN INTEREST SENSOR - The "Truth" of futures market
+# ============================================================
+
+def get_btc_open_interest() -> dict:
+    """
+    Get BTC Open Interest from WEEX.
+    
+    The Logic:
+    - Price Drops + OI Rises: "Short Build-up" - people opening new shorts = Stay Bearish
+    - Price Drops + OI Drops: "Long Liquidation" - weak hands forced out = Bottoming
+    - Price Rises + OI Rises: "Long Build-up" - new longs entering = Stay Bullish
+    - Price Rises + OI Drops: "Short Liquidation" - squeeze happening = May top soon
+    """
+    try:
+        url = f"{WEEX_BASE_URL}/capi/v2/market/open_interest?symbol=cmt_btcusdt"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        
+        if isinstance(data, list) and len(data) > 0:
+            # base_volume is OI in BTC, target_volume is OI in USDT
+            oi_btc = float(data[0].get("base_volume", 0))
+            oi_usdt = float(data[0].get("target_volume", 0))
+            return {"oi_btc": oi_btc, "oi_usdt": oi_usdt, "error": None}
+    except Exception as e:
+        pass
+    return {"oi_btc": 0, "oi_usdt": 0, "error": "API failed"}
+
+
+def get_oi_change_signal() -> dict:
+    """
+    V3.1.16: Detect OI direction combined with price direction.
+    
+    Uses 4h candles to compare:
+    - Current OI vs estimate (we only have current snapshot, so use funding as proxy)
+    - Price direction from candles
+    
+    Returns signal about market structure.
+    """
+    result = {
+        "signal": "NEUTRAL",
+        "reason": "",
+        "oi_usdt": 0,
+        "price_change_4h": 0,
+        "funding_rate": 0
+    }
+    
+    try:
+        # Get current OI
+        oi_data = get_btc_open_interest()
+        result["oi_usdt"] = oi_data.get("oi_usdt", 0)
+        
+        # Get 4h price change
+        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol=cmt_btcusdt&granularity=4h&limit=2"
+        r = requests.get(url, timeout=10)
+        candles = r.json()
+        
+        if isinstance(candles, list) and len(candles) >= 2:
+            current_close = float(candles[0][4])
+            prev_close = float(candles[1][4])
+            price_change = ((current_close - prev_close) / prev_close) * 100
+            result["price_change_4h"] = price_change
+            
+            # Get funding rate as OI direction proxy
+            # High positive funding = longs piling in = OI rising on long side
+            # Negative funding = shorts piling in = OI rising on short side
+            funding_url = f"{WEEX_BASE_URL}/capi/v2/market/currentFundRate?symbol=cmt_btcusdt"
+            fr = requests.get(funding_url, timeout=10)
+            funding_data = fr.json()
+            
+            btc_funding = 0
+            if isinstance(funding_data, list) and len(funding_data) > 0:
+                btc_funding = float(funding_data[0].get("fundingRate", 0))
+            
+            result["funding_rate"] = btc_funding
+            
+            # Interpret the combination
+            # Price dropping + High funding = Longs still holding (will liquidate) = MORE DUMP
+            # Price dropping + Negative funding = Shorts building = BEARISH continuation
+            # Price dropping + Low/neutral funding = Liquidations happening = Near bottom
+            
+            if price_change < -1.0:  # Price dropping
+                if btc_funding > 0.0003:  # Longs overleveraged
+                    result["signal"] = "BEARISH"
+                    result["reason"] = f"Price -{abs(price_change):.1f}% but longs overleveraged (funding +{btc_funding:.4f}) - liquidations coming"
+                elif btc_funding < -0.0002:  # Shorts building
+                    result["signal"] = "BEARISH"
+                    result["reason"] = f"Price -{abs(price_change):.1f}% + shorts piling in (funding {btc_funding:.4f}) - trend continuation"
+                else:
+                    result["signal"] = "NEUTRAL"
+                    result["reason"] = f"Price -{abs(price_change):.1f}%, funding neutral - may be bottoming"
+            
+            elif price_change > 1.0:  # Price rising
+                if btc_funding < -0.0002:  # Shorts getting squeezed
+                    result["signal"] = "BULLISH"
+                    result["reason"] = f"Price +{price_change:.1f}% squeezing shorts (funding {btc_funding:.4f}) - pump continuation"
+                elif btc_funding > 0.0005:  # Longs overleveraged on pump
+                    result["signal"] = "NEUTRAL"
+                    result["reason"] = f"Price +{price_change:.1f}% but longs greedy (funding +{btc_funding:.4f}) - pullback risk"
+                else:
+                    result["signal"] = "BULLISH"
+                    result["reason"] = f"Price +{price_change:.1f}%, healthy funding - uptrend"
+            else:
+                result["signal"] = "NEUTRAL"
+                result["reason"] = "Choppy market, no clear direction"
+                
+    except Exception as e:
+        result["reason"] = f"OI analysis error: {e}"
+    
+    return result
+
+
+# ============================================================
+# V3.1.16: ATR-BASED VOLATILITY SIZING
+# ============================================================
+
+def get_btc_atr() -> dict:
+    """
+    Calculate ATR (Average True Range) for BTC to measure volatility.
+    
+    Uses 4h candles, 14-period ATR.
+    Returns current ATR and ratio vs 14-period average.
+    
+    High ATR ratio (>1.5) = high volatility = reduce position size
+    Low ATR ratio (<0.7) = low volatility = normal position size
+    """
+    result = {
+        "atr": 0,
+        "atr_pct": 0,  # ATR as % of price
+        "atr_ratio": 1.0,  # Current vs average
+        "volatility": "NORMAL",
+        "size_multiplier": 1.0,
+        "error": None
+    }
+    
+    try:
+        # Get 4h candles (need 15 for 14-period ATR)
+        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol=cmt_btcusdt&granularity=4h&limit=20"
+        r = requests.get(url, timeout=10)
+        candles = r.json()
+        
+        if isinstance(candles, list) and len(candles) >= 15:
+            # Calculate True Range for each candle
+            true_ranges = []
+            for i in range(len(candles) - 1):
+                high = float(candles[i][2])
+                low = float(candles[i][3])
+                prev_close = float(candles[i + 1][4])
+                
+                tr = max(
+                    high - low,
+                    abs(high - prev_close),
+                    abs(low - prev_close)
+                )
+                true_ranges.append(tr)
+            
+            if len(true_ranges) >= 14:
+                # Current ATR (last 14 periods)
+                current_atr = sum(true_ranges[:14]) / 14
+                
+                # Average ATR (all available)
+                avg_atr = sum(true_ranges) / len(true_ranges)
+                
+                # Current price for percentage
+                current_price = float(candles[0][4])
+                
+                result["atr"] = current_atr
+                result["atr_pct"] = (current_atr / current_price) * 100
+                result["atr_ratio"] = current_atr / avg_atr if avg_atr > 0 else 1.0
+                
+                # Determine volatility regime and position sizing
+                if result["atr_ratio"] > 2.0:
+                    result["volatility"] = "EXTREME"
+                    result["size_multiplier"] = 0.3  # 30% of normal size
+                elif result["atr_ratio"] > 1.5:
+                    result["volatility"] = "HIGH"
+                    result["size_multiplier"] = 0.5  # 50% of normal size
+                elif result["atr_ratio"] > 1.2:
+                    result["volatility"] = "ELEVATED"
+                    result["size_multiplier"] = 0.7  # 70% of normal size
+                elif result["atr_ratio"] < 0.7:
+                    result["volatility"] = "LOW"
+                    result["size_multiplier"] = 1.2  # Can size up slightly in calm markets
+                else:
+                    result["volatility"] = "NORMAL"
+                    result["size_multiplier"] = 1.0
+                    
+    except Exception as e:
+        result["error"] = str(e)
+    
+    return result
+
+
 def get_enhanced_market_regime() -> dict:
     """
     V3.1.12: Multi-factor regime detection
@@ -195,6 +405,57 @@ def get_enhanced_market_regime() -> dict:
         elif funding["avg_funding"] < -0.0004: score += 2; factors.append(f"Negative funding: shorts squeezable")
         elif funding["avg_funding"] < -0.0001: score += 1; factors.append(f"Low funding")
     
+    # ===== V3.1.16: Factor 5 - Open Interest Signal =====
+    oi_signal = get_oi_change_signal()
+    result["oi_signal"] = oi_signal["signal"]
+    result["oi_reason"] = oi_signal["reason"]
+    
+    if oi_signal["signal"] == "BEARISH":
+        score -= 2
+        factors.append(f"OI: {oi_signal['reason'][:50]}")
+    elif oi_signal["signal"] == "BULLISH":
+        score += 2
+        factors.append(f"OI: {oi_signal['reason'][:50]}")
+    
+    # ===== V3.1.16: Factor 6 - ATR Volatility =====
+    atr_data = get_btc_atr()
+    result["volatility"] = atr_data["volatility"]
+    result["size_multiplier"] = atr_data["size_multiplier"]
+    result["atr_ratio"] = atr_data["atr_ratio"]
+    
+    if atr_data["volatility"] in ("EXTREME", "HIGH"):
+        factors.append(f"ATR: {atr_data['volatility']} volatility (size x{atr_data['size_multiplier']:.1f})")
+    
+    # ===== V3.1.17: Factor 7 - ALTCOIN MOMENTUM =====
+    # If BTC is flat but altcoins are bleeding, that's BEARISH
+    try:
+        altcoin_changes = []
+        for alt_pair in ["solusdt", "dogeusdt", "adausdt", "xrpusdt"]:
+            alt_url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol=cmt_{alt_pair}&granularity=4h&limit=7"
+            alt_r = requests.get(alt_url, timeout=5)
+            alt_data = alt_r.json()
+            if isinstance(alt_data, list) and len(alt_data) >= 7:
+                alt_closes = [float(c[4]) for c in alt_data]
+                alt_24h = ((alt_closes[0] - alt_closes[6]) / alt_closes[6]) * 100
+                altcoin_changes.append(alt_24h)
+        
+        if altcoin_changes:
+            avg_altcoin_change = sum(altcoin_changes) / len(altcoin_changes)
+            result["altcoin_avg"] = avg_altcoin_change
+            
+            # V3.1.17: If alts avg < -2%, market is BEARISH regardless of BTC
+            if avg_altcoin_change < -4:
+                score -= 3
+                factors.append(f"ALTCOINS BLEEDING: avg {avg_altcoin_change:+.1f}%")
+            elif avg_altcoin_change < -2:
+                score -= 2
+                factors.append(f"Altcoins weak: avg {avg_altcoin_change:+.1f}%")
+            elif avg_altcoin_change > 3:
+                score += 2
+                factors.append(f"Altcoins pumping: avg {avg_altcoin_change:+.1f}%")
+    except Exception as e:
+        result["altcoin_avg"] = 0
+    
     # ===== Final Regime =====
     result["score"] = score
     result["factors"] = factors
@@ -207,7 +468,8 @@ def get_enhanced_market_regime() -> dict:
     
     print(f"  [REGIME] {result['regime']} (score: {score}, conf: {result['confidence']:.0%})")
     print(f"  [REGIME] BTC 24h: {result['btc_24h']:+.1f}% | F&G: {result['fear_greed']} | Funding: {result['avg_funding']:.5f}")
-    for f in factors[:4]:
+    print(f"  [REGIME] OI Signal: {oi_signal['signal']} | Volatility: {atr_data['volatility']} | Alts: {result.get('altcoin_avg', 0):+.1f}%")
+    for f in factors[:6]:
         print(f"  [REGIME]   > {f}")
     
     return result
@@ -219,12 +481,12 @@ COMPETITION_END = datetime(2026, 2, 2, tzinfo=timezone.utc)
 STARTING_BALANCE = 1000.0
 FLOOR_BALANCE = 950.0  # Protect principal - stop trading below this
 
-# Trading Parameters - V3.1.4 UPDATES
+# Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 8  # REDUCED from 8 - less exposure, better management
+MAX_OPEN_POSITIONS = 5  # V3.1.16: Reduced for focused positions
 MAX_SINGLE_POSITION_PCT = 0.20  # V3.1.9: 20% per trade max (was 8%)
 MIN_SINGLE_POSITION_PCT = 0.10  # V3.1.9: 10% minimum (was 3%)
-MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.1.8: INCREASED from 0.65 - only take high confidence signals!
+MIN_CONFIDENCE_TO_TRADE = 0.60  # V3.1.16: Lowered from 0.85 - was blocking all trades!
 
 # ============================================================
 # V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
@@ -739,7 +1001,12 @@ Respond with JSON only:
 # ============================================================
 
 class FlowPersona:
-    """Analyzes order flow (taker ratio, depth)."""
+    """Analyzes order flow (taker ratio, depth).
+    
+    V3.1.17: CRITICAL FIX - Taker volume (ACTION) beats depth (INTENTION)
+    In bear markets, big bids are often spoofing/exit liquidity.
+    When taker ratio < 0.5, IGNORE bid depth completely.
+    """
     
     def __init__(self):
         self.name = "FLOW"
@@ -755,20 +1022,52 @@ class FlowPersona:
             
             signals = []
             
-            if depth["bid_strength"] > 1.3:
-                signals.append(("LONG", 0.6, "Strong bid depth"))
-            elif depth["ask_strength"] > 1.3:
-                signals.append(("SHORT", 0.6, "Strong ask depth"))
+            # V3.1.17: TAKER VOLUME IS KING
+            # Extreme taker selling (< 0.3) = IGNORE ALL BIDS, they are fake/exit liquidity
+            # Heavy taker selling (< 0.5) = Taker signal 3x weight of depth
             
-            if taker_ratio > 1.2:
-                signals.append(("LONG", 0.5, f"Taker buy pressure: {taker_ratio:.2f}"))
-            elif taker_ratio < 0.8:
-                signals.append(("SHORT", 0.5, f"Taker sell pressure: {taker_ratio:.2f}"))
+            extreme_selling = taker_ratio < 0.3
+            heavy_selling = taker_ratio < 0.5
+            extreme_buying = taker_ratio > 3.0
+            heavy_buying = taker_ratio > 2.0
             
+            # Log for debugging
+            print(f"  [FLOW] Taker ratio: {taker_ratio:.2f} | Extreme sell: {extreme_selling} | Heavy sell: {heavy_selling}")
+            
+            if extreme_selling:
+                # V3.1.17: MASSIVE SELL PRESSURE - ignore depth entirely
+                signals.append(("SHORT", 0.85, f"EXTREME taker selling: {taker_ratio:.2f}"))
+                # Don't even add depth signal - it's fake/spoofing
+            elif heavy_selling:
+                # V3.1.17: Heavy selling - taker wins over depth
+                signals.append(("SHORT", 0.70, f"Heavy taker selling: {taker_ratio:.2f}"))
+                # Depth signal at reduced weight
+                if depth["ask_strength"] > 1.3:
+                    signals.append(("SHORT", 0.3, "Ask depth confirms"))
+                # IGNORE bid depth when heavy selling
+            elif extreme_buying:
+                signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
+            elif heavy_buying:
+                signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
+                if depth["bid_strength"] > 1.3:
+                    signals.append(("LONG", 0.3, "Bid depth confirms"))
+            else:
+                # Normal range - use both taker and depth
+                if taker_ratio > 1.2:
+                    signals.append(("LONG", 0.5, f"Taker buy pressure: {taker_ratio:.2f}"))
+                elif taker_ratio < 0.8:
+                    signals.append(("SHORT", 0.5, f"Taker sell pressure: {taker_ratio:.2f}"))
+                
+                if depth["bid_strength"] > 1.3:
+                    signals.append(("LONG", 0.4, "Strong bid depth"))
+                elif depth["ask_strength"] > 1.3:
+                    signals.append(("SHORT", 0.4, "Strong ask depth"))
+            
+            # Funding rate (always include)
             if funding > 0.0005:
-                signals.append(("SHORT", 0.4, f"High funding: {funding:.4f}"))
+                signals.append(("SHORT", 0.3, f"High funding: {funding:.4f}"))
             elif funding < -0.0003:
-                signals.append(("LONG", 0.4, f"Negative funding: {funding:.4f}"))
+                signals.append(("LONG", 0.3, f"Negative funding: {funding:.4f}"))
             
             if not signals:
                 return {
@@ -781,18 +1080,18 @@ class FlowPersona:
             long_score = sum(s[1] for s in signals if s[0] == "LONG")
             short_score = sum(s[1] for s in signals if s[0] == "SHORT")
             
-            if long_score > short_score and long_score > 0.5:
+            if long_score > short_score and long_score > 0.4:
                 return {
                     "persona": self.name,
                     "signal": "LONG",
-                    "confidence": min(0.75, long_score),
+                    "confidence": min(0.85, long_score),
                     "reasoning": "; ".join(s[2] for s in signals if s[0] == "LONG"),
                 }
-            elif short_score > long_score and short_score > 0.5:
+            elif short_score > long_score and short_score > 0.4:
                 return {
                     "persona": self.name,
                     "signal": "SHORT",
-                    "confidence": min(0.75, short_score),
+                    "confidence": min(0.85, short_score),
                     "reasoning": "; ".join(s[2] for s in signals if s[0] == "SHORT"),
                 }
             
@@ -1109,7 +1408,11 @@ class JudgePersona:
         
         # V3.1.11: Get regime FIRST for dynamic weight adjustment
         regime = get_enhanced_market_regime()
-        is_bearish = regime["regime"] == "BEARISH" or regime.get("btc_24h", 0) < -0.5
+        
+        # V3.1.16: More sensitive bearish detection
+        # Even slight negative = "weak bearish" which favors SHORT signals
+        is_bearish = regime["regime"] == "BEARISH" or regime.get("btc_24h", 0) < -0.3
+        is_weak_bearish = regime.get("btc_24h", 0) < 0 and not is_bearish  # Between -0.3% and 0%
         is_bullish = regime["regime"] == "BULLISH" or regime.get("btc_24h", 0) > 1.0
         
         for vote in persona_votes:
@@ -1117,15 +1420,22 @@ class JudgePersona:
             signal = vote["signal"]
             confidence = vote["confidence"]
             
-            # V3.1.11: DYNAMIC WEIGHTS based on market regime
-            # In bearish markets: trust FLOW and TECHNICAL more, SENTIMENT less
-            # In bullish markets: normal weights
+            # V3.1.15: AGGRESSIVE BEARISH WEIGHTS - Whale/Sentiment "buying the dip" is toxic
+            # In bearish markets, FLOW shows actual selling, TECHNICAL shows momentum
             if is_bearish:
                 weights = {
-                    "WHALE": 1.0,      # Was 2.0 - accumulation can be "catching falling knife"
-                    "SENTIMENT": 1.5,  # V3.1.13 - Reality Check prompt now gives good SHORT signals
-                    "FLOW": 2.0,       # V3.1.13 - Still important but Sentiment now helps
-                    "TECHNICAL": 1.5   # V3.1.13 - Balanced with other signals
+                    "WHALE": 0.5,      # V3.1.15: Whales accumulating = catching falling knife
+                    "SENTIMENT": 1.5,  # V3.1.16: Sentiment SHORT signals are valid in downtrend
+                    "FLOW": 2.5,       # V3.1.15: TRUST actual order flow/selling pressure
+                    "TECHNICAL": 2.0   # V3.1.15: TRUST RSI/momentum in trends
+                }
+            elif is_weak_bearish:
+                # V3.1.16: Slight negative = still favor SHORT signals
+                weights = {
+                    "WHALE": 0.8,      # Reduce whale (accumulation noise)
+                    "SENTIMENT": 1.5,  # Trust sentiment SHORT signals
+                    "FLOW": 1.8,       # Trust flow
+                    "TECHNICAL": 1.8   # Trust technicals
                 }
             elif is_bullish:
                 weights = {
@@ -1165,10 +1475,10 @@ class JudgePersona:
         long_pct = long_score / total
         short_pct = short_score / total
         
-        # V3.1.4: STRICTER THRESHOLDS
+        # V3.1.16: LOWERED THRESHOLDS - previous settings blocked all trades
         num_votes = len(persona_votes)
-        threshold = 0.40 if num_votes <= 3 else 0.45  # INCREASED from 0.35/0.40
-        ratio_req = 1.2 if num_votes <= 3 else 1.25   # INCREASED from 1.1/1.15
+        threshold = 0.35 if num_votes <= 3 else 0.38  # LOWERED from 0.40/0.45
+        ratio_req = 1.1 if num_votes <= 3 else 1.15   # LOWERED from 1.2/1.25
         
         if long_pct > threshold and long_score > short_score * ratio_req:
             decision = "LONG"
@@ -1183,17 +1493,26 @@ class JudgePersona:
         else:
             return self._wait_decision(f"No consensus: LONG={long_pct:.0%}, SHORT={short_pct:.0%}", persona_votes, vote_summary)
         
-        # V3.1.7: TIER 3 MULTI-PERSONA AGREEMENT
+        # V3.1.16: Relaxed Tier 3 requirements (was blocking too many trades)
         if tier == 3:
-            if agreeing_votes < 2:
-                return self._wait_decision(f"Tier 3 requires 2+ agreeing votes (only {agreeing_votes} {decision})", persona_votes, vote_summary)
-            if opposing_votes >= 2:
+            # Only block if there's strong opposition (2+ at high confidence)
+            if opposing_votes >= 2 and agreeing_votes < 2:
                 return self._wait_decision(f"Tier 3 blocked: {opposing_votes} personas oppose {decision}", persona_votes, vote_summary)
         
-        # V3.1.7: Tier-specific confidence
+        # V3.1.15: Regime-aware confidence thresholds
+        # In bearish market, LOWER threshold for SHORTs (lean into trend)
+        # In bullish market, LOWER threshold for LONGs
         min_confidence = MIN_CONFIDENCE_TO_TRADE
         if tier == 3:
-            min_confidence = 0.70  # Higher for meme coins
+            min_confidence = 0.65  # V3.1.16: Lowered from 0.70
+        
+        # V3.1.16: LEAN INTO THE TREND
+        if (is_bearish or is_weak_bearish) and decision == "SHORT":
+            min_confidence = 0.50  # V3.1.16: Lower threshold - market wants to go down
+            print(f"  [JUDGE] BEARISH/WEAK regime: Lowered SHORT threshold to 50%")
+        elif is_bullish and decision == "LONG":
+            min_confidence = 0.50  # Lower threshold - market wants to go up
+            print(f"  [JUDGE] BULLISH regime: Lowered LONG threshold to 50%")
         
         if confidence < min_confidence:
             return self._wait_decision(f"Confidence too low: {confidence:.0%} (Tier {tier} needs {min_confidence:.0%})", persona_votes, vote_summary)
@@ -1210,6 +1529,10 @@ class JudgePersona:
             if regime.get("btc_24h", 0) < -0.5:
                 return self._wait_decision(f"BLOCKED: LONG while BTC dropping (24h: {regime.get('btc_24h', 0):+.1f}%)", persona_votes, vote_summary)
             
+            # V3.1.16: Block LONGs if OI shows short buildup (futures market truth)
+            if regime.get("oi_signal") == "BEARISH":
+                return self._wait_decision(f"BLOCKED: LONG rejected by OI sensor - {regime.get('oi_reason', 'short buildup')[:60]}", persona_votes, vote_summary)
+            
             # V3.1.10: Block new LONGs if existing LONGs bleeding
             if hasattr(self, '_open_positions') and self._open_positions:
                 total_long_loss = sum(abs(float(p.get('unrealized_pnl', 0))) for p in self._open_positions if p.get('side') == 'LONG' and float(p.get('unrealized_pnl', 0)) < 0)
@@ -1220,9 +1543,15 @@ class JudgePersona:
                 if total_short_gain > 20 and total_long_loss > 8:
                     return self._wait_decision(f"BLOCKED: SHORTs +${total_short_gain:.1f} outperforming LONGs -${total_long_loss:.1f}", persona_votes, vote_summary)
         
-        # Block SHORTs in strong bullish regime
-        if decision == "SHORT" and (regime["regime"] == "BULLISH" or regime.get("btc_24h", 0) > 0.5):
-            return self._wait_decision(f"BLOCKED: SHORT in strong BULLISH regime (24h: {regime.get('btc_24h', 0):+.1f}%)", persona_votes, vote_summary)
+        # V3.1.15: Only block SHORTs in STRONG bullish (>2% up)
+        # In bearish/neutral, allow SHORTs to profit from downtrend
+        if decision == "SHORT" and regime["regime"] == "BULLISH" and regime.get("btc_24h", 0) > 2.0:
+            return self._wait_decision(f"BLOCKED: SHORT in STRONG BULLISH regime (24h: {regime.get('btc_24h', 0):+.1f}%)", persona_votes, vote_summary)
+        
+        # V3.1.16: VOLATILITY-BASED POSITION SIZING
+        # In high volatility, reduce position size to survive whipsaws
+        volatility_multiplier = regime.get("size_multiplier", 1.0)
+        volatility_regime = regime.get("volatility", "NORMAL")
         
         # V3.1.9: Increased position sizing (was 7%)
         base_size = balance * 0.15
@@ -1235,6 +1564,12 @@ class JudgePersona:
             position_usdt = base_size * 1.0  # 15%
         else:
             position_usdt = base_size * 0.85  # 12.75%
+        
+        # V3.1.16: Apply volatility adjustment
+        position_usdt = position_usdt * volatility_multiplier
+        
+        if volatility_multiplier < 1.0:
+            print(f"  [JUDGE] Volatility adjustment: {volatility_regime} -> size x{volatility_multiplier:.1f}")
         
         position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
         position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
