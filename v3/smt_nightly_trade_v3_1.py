@@ -91,7 +91,8 @@ def get_fear_greed_index() -> dict:
 
 def get_aggregate_funding_rate() -> dict:
     """
-    Average funding rate across all pairs.
+    Average funding rate across all pairs using WEEX currentFundRate endpoint.
+    Response format: [{"symbol":"cmt_btcusdt","fundingRate":"0.00002559","collectCycle":480,"timestamp":...}]
     High positive (>0.05%) = overleveraged longs = expect dump
     Negative (<-0.03%) = overleveraged shorts = expect pump
     """
@@ -101,18 +102,19 @@ def get_aggregate_funding_rate() -> dict:
         count = 0
         
         for pair in ["btcusdt", "ethusdt", "solusdt", "adausdt"]:
-            url = f"{WEEX_BASE_URL}/capi/v2/public/funding_rate?symbol=cmt_{pair}"
+            url = f"{WEEX_BASE_URL}/capi/v2/market/currentFundRate?symbol=cmt_{pair}"
             r = requests.get(url, timeout=5)
             data = r.json()
-            if data.get("data"):
-                funding = float(data["data"].get("funding_rate", 0))
+            # API returns array: [{"fundingRate": "0.00002559", ...}]
+            if isinstance(data, list) and len(data) > 0:
+                funding = float(data[0].get("fundingRate", 0))
                 total_funding += funding
                 count += 1
         
         if count > 0:
             return {"avg_funding": total_funding / count, "pairs_checked": count, "error": None}
-    except:
-        pass
+    except Exception as e:
+        print(f"  [REGIME] Funding API error: {e}")
     return {"avg_funding": 0, "pairs_checked": 0, "error": "API failed"}
 
 
@@ -1106,9 +1108,9 @@ class JudgePersona:
         short_votes = 0
         
         # V3.1.11: Get regime FIRST for dynamic weight adjustment
-        regime = self._get_market_regime()
-        is_bearish = regime["regime"] == "BEARISH" or regime["change_24h"] < -0.5
-        is_bullish = regime["regime"] == "BULLISH" or regime["change_24h"] > 1.0
+        regime = get_enhanced_market_regime()
+        is_bearish = regime["regime"] == "BEARISH" or regime.get("btc_24h", 0) < -0.5
+        is_bullish = regime["regime"] == "BULLISH" or regime.get("btc_24h", 0) > 1.0
         
         for vote in persona_votes:
             persona = vote["persona"]
@@ -1203,10 +1205,10 @@ class JudgePersona:
         # Block LONGs in bearish regime (ANY negative 24h = bearish for safety)
         if decision == "LONG":
             if regime["regime"] == "BEARISH":
-                return self._wait_decision(f"BLOCKED: LONG in BEARISH regime (24h: {regime['change_24h']:+.1f}%)", persona_votes, vote_summary)
+                return self._wait_decision(f"BLOCKED: LONG in BEARISH regime (24h: {regime.get('btc_24h', 0):+.1f}%)", persona_votes, vote_summary)
             # V3.1.8: Also block if 24h is negative even if not "BEARISH" threshold
-            if regime["change_24h"] < -0.5:
-                return self._wait_decision(f"BLOCKED: LONG while BTC dropping (24h: {regime['change_24h']:+.1f}%)", persona_votes, vote_summary)
+            if regime.get("btc_24h", 0) < -0.5:
+                return self._wait_decision(f"BLOCKED: LONG while BTC dropping (24h: {regime.get('btc_24h', 0):+.1f}%)", persona_votes, vote_summary)
             
             # V3.1.10: Block new LONGs if existing LONGs bleeding
             if hasattr(self, '_open_positions') and self._open_positions:
@@ -1219,8 +1221,8 @@ class JudgePersona:
                     return self._wait_decision(f"BLOCKED: SHORTs +${total_short_gain:.1f} outperforming LONGs -${total_long_loss:.1f}", persona_votes, vote_summary)
         
         # Block SHORTs in strong bullish regime
-        if decision == "SHORT" and regime["regime"] == "BULLISH" and regime["change_24h"] > 3.0:
-            return self._wait_decision(f"BLOCKED: SHORT in strong BULLISH regime (24h: {regime['change_24h']:+.1f}%)", persona_votes, vote_summary)
+        if decision == "SHORT" and (regime["regime"] == "BULLISH" or regime.get("btc_24h", 0) > 0.5):
+            return self._wait_decision(f"BLOCKED: SHORT in strong BULLISH regime (24h: {regime.get('btc_24h', 0):+.1f}%)", persona_votes, vote_summary)
         
         # V3.1.9: Increased position sizing (was 7%)
         base_size = balance * 0.15
