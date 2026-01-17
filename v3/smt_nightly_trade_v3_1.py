@@ -1,7 +1,12 @@
 """
-SMT Nightly Trade V3.1.18 - DEAD CAT BOUNCE FILTER
+SMT Nightly Trade V3.1.20 - PREDATOR MODE
 =============================================================
-Enhanced trading with short-covering detection.
+No partial closes. Higher conviction trades only.
+
+V3.1.20 Changes (PREDATOR MODE):
+- DISABLED all RUNNER_CONFIG - no more partial closes, let winners run to full TP
+- MIN_CONFIDENCE_TO_TRADE: 60% -> 70% (match WeexAlphaHunter's 72%+ strategy)
+- Goal: Fewer trades, bigger wins, less fee bleed
 
 V3.1.18 Changes (DEAD CAT BOUNCE FIX):
 - FLOW PERSONA: Regime-aware taker cap
@@ -484,7 +489,7 @@ MAX_LEVERAGE = 20
 MAX_OPEN_POSITIONS = 5  # V3.1.16: Reduced for focused positions
 MAX_SINGLE_POSITION_PCT = 0.20  # V3.1.9: 20% per trade max (was 8%)
 MIN_SINGLE_POSITION_PCT = 0.10  # V3.1.9: 10% minimum (was 3%)
-MIN_CONFIDENCE_TO_TRADE = 0.60  # V3.1.16: Lowered from 0.85 - was blocking all trades!
+MIN_CONFIDENCE_TO_TRADE = 0.70  # V3.1.20 PREDATOR MODE: Higher conviction trades only
 
 # ============================================================
 # V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
@@ -2022,22 +2027,22 @@ COOLDOWN_HOURS = {
 
 RUNNER_CONFIG = {
     1: {  # BTC, ETH, BNB, LTC
-        "enabled": True,
-        "trigger_pct": 2.0,      # V3.1.18: Lowered from 2.5% for competition
-        "close_pct": 50,         # Close 50% of position
-        "move_sl_to_entry": True,  # Move SL to breakeven
-        "remove_tp": True,       # Let remaining 50% run
-    },
-    2: {  # SOL
-        "enabled": True,
-        "trigger_pct": 1.5,      # V3.1.18: Competition mode - lock profit early
+        "enabled": False,  # V3.1.20 PREDATOR MODE: No partial closes, let winners run to full TP
+        "trigger_pct": 2.0,
         "close_pct": 50,
         "move_sl_to_entry": True,
         "remove_tp": True,
     },
-    3: {  # DOGE, XRP, ADA - V3.1.18: AGGRESSIVE runners for competition
-        "enabled": True,
-        "trigger_pct": 1.5,      # V3.1.18: Lowered from 2% - lock profit at +1.5%
+    2: {  # SOL
+        "enabled": False,  # V3.1.20 PREDATOR MODE
+        "trigger_pct": 1.5,
+        "close_pct": 50,
+        "move_sl_to_entry": True,
+        "remove_tp": True,
+    },
+    3: {  # DOGE, XRP, ADA
+        "enabled": False,  # V3.1.20 PREDATOR MODE
+        "trigger_pct": 1.5,
         "close_pct": 50,
         "move_sl_to_entry": True,
         "remove_tp": True,

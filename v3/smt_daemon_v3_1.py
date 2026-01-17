@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.10
+SMT Trading Daemon V3.1.20 - PREDATOR MODE
 =========================
-Tier-based trading daemon with smart exits per tier.
-CRITICAL FIXES: Reduced positions, higher confidence, market trend filter.
+No partial closes. Higher conviction trades only.
+
+V3.1.20 Changes (PREDATOR MODE):
+- DISABLED all RUNNER_CONFIG - no more partial closes
+- MIN_CONFIDENCE_TO_TRADE: 60% -> 70%
+- Fewer trades, bigger wins, less fee bleed
 
 V3.1.9 Changes:
 - CRITICAL FIX: Fixed undefined btc_trend variable in regime filter
