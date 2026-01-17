@@ -1,24 +1,22 @@
 """
-SMT Nightly Trade V3.1.17 - TAKER VOLUME IS KING
+SMT Nightly Trade V3.1.18 - DEAD CAT BOUNCE FILTER
 =============================================================
-Enhanced trading with advanced flow analysis.
+Enhanced trading with short-covering detection.
 
-V3.1.17 Changes (CRITICAL FLOW FIX):
-- FLOW PERSONA OVERHAUL: Taker volume (ACTION) beats depth (INTENTION)
-  * Taker ratio < 0.3 = EXTREME SELL, ignore all bid depth (spoofing)
-  * Taker ratio < 0.5 = HEAVY SELL, taker 3x weight of depth
-  * Bid depth in bear market is often FAKE (spoofing/exit liquidity)
-- NEW: ALTCOIN MOMENTUM factor in regime detection
-  * If avg altcoin change < -4% = BEARISH regardless of BTC
-  * If avg altcoin change < -2% = score -2
-  * Catches "BTC flat but alts bleeding" scenarios
-- Regime now has 7 factors: BTC, 4h, F&G, Funding, OI, ATR, Altcoins
+V3.1.18 Changes (DEAD CAT BOUNCE FIX):
+- FLOW PERSONA: Regime-aware taker cap
+  * In BEARISH regime, extreme taker buying (>3.0) = NEUTRAL (short covering)
+  * In BEARISH regime, heavy taker buying (>2.0) = NEUTRAL (bounce?)
+  * Prevents bot from going LONG on dead cat bounces
+- JUDGE: Signal-aware SENTIMENT weighting
+  * In BEARISH: SENTIMENT SHORT gets 2.0x weight, SENTIMENT LONG gets 0.8x
+  * In BULLISH: SENTIMENT LONG gets 1.8x weight, SENTIMENT SHORT gets 0.8x
+  * Trust structural break analysis (support/resistance) over hopium
 
-V3.1.16 Changes:
-- Open Interest (OI) Sensor
-- ATR-based Volatility Position Sizing
-- Lower confidence threshold (85% -> 60%)
-- Add weak_bearish mode for slight negative BTC
+V3.1.17 Changes:
+- FLOW: Taker volume beats depth
+- Altcoin momentum factor in regime
+- Lower confidence thresholds
 
 V3.1.4 Changes (CRITICAL FIXES):
 - Reduced MAX_OPEN_POSITIONS from 8 to 5 (less exposure)
@@ -658,6 +656,33 @@ def get_balance() -> float:
         return SIMULATED_BALANCE
 
 
+def get_account_equity() -> dict:
+    """
+    V3.1.19: Get full account info including equity from WEEX
+    Returns: {"available": X, "equity": X, "unrealized_pnl": X}
+    """
+    try:
+        endpoint = "/capi/v2/account/assets"
+        r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=15)
+        data = r.json()
+        
+        if isinstance(data, list):
+            for asset in data:
+                if asset.get("coinName") == "USDT":
+                    return {
+                        "available": float(asset.get("available", 0)),
+                        "equity": float(asset.get("equity", 0)),
+                        "unrealized_pnl": float(asset.get("unrealizePnl", 0)),
+                        "frozen": float(asset.get("frozen", 0)),
+                    }
+        
+        # Fallback
+        return {"available": 0, "equity": 0, "unrealized_pnl": 0, "frozen": 0}
+    except Exception as e:
+        print(f"  [ERROR] get_account_equity: {e}")
+        return {"available": 0, "equity": 0, "unrealized_pnl": 0, "frozen": 0}
+
+
 def get_open_positions() -> List[Dict]:
     try:
         endpoint = "/capi/v2/account/position/allPosition"
@@ -1006,6 +1031,10 @@ class FlowPersona:
     V3.1.17: CRITICAL FIX - Taker volume (ACTION) beats depth (INTENTION)
     In bear markets, big bids are often spoofing/exit liquidity.
     When taker ratio < 0.5, IGNORE bid depth completely.
+    
+    V3.1.18: REGIME-AWARE TAKER CAP
+    In BEARISH regime, high taker buying is likely SHORT COVERING, not reversal.
+    Cap the LONG signal from extreme buying when regime is bearish.
     """
     
     def __init__(self):
@@ -1019,6 +1048,10 @@ class FlowPersona:
             depth = self._get_order_book_depth(symbol)
             taker_ratio = self._get_taker_ratio(symbol)
             funding = self._get_funding_rate(symbol)
+            
+            # V3.1.18: Get regime to cap taker buying in bearish conditions
+            regime = get_enhanced_market_regime()
+            is_bearish = regime.get("regime") == "BEARISH" or regime.get("btc_24h", 0) < -0.3
             
             signals = []
             
@@ -1046,11 +1079,22 @@ class FlowPersona:
                     signals.append(("SHORT", 0.3, "Ask depth confirms"))
                 # IGNORE bid depth when heavy selling
             elif extreme_buying:
-                signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
+                # V3.1.18: In BEARISH regime, extreme buying is likely SHORT COVERING
+                # Don't trust it as a reversal signal
+                if is_bearish:
+                    print(f"  [FLOW] BEARISH regime: Capping extreme buying signal (short covering likely)")
+                    signals.append(("NEUTRAL", 0.50, f"Taker buying {taker_ratio:.2f} but BEARISH regime (short cover)"))
+                else:
+                    signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
             elif heavy_buying:
-                signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
-                if depth["bid_strength"] > 1.3:
-                    signals.append(("LONG", 0.3, "Bid depth confirms"))
+                # V3.1.18: In BEARISH regime, cap heavy buying too
+                if is_bearish:
+                    print(f"  [FLOW] BEARISH regime: Reducing heavy buying signal")
+                    signals.append(("NEUTRAL", 0.40, f"Taker buying {taker_ratio:.2f} but BEARISH (bounce?)"))
+                else:
+                    signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
+                    if depth["bid_strength"] > 1.3:
+                        signals.append(("LONG", 0.3, "Bid depth confirms"))
             else:
                 # Normal range - use both taker and depth
                 if taker_ratio > 1.2:
@@ -1079,6 +1123,16 @@ class FlowPersona:
             
             long_score = sum(s[1] for s in signals if s[0] == "LONG")
             short_score = sum(s[1] for s in signals if s[0] == "SHORT")
+            neutral_score = sum(s[1] for s in signals if s[0] == "NEUTRAL")
+            
+            # V3.1.18: If neutral score is high (from capped buying), return neutral
+            if neutral_score > long_score and neutral_score > short_score:
+                return {
+                    "persona": self.name,
+                    "signal": "NEUTRAL",
+                    "confidence": 0.50,
+                    "reasoning": "; ".join(s[2] for s in signals if s[0] == "NEUTRAL"),
+                }
             
             if long_score > short_score and long_score > 0.4:
                 return {
@@ -1420,12 +1474,13 @@ class JudgePersona:
             signal = vote["signal"]
             confidence = vote["confidence"]
             
-            # V3.1.15: AGGRESSIVE BEARISH WEIGHTS - Whale/Sentiment "buying the dip" is toxic
-            # In bearish markets, FLOW shows actual selling, TECHNICAL shows momentum
+            # V3.1.18: SIGNAL-AWARE WEIGHTING
+            # In bearish markets, SENTIMENT SHORT signals are particularly valuable
+            # because they identify structural breaks (support failures)
             if is_bearish:
                 weights = {
                     "WHALE": 0.5,      # V3.1.15: Whales accumulating = catching falling knife
-                    "SENTIMENT": 1.5,  # V3.1.16: Sentiment SHORT signals are valid in downtrend
+                    "SENTIMENT": 2.0 if signal == "SHORT" else 0.8,  # V3.1.18: Trust SHORT sentiment, ignore LONG
                     "FLOW": 2.5,       # V3.1.15: TRUST actual order flow/selling pressure
                     "TECHNICAL": 2.0   # V3.1.15: TRUST RSI/momentum in trends
                 }
@@ -1433,14 +1488,14 @@ class JudgePersona:
                 # V3.1.16: Slight negative = still favor SHORT signals
                 weights = {
                     "WHALE": 0.8,      # Reduce whale (accumulation noise)
-                    "SENTIMENT": 1.5,  # Trust sentiment SHORT signals
+                    "SENTIMENT": 1.8 if signal == "SHORT" else 1.0,  # V3.1.18: Favor SHORT sentiment
                     "FLOW": 1.8,       # Trust flow
                     "TECHNICAL": 1.8   # Trust technicals
                 }
             elif is_bullish:
                 weights = {
                     "WHALE": 2.0,      # Whales lead the way up
-                    "SENTIMENT": 1.5,  # News drives FOMO
+                    "SENTIMENT": 1.8 if signal == "LONG" else 0.8,  # V3.1.18: Favor LONG sentiment
                     "FLOW": 1.0,       # Normal
                     "TECHNICAL": 1.2   # Normal
                 }
@@ -1553,6 +1608,20 @@ class JudgePersona:
         volatility_multiplier = regime.get("size_multiplier", 1.0)
         volatility_regime = regime.get("volatility", "NORMAL")
         
+        # V3.1.19: LOW BALANCE PROTECTION
+        # If balance is low, reduce position sizes to extend runway
+        LOW_BALANCE_THRESHOLD = 400.0
+        CRITICAL_BALANCE_THRESHOLD = 200.0
+        
+        if balance < CRITICAL_BALANCE_THRESHOLD:
+            balance_multiplier = 0.5  # Half size when critical
+            print(f"  [JUDGE] CRITICAL BALANCE (${balance:.0f}): Position size reduced to 50%")
+        elif balance < LOW_BALANCE_THRESHOLD:
+            balance_multiplier = 0.7  # 70% size when low
+            print(f"  [JUDGE] LOW BALANCE (${balance:.0f}): Position size reduced to 70%")
+        else:
+            balance_multiplier = 1.0
+        
         # V3.1.9: Increased position sizing (was 7%)
         base_size = balance * 0.15
         
@@ -1568,10 +1637,13 @@ class JudgePersona:
         # V3.1.16: Apply volatility adjustment
         position_usdt = position_usdt * volatility_multiplier
         
+        # V3.1.19: Apply balance protection multiplier
+        position_usdt = position_usdt * balance_multiplier
+        
         if volatility_multiplier < 1.0:
             print(f"  [JUDGE] Volatility adjustment: {volatility_regime} -> size x{volatility_multiplier:.1f}")
         
-        position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
+        position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT * balance_multiplier)
         position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
         
         # V3.1.4: TIER-BASED TP/SL
@@ -1951,21 +2023,21 @@ COOLDOWN_HOURS = {
 RUNNER_CONFIG = {
     1: {  # BTC, ETH, BNB, LTC
         "enabled": True,
-        "trigger_pct": 2.5,      # V3.1.9: Trigger at +2.5% (50% of 5% TP)
+        "trigger_pct": 2.0,      # V3.1.18: Lowered from 2.5% for competition
         "close_pct": 50,         # Close 50% of position
         "move_sl_to_entry": True,  # Move SL to breakeven
         "remove_tp": True,       # Let remaining 50% run
     },
     2: {  # SOL
         "enabled": True,
-        "trigger_pct": 2.0,      # V3.1.9: Trigger at +2% (50% of 4% TP)
+        "trigger_pct": 1.5,      # V3.1.18: Competition mode - lock profit early
         "close_pct": 50,
         "move_sl_to_entry": True,
         "remove_tp": True,
     },
-    3: {  # DOGE, XRP, ADA - V3.1.9: ENABLED runners
+    3: {  # DOGE, XRP, ADA - V3.1.18: AGGRESSIVE runners for competition
         "enabled": True,
-        "trigger_pct": 2.0,      # Trigger at +2% (50% of 4% TP)
+        "trigger_pct": 1.5,      # V3.1.18: Lowered from 2% - lock profit at +1.5%
         "close_pct": 50,
         "move_sl_to_entry": True,
         "remove_tp": True,
@@ -2152,6 +2224,7 @@ def execute_runner_partial_close(symbol: str, side: str, current_size: float,
     Execute Runner Logic: Close 50% of position, move SL to breakeven
     
     V3.1.5 FIX: Cancel old TP/SL orders and place new ones with remaining size
+    V3.1.18 FIX: If position too small to split, close 100% instead
     
     Returns: {"executed": True/False, "closed_size": X, "remaining_size": X, ...}
     """
@@ -2167,13 +2240,18 @@ def execute_runner_partial_close(symbol: str, side: str, current_size: float,
     close_size = round_size_to_step(current_size * close_pct, symbol)
     remaining_size = round_size_to_step(current_size - close_size, symbol)
     
+    # V3.1.18: If close_size is 0 but position exists, close 100% instead
     if close_size <= 0:
-        return {"executed": False, "reason": "Close size too small"}
+        close_size = round_size_to_step(current_size, symbol)
+        remaining_size = 0
+        if close_size <= 0:
+            return {"executed": False, "reason": "Position size too small to close"}
+        print(f"  [RUNNER] Position too small to split, closing 100% instead")
     
-    # Close 50% at market
+    # Close at market
     close_type = "3" if side == "LONG" else "4"  # Close long = 3, Close short = 4
     
-    print(f"  [RUNNER] Closing {close_pct*100:.0f}% of {symbol}: {close_size} units")
+    print(f"  [RUNNER] Closing {symbol}: {close_size} units (remaining: {remaining_size})")
     print(f"  [RUNNER] Entry: ${entry_price:.4f}, Current: ${current_price:.4f}")
     
     # Place partial close order (NO TP/SL on close order)

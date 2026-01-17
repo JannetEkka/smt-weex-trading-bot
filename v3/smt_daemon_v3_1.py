@@ -110,6 +110,7 @@ try:
         
         # WEEX API
         get_price, get_balance, get_open_positions,
+        get_account_equity,  # V3.1.19: For proper equity calculation
         upload_ai_log_to_weex,
         
         # Position management
@@ -225,21 +226,77 @@ def check_trading_signals():
     state.last_signal_check = datetime.now(timezone.utc)
     
     try:
-        balance = get_balance()
+        # V3.1.19: Get proper account info with equity from API
+        account_info = get_account_equity()
+        balance = account_info["available"]
+        equity = account_info["equity"]
+        total_upnl = account_info["unrealized_pnl"]
+        
         open_positions = get_open_positions()
         
-        # V3.1.14: Floor check removed - trade until the end
+        # V3.1.19: LIQUIDATION PROTECTION
+        # Safety thresholds based on ACTUAL equity from WEEX
+        CRITICAL_EQUITY = 150.0  # Below this = EMERGENCY MODE (close all)
+        LOW_EQUITY = 300.0       # Below this = NO NEW TRADES
+        MIN_AVAILABLE = 50.0     # Need at least $50 available margin for new trades
+        
+        emergency_mode = equity < CRITICAL_EQUITY and equity > 0
+        low_equity_mode = (equity < LOW_EQUITY and equity > 0) or balance < MIN_AVAILABLE
+        
+        if emergency_mode:
+            logger.warning(f"EMERGENCY MODE: Equity ${equity:.2f} < ${CRITICAL_EQUITY}")
+            logger.warning(f"Closing ALL positions to prevent liquidation!")
+            # Close all positions
+            for pos in open_positions:
+                symbol = pos.get('symbol', pos.get('contractId', ''))
+                side = pos.get('side', '')
+                size = float(pos.get('size', 0))
+                if size > 0:
+                    close_type = "3" if side == "LONG" else "4"
+                    try:
+                        place_order(symbol, close_type, size, tp_price=None, sl_price=None)
+                        logger.warning(f"  Emergency closed {symbol} {side}")
+                    except Exception as e:
+                        logger.error(f"  Failed to close {symbol}: {e}")
+            return
+        
+        if low_equity_mode:
+            logger.warning(f"LOW EQUITY MODE: Equity ${equity:.2f}, Available ${balance:.2f}")
+            logger.warning(f"NO NEW TRADES - monitoring existing positions only")
+        
         competition = get_competition_status(balance)
         
-        logger.info(f"Balance: {balance:.2f} USDT")
+        logger.info(f"Balance: {balance:.2f} USDT | Equity: {equity:.2f} USDT | UPnL: {total_upnl:+.2f}")
         logger.info(f"Open positions: {len(open_positions)}")
         logger.info(f"Days left: {competition['days_left']}")
         
-        available_slots = MAX_OPEN_POSITIONS - len(open_positions)
-        can_open_new = available_slots > 0
+        # V3.1.19: SMART SLOT SYSTEM
+        # Base slots + bonus for each "risk-free" position (runner triggered)
+        # A position is "risk-free" if its SL has been moved to entry (break-even)
+        risk_free_count = 0
+        for pos in open_positions:
+            # Check if this position has had runner triggered (tracked in state)
+            symbol = pos.get('symbol', pos.get('contractId', ''))
+            if tracker.active_trades.get(symbol, {}).get('runner_triggered', False):
+                risk_free_count += 1
         
-        if not can_open_new:
-            logger.info(f"Max positions ({len(open_positions)}/{MAX_OPEN_POSITIONS}) - Analysis only")
+        BASE_SLOTS = 5
+        MAX_BONUS_SLOTS = 2  # Can earn up to 2 extra slots from risk-free positions
+        bonus_slots = min(risk_free_count, MAX_BONUS_SLOTS)
+        effective_max_positions = BASE_SLOTS + bonus_slots
+        
+        available_slots = effective_max_positions - len(open_positions)
+        
+        # V3.1.19: Override slot availability if low equity
+        can_open_new = available_slots > 0 and not low_equity_mode
+        
+        if bonus_slots > 0:
+            logger.info(f"Smart Slots: {len(open_positions)}/{effective_max_positions} (base {BASE_SLOTS} + {bonus_slots} risk-free bonus)")
+        
+        if low_equity_mode:
+            logger.info(f"Low equity mode - no new trades allowed")
+        elif not can_open_new:
+            logger.info(f"Max positions ({len(open_positions)}/{effective_max_positions}) - Analysis only")
         
         ai_log = {
             "run_id": f"v3_1_7_{run_timestamp}",
@@ -435,9 +492,9 @@ def check_trading_signals():
             # Sort by confidence (highest first)
             trade_opportunities.sort(key=lambda x: x["decision"]["confidence"], reverse=True)
             
-            # Calculate available slots
+            # V3.1.19: Use smart slot calculation (same as above)
             current_positions = len(open_positions)
-            available_slots = MAX_OPEN_POSITIONS - current_positions
+            available_slots = effective_max_positions - current_positions
             
             trades_executed = 0
             
