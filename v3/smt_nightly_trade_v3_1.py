@@ -501,27 +501,27 @@ MIN_CONFIDENCE_TO_TRADE = 0.70  # V3.1.20 PREDATOR MODE: Higher conviction trade
 TIER_CONFIG = {
     1: {  # BTC, ETH, BNB, LTC - Stable, slow movers
         "name": "STABLE",
-        "tp_pct": 5.0,           # V3.1.9: Increased from 4% - let winners run
-        "sl_pct": 2.0,           # Stop loss at 2%
-        "max_hold_hours": 72,    # V3.1.9: Extended to 72h (3 days) like Team 2
-        "early_exit_hours": 12,  # V3.1.9: Check early exit after 12h
+        "tp_pct": 6.0,           # V3.1.20 PREDATOR: 6% TP (was 5%) - 120% margin gain at 20x
+        "sl_pct": 2.5,           # V3.1.20 PREDATOR: 2.5% SL (was 2%) - survive wicks
+        "max_hold_hours": 72,    # Keep 72h (3 days)
+        "early_exit_hours": 12,  # Check early exit after 12h
         "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 12h
         "force_exit_loss_pct": -4.0,  # Hard stop at -4%
     },
-    2: {  # SOL - Mid volatility
+    2: {  # SOL, LTC - Mid volatility
         "name": "MID",
-        "tp_pct": 4.0,           # V3.1.9: Increased from 3%
-        "sl_pct": 1.75,          # Stop loss at 1.75%
-        "max_hold_hours": 48,    # V3.1.9: Extended to 48h (2 days)
+        "tp_pct": 5.0,           # V3.1.20 PREDATOR: 5% TP (was 4%) - 100% margin gain at 20x
+        "sl_pct": 2.2,           # V3.1.20 PREDATOR: 2.2% SL (was 1.75%) - survive wicks
+        "max_hold_hours": 48,    # Keep 48h (2 days)
         "early_exit_hours": 6,   # Check early exit after 6h
         "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 6h
         "force_exit_loss_pct": -4.0,  # Hard stop at -4%
     },
-    3: {  # DOGE, XRP, ADA - V3.1.9: Extended hold for winners
+    3: {  # DOGE, XRP, ADA - Fast movers
         "name": "FAST",
-        "tp_pct": 4.0,           # V3.1.9: Increased from 3%
-        "sl_pct": 2.0,           # Keep at 2%
-        "max_hold_hours": 24,    # V3.1.9: Extended to 24h
+        "tp_pct": 4.0,           # V3.1.20 PREDATOR: Keep 4% - these move fast anyway
+        "sl_pct": 2.0,           # Keep 2% - tight for scalps
+        "max_hold_hours": 24,    # Keep 24h
         "early_exit_hours": 6,   # Check early exit after 6h
         "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 6h
         "force_exit_loss_pct": -4.0,  # Hard stop at -4%
@@ -1559,41 +1559,58 @@ class JudgePersona:
             if opposing_votes >= 2 and agreeing_votes < 2:
                 return self._wait_decision(f"Tier 3 blocked: {opposing_votes} personas oppose {decision}", persona_votes, vote_summary)
         
-        # V3.1.15: Regime-aware confidence thresholds
-        # In bearish market, LOWER threshold for SHORTs (lean into trend)
-        # In bullish market, LOWER threshold for LONGs
-        min_confidence = MIN_CONFIDENCE_TO_TRADE
-        if tier == 3:
-            min_confidence = 0.65  # V3.1.16: Lowered from 0.70
+        # V3.1.20 PREDATOR: Asymmetric confidence thresholds
+        # LONGs need higher confidence, SHORTs can lean into gravity
+        min_confidence = MIN_CONFIDENCE_TO_TRADE  # 70% base
         
-        # V3.1.16: LEAN INTO THE TREND
+        if decision == "LONG":
+            if regime["regime"] == "BULLISH":
+                min_confidence = 0.70  # BULLISH: 70% for LONGs
+                print(f"  [JUDGE] V3.1.20: BULLISH regime - LONG needs 70%")
+            elif regime["regime"] == "NEUTRAL":
+                min_confidence = 0.85  # NEUTRAL: 85% for LONGs (very strict)
+                print(f"  [JUDGE] V3.1.20: NEUTRAL regime - LONG needs 85%")
+            else:  # BEARISH
+                min_confidence = 1.0  # Impossible - will be blocked anyway
+        
+        if tier == 3:
+            min_confidence = max(min_confidence, 0.65)  # Tier 3 floor
+        
+        # V3.1.16: LEAN INTO THE TREND (only for SHORTs)
         if (is_bearish or is_weak_bearish) and decision == "SHORT":
-            min_confidence = 0.50  # V3.1.16: Lower threshold - market wants to go down
+            min_confidence = 0.50  # Lower threshold - market wants to go down
             print(f"  [JUDGE] BEARISH/WEAK regime: Lowered SHORT threshold to 50%")
-        elif is_bullish and decision == "LONG":
-            min_confidence = 0.50  # Lower threshold - market wants to go up
-            print(f"  [JUDGE] BULLISH regime: Lowered LONG threshold to 50%")
         
         if confidence < min_confidence:
             return self._wait_decision(f"Confidence too low: {confidence:.0%} (Tier {tier} needs {min_confidence:.0%})", persona_votes, vote_summary)
         
-        # V3.1.8: STRICTER MARKET TREND FILTER - Don't fight the trend!
-        # Now applies to ALL pairs including BTC
-        # V3.1.11: regime already fetched above for dynamic weights
-        
-        # Block LONGs in bearish regime (ANY negative 24h = bearish for safety)
+        # V3.1.20 PREDATOR: STRICT LONG FILTERS
         if decision == "LONG":
+            # 1. Block LONGs in BEARISH regime
             if regime["regime"] == "BEARISH":
                 return self._wait_decision(f"BLOCKED: LONG in BEARISH regime (24h: {regime.get('btc_24h', 0):+.1f}%)", persona_votes, vote_summary)
-            # V3.1.8: Also block if 24h is negative even if not "BEARISH" threshold
+            
+            # 2. V3.1.20: POSITIVE MOMENTUM REQUIREMENT
+            # In NEUTRAL, require BTC > +0.2% (actually climbing, not just "flat")
+            if regime["regime"] == "NEUTRAL" and regime.get("btc_24h", 0) < 0.2:
+                return self._wait_decision(f"BLOCKED: LONG in NEUTRAL needs BTC > +0.2% (current: {regime.get('btc_24h', 0):+.1f}%)", persona_votes, vote_summary)
+            
+            # 3. V3.1.20: WHALE VETO
+            # If WHALE persona voted SHORT, don't go LONG regardless of other signals
+            whale_vote = persona_votes.get("WHALE", {})
+            if whale_vote.get("signal") == "SHORT":
+                whale_conf = whale_vote.get("confidence", 0)
+                return self._wait_decision(f"BLOCKED: WHALE VETO - Whales voting SHORT ({whale_conf:.0%}), refusing LONG", persona_votes, vote_summary)
+            
+            # 4. Block if 24h is negative
             if regime.get("btc_24h", 0) < -0.5:
                 return self._wait_decision(f"BLOCKED: LONG while BTC dropping (24h: {regime.get('btc_24h', 0):+.1f}%)", persona_votes, vote_summary)
             
-            # V3.1.16: Block LONGs if OI shows short buildup (futures market truth)
+            # 5. Block LONGs if OI shows short buildup
             if regime.get("oi_signal") == "BEARISH":
                 return self._wait_decision(f"BLOCKED: LONG rejected by OI sensor - {regime.get('oi_reason', 'short buildup')[:60]}", persona_votes, vote_summary)
             
-            # V3.1.10: Block new LONGs if existing LONGs bleeding
+            # 6. Block new LONGs if existing LONGs bleeding
             if hasattr(self, '_open_positions') and self._open_positions:
                 total_long_loss = sum(abs(float(p.get('unrealized_pnl', 0))) for p in self._open_positions if p.get('side') == 'LONG' and float(p.get('unrealized_pnl', 0)) < 0)
                 total_short_gain = sum(float(p.get('unrealized_pnl', 0)) for p in self._open_positions if p.get('side') == 'SHORT' and float(p.get('unrealized_pnl', 0)) > 0)

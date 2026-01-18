@@ -667,9 +667,10 @@ def monitor_positions():
                     peak_pnl_pct = pnl_pct
                     tracker.save_state()
                 
-                # V3.1.9: TRAILING PROTECTION - if was winning but now losing significantly
-                # If peak was +2% or more but now negative, exit to protect gains
-                if peak_pnl_pct >= 2.0 and pnl_pct < 0:
+                # V3.1.20 PREDATOR: Trailing protection locks minimum profit
+                # Only exit if peak was +3.5% or more AND now below +1.5%
+                # This guarantees profit while allowing trades to breathe
+                if peak_pnl_pct >= 3.5 and pnl_pct < 1.5:
                     should_exit = True
                     exit_reason = f"trailing_protection (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
                     state.early_exits += 1
@@ -914,44 +915,56 @@ def regime_aware_exit_check():
             should_close = False
             reason = ""
             
+            # V3.1.20 PREDATOR: Check minimum hold time before regime exit
+            trade = tracker.get_active_trade(symbol)
+            hours_open = 0
+            if trade:
+                try:
+                    opened_at = datetime.fromisoformat(trade["opened_at"].replace("Z", "+00:00"))
+                    hours_open = (datetime.now(timezone.utc) - opened_at).total_seconds() / 3600
+                except:
+                    pass
+            
+            # V3.1.20 PREDATOR: No regime exits within first 4 hours - let trades breathe
+            if hours_open < 4:
+                continue
+            
             # V3.1.14: Calculate portfolio context
             total_long_loss = sum(abs(float(p.get('unrealized_pnl', 0))) for p in positions if p['side'] == 'LONG' and float(p.get('unrealized_pnl', 0)) < 0)
             total_long_gain = sum(float(p.get('unrealized_pnl', 0)) for p in positions if p['side'] == 'LONG' and float(p.get('unrealized_pnl', 0)) > 0)
             total_short_loss = sum(abs(float(p.get('unrealized_pnl', 0))) for p in positions if p['side'] == 'SHORT' and float(p.get('unrealized_pnl', 0)) < 0)
             total_short_gain = sum(float(p.get('unrealized_pnl', 0)) for p in positions if p['side'] == 'SHORT' and float(p.get('unrealized_pnl', 0)) > 0)
-            shorts_winning = total_short_gain > 20 and total_long_loss > 15
-            longs_winning = total_long_gain > 20 and total_short_loss > 15
+            shorts_winning = total_short_gain > 30 and total_long_loss > 20  # V3.1.20: Raised from 20/15
+            longs_winning = total_long_gain > 30 and total_short_loss > 20  # V3.1.20: Raised from 20/15
             
-            # LONG losing in BEARISH market
-            if regime["regime"] == "BEARISH" and side == "LONG" and pnl < -5:
+            # V3.1.20 PREDATOR: Only exit on SEVERE losses, let SL do its job
+            # LONG losing in BEARISH market - raised from $5 to $15
+            if regime["regime"] == "BEARISH" and side == "LONG" and pnl < -15:
                 should_close = True
                 reason = f"LONG losing ${abs(pnl):.1f} in BEARISH market (24h: {regime['change_24h']:+.1f}%)"
             
-            # SHORT losing in BULLISH market
-            elif regime["regime"] == "BULLISH" and side == "SHORT" and pnl < -5:
+            # SHORT losing in BULLISH market - raised from $5 to $15
+            elif regime["regime"] == "BULLISH" and side == "SHORT" and pnl < -15:
                 should_close = True
                 reason = f"SHORT losing ${abs(pnl):.1f} in BULLISH market (24h: {regime['change_24h']:+.1f}%)"
             
-            # V3.1.9: Even in NEUTRAL, cut LONGs losing >$8 if BTC is slightly negative
-            elif regime["regime"] == "NEUTRAL" and side == "LONG" and pnl < -8 and regime["change_24h"] < 0:
-                should_close = True
-                reason = f"LONG losing ${abs(pnl):.1f} while BTC weak (24h: {regime['change_24h']:+.1f}%)"
+            # V3.1.20 PREDATOR: Removed NEUTRAL weak market exit - trust the SL
             
-            # V3.1.13: HARD STOP - Any position losing > $10 gets cut
-            elif side == "LONG" and pnl < -10:
+            # V3.1.20 PREDATOR: HARD STOP raised to $30 - let SL work
+            elif side == "LONG" and pnl < -30:
                 should_close = True
                 reason = f"HARD STOP: LONG losing ${abs(pnl):.1f}"
             
-            elif side == "SHORT" and pnl < -10:
+            elif side == "SHORT" and pnl < -30:
                 should_close = True
                 reason = f"HARD STOP: SHORT losing ${abs(pnl):.1f}"
             
-            # V3.1.13: Cut losing positions > $6 when opposite side winning
-            elif side == "LONG" and pnl < -6 and shorts_winning:
+            # V3.1.20 PREDATOR: Raised from $6 to $12 when opposite winning
+            elif side == "LONG" and pnl < -12 and shorts_winning:
                 should_close = True
                 reason = f"LONG -${abs(pnl):.1f} while SHORTs winning"
             
-            elif side == "SHORT" and pnl < -6 and longs_winning:
+            elif side == "SHORT" and pnl < -12 and longs_winning:
                 should_close = True
                 reason = f"SHORT -${abs(pnl):.1f} while LONGs winning"
             
