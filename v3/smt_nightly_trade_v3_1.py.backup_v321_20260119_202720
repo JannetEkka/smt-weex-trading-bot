@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.1.21 - BEAR HUNTER + BULL SYMMETRY MODE
+SMT Nightly Trade V3.1.21 - BEAR HUNTER MODE
 =============================================================
 No partial closes. Higher conviction trades only.
 
@@ -363,52 +363,6 @@ def get_btc_atr() -> dict:
 
 
 
-
-
-def detect_whale_absorption(whale_vote: dict, flow_vote: dict, regime: dict) -> dict:
-    """
-    V3.1.21: Detect whale absorption - whales buying while retail panic sells.
-    
-    BULLISH ABSORPTION: 
-    - Extreme selling pressure (taker ratio < 0.5)
-    - But whale flow is POSITIVE (accumulating)
-    - Price hasn't broken 4h support
-    = Whales absorbing the dip, prepare for reversal
-    """
-    result = {"absorption_detected": False, "type": "NONE", "boost": 1.0}
-    
-    try:
-        whale_signal = whale_vote.get("signal", "NEUTRAL")
-        whale_conf = whale_vote.get("confidence", 0)
-        whale_data = whale_vote.get("data", {})
-        net_flow = whale_data.get("net_flow", 0)
-        
-        flow_signal = flow_vote.get("signal", "NEUTRAL")
-        
-        # BULLISH ABSORPTION: Extreme selling but whales accumulating
-        if flow_signal == "SHORT" and whale_signal == "LONG" and net_flow > 200:
-            result = {
-                "absorption_detected": True, 
-                "type": "BULLISH_ABSORPTION",
-                "boost": 1.5,
-                "reason": f"Whales absorbing sell-off (+{net_flow:.0f} ETH)"
-            }
-            print(f"  [ABSORPTION] BULLISH: Retail panic selling but whales +{net_flow:.0f} ETH")
-        
-        # BEARISH DISTRIBUTION: Extreme buying but whales distributing
-        elif flow_signal == "LONG" and whale_signal == "SHORT" and net_flow < -200:
-            result = {
-                "absorption_detected": True,
-                "type": "BEARISH_DISTRIBUTION",
-                "boost": 1.5,
-                "reason": f"Whales distributing into rally ({net_flow:.0f} ETH)"
-            }
-            print(f"  [DISTRIBUTION] BEARISH: Retail FOMO but whales {net_flow:.0f} ETH")
-    except:
-        pass
-    
-    return result
-
 def detect_regime_shift() -> dict:
     """V3.1.21: Detect 4h trend flips for early entry"""
     result = {"shift_detected": False, "shift_type": "NONE", "confidence_adjustment": 0}
@@ -430,26 +384,6 @@ def detect_regime_shift() -> dict:
                 print(f"  [REGIME SHIFT] BULLISH: {prev_4h:.1f}% -> +{curr_4h:.1f}%")
     except Exception as e:
         print(f"  [REGIME SHIFT] Error: {e}")
-    return result
-
-
-
-def get_support_proximity(symbol="cmt_btcusdt") -> dict:
-    """V3.1.21: Check if near 24h low (support) - BULLISH equivalent of resistance"""
-    result = {"near_support": False, "distance_pct": 0, "low_24h": 0}
-    try:
-        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1h&limit=25"
-        r = requests.get(url, timeout=10)
-        candles = r.json()
-        if isinstance(candles, list) and len(candles) >= 24:
-            lows = [float(c[3]) for c in candles[:24]]
-            low_24h = min(lows)
-            current = float(candles[0][4])
-            dist = ((current - low_24h) / low_24h) * 100
-            result = {"near_support": dist < 1.0, "distance_pct": round(dist, 2), "low_24h": low_24h, "current_price": current}
-            if result["near_support"]:
-                print(f"  [SUPPORT] Near 24h low: ${current:.0f} vs ${low_24h:.0f} (+{dist:.1f}%)")
-    except: pass
     return result
 
 def get_resistance_proximity(symbol="cmt_btcusdt") -> dict:
@@ -1637,12 +1571,11 @@ class JudgePersona:
                     "TECHNICAL": 1.8   # Trust technicals
                 }
             elif is_bullish:
-                # V3.1.21: SYMMETRIC BULLISH WEIGHTS (mirror of bearish)
                 weights = {
-                    "WHALE": 2.5,      # V3.1.21: Whales lead the way up - TRUST THEM
-                    "SENTIMENT": 2.0 if signal == "LONG" else 0.8,  # V3.1.21: Trust LONG sentiment (symmetric)
-                    "FLOW": 2.0,       # V3.1.21: Trust buying pressure in bull
-                    "TECHNICAL": 1.5   # V3.1.21: Trust momentum
+                    "WHALE": 2.0,      # Whales lead the way up
+                    "SENTIMENT": 1.8 if signal == "LONG" else 0.8,  # V3.1.18: Favor LONG sentiment
+                    "FLOW": 1.0,       # Normal
+                    "TECHNICAL": 1.2   # Normal
                 }
             else:  # NEUTRAL
                 weights = {
@@ -1705,8 +1638,7 @@ class JudgePersona:
         
         if decision == "LONG":
             if regime["regime"] == "BULLISH":
-                min_confidence = 0.50  # V3.1.21: SYMMETRIC - 50% for LONGs in BULLISH (like SHORTs in BEARISH)
-                print(f"  [JUDGE] V3.1.21: BULLISH regime - LONG threshold lowered to 50%")
+                min_confidence = 0.70  # BULLISH: 70% for LONGs
                 print(f"  [JUDGE] V3.1.20: BULLISH regime - LONG needs 70%")
             elif regime["regime"] == "NEUTRAL":
                 min_confidence = 0.85  # NEUTRAL: 85% for LONGs (very strict)
@@ -1724,22 +1656,6 @@ class JudgePersona:
         
         if confidence < min_confidence:
             return self._wait_decision(f"Confidence too low: {confidence:.0%} (Tier {tier} needs {min_confidence:.0%})", persona_votes, vote_summary)
-        
-        # V3.1.21: RSI OVERBOUGHT FILTER (symmetric with oversold SHORT filter)
-        rsi_value = 50
-        for vote in persona_votes:
-            if vote.get("persona") == "TECHNICAL":
-                # Extract RSI from reasoning
-                reasoning = vote.get("reasoning", "")
-                if "RSI" in reasoning:
-                    import re
-                    match = re.search(r'RSI[:\s]+(\d+\.?\d*)', reasoning)
-                    if match:
-                        rsi_value = float(match.group(1))
-                break
-        
-        if decision == "LONG" and rsi_value > 75:
-            return self._wait_decision(f"BLOCKED: RSI {rsi_value:.0f} > 75 (overbought) - no LONGs", persona_votes, vote_summary)
         
         # V3.1.20 PREDATOR: STRICT LONG FILTERS
         if decision == "LONG":
@@ -1777,16 +1693,6 @@ class JudgePersona:
                 if total_short_gain > 20 and total_long_loss > 8:
                     return self._wait_decision(f"BLOCKED: SHORTs +${total_short_gain:.1f} outperforming LONGs -${total_long_loss:.1f}", persona_votes, vote_summary)
         
-        # V3.1.21: ABSORPTION - Cap extreme selling in BULLISH (symmetric with buying cap in BEARISH)
-        if decision == "SHORT" and regime["regime"] == "BULLISH":
-            # Check for whale absorption
-            whale_vote = next((v for v in persona_votes if v.get("persona") == "WHALE"), {})
-            flow_vote = next((v for v in persona_votes if v.get("persona") == "FLOW"), {})
-            absorption = detect_whale_absorption(whale_vote, flow_vote, regime)
-            
-            if absorption.get("type") == "BULLISH_ABSORPTION":
-                return self._wait_decision(f"BLOCKED: {absorption.get('reason', 'Whale absorption detected')}", persona_votes, vote_summary)
-        
         # V3.1.15: Only block SHORTs in STRONG bullish (>2% up)
         # In bearish/neutral, allow SHORTs to profit from downtrend
         if decision == "SHORT" and regime["regime"] == "BULLISH" and regime.get("btc_24h", 0) > 2.0:
@@ -1810,11 +1716,6 @@ class JudgePersona:
             print(f"  [JUDGE] LOW BALANCE (${balance:.0f}): Position size reduced to 70%")
         else:
             balance_multiplier = 1.0
-        
-        # V3.1.21: Support proximity boost for LONGs (symmetric with resistance for SHORTs)
-        symbol = TRADING_PAIRS.get(pair, {}).get("symbol", f"cmt_{pair.lower()}usdt")
-        support = get_support_proximity(symbol)
-        resistance = get_resistance_proximity(symbol)
         
         # V3.1.9: Increased position sizing (was 7%)
         base_size = balance * 0.15
