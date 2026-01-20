@@ -63,134 +63,6 @@ import numpy as np
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
 from collections import deque
-# ============================================================
-# V3.1.21: API CACHE SYSTEM (avoid rate limits)
-# ============================================================
-import time as cache_time_module
-
-class APICache:
-    """Simple TTL cache for API responses"""
-    def __init__(self):
-        self._cache = {}
-    
-    def get(self, key, ttl_seconds=900):
-        """Get cached value if not expired"""
-        if key in self._cache:
-            timestamp, value = self._cache[key]
-            if cache_time_module.time() - timestamp < ttl_seconds:
-                return value
-        return None
-    
-    def set(self, key, value):
-        """Cache a value with current timestamp"""
-        self._cache[key] = (cache_time_module.time(), value)
-    
-    def clear_expired(self, ttl_seconds=900):
-        """Remove expired entries"""
-        now = cache_time_module.time()
-        self._cache = {k: v for k, v in self._cache.items() if now - v[0] < ttl_seconds}
-
-# Global caches
-SENTIMENT_CACHE = APICache()
-REGIME_CACHE = APICache()
-WHALE_CACHE = APICache()
-
-# Rate limit tracking
-LAST_GEMINI_CALL = 0
-GEMINI_CALL_DELAY = 5  # seconds between calls
-
-def rate_limit_gemini():
-    """Enforce delay between Gemini API calls"""
-    global LAST_GEMINI_CALL
-    now = cache_time_module.time()
-    elapsed = now - LAST_GEMINI_CALL
-    if elapsed < GEMINI_CALL_DELAY:
-        sleep_time = GEMINI_CALL_DELAY - elapsed
-        print(f"  [RATE LIMIT] Waiting {sleep_time:.1f}s before Gemini call...")
-        cache_time_module.sleep(sleep_time)
-    LAST_GEMINI_CALL = cache_time_module.time()
-
-
-# V3.1.21: Sentiment cache to avoid rate limits
-SENTIMENT_CACHE = {}
-# ============================================================
-# V3.1.22: REGIME STABILITY SYSTEM  
-# ============================================================
-REGIME_STATE = {
-    "current_regime": "NEUTRAL",
-    "regime_locked_until": 0,
-    "regime_score_history": [],
-    "trading_paused_until": 0,
-}
-
-def check_flash_crash() -> dict:
-    result = {"flash_crash": False, "drop_pct": 0, "paused_until": 0}
-    try:
-        now = time.time()
-        if REGIME_STATE.get("trading_paused_until", 0) > now:
-            remaining = (REGIME_STATE["trading_paused_until"] - now) / 60
-            result["flash_crash"] = True
-            result["paused_until"] = REGIME_STATE["trading_paused_until"]
-            print(f"  [FLASH CRASH] Paused for {remaining:.0f}m")
-            return result
-        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol=cmt_btcusdt&granularity=1m&limit=16"
-        r = requests.get(url, timeout=10)
-        candles = r.json()
-        if isinstance(candles, list) and len(candles) >= 15:
-            current = float(candles[0][4])
-            ago_15m = float(candles[14][4])
-            change = ((current - ago_15m) / ago_15m) * 100
-            result["drop_pct"] = change
-            if change < -2.5:
-                REGIME_STATE["trading_paused_until"] = now + 14400
-                result["flash_crash"] = True
-                result["paused_until"] = REGIME_STATE["trading_paused_until"]
-                print(f"  [FLASH CRASH] DETECTED! {change:+.1f}% in 15min - PAUSED 4h")
-    except Exception as e:
-        print(f"  [FLASH CRASH] Error: {e}")
-    return result
-
-def apply_regime_hysteresis(score: int, raw_regime: str) -> str:
-    current = REGIME_STATE.get("current_regime", "NEUTRAL")
-    history = REGIME_STATE.get("regime_score_history", [])
-    history.append(score)
-    if len(history) > 3: history = history[-3:]
-    REGIME_STATE["regime_score_history"] = history
-    now = time.time()
-    if REGIME_STATE.get("regime_locked_until", 0) > now:
-        remaining = (REGIME_STATE["regime_locked_until"] - now) / 60
-        print(f"  [HYSTERESIS] Locked to {current} for {remaining:.0f}m")
-        return current
-    if len(history) >= 2:
-        avg = sum(history[-2:]) / 2
-        if current == "BEARISH" and avg >= 1:
-            new_r = "NEUTRAL" if avg < 2 else "BULLISH"
-            REGIME_STATE["current_regime"] = new_r
-            REGIME_STATE["regime_locked_until"] = now + 1800
-            print(f"  [HYSTERESIS] BEARISH -> {new_r}")
-            return new_r
-        if current == "BULLISH" and avg <= -1:
-            new_r = "NEUTRAL" if avg > -2 else "BEARISH"
-            REGIME_STATE["current_regime"] = new_r
-            REGIME_STATE["regime_locked_until"] = now + 1800
-            print(f"  [HYSTERESIS] BULLISH -> {new_r}")
-            return new_r
-        if current == "NEUTRAL":
-            if all(s <= -1 for s in history[-2:]):
-                REGIME_STATE["current_regime"] = "BEARISH"
-                REGIME_STATE["regime_locked_until"] = now + 1800
-                return "BEARISH"
-            if all(s >= 1 for s in history[-2:]):
-                REGIME_STATE["current_regime"] = "BULLISH"
-                REGIME_STATE["regime_locked_until"] = now + 1800
-                return "BULLISH"
-        return current
-    REGIME_STATE["current_regime"] = raw_regime
-    return raw_regime
-
-
-SENTIMENT_CACHE_TTL = 900  # 15 minutes
-
 # V3.1.21: Hot-reload settings
 try:
     from hot_reload import get_confidence_threshold, should_pause, should_emergency_exit, is_direction_enabled, get_tp_sl_multipliers
@@ -601,15 +473,6 @@ def get_resistance_proximity(symbol="cmt_btcusdt") -> dict:
 def get_enhanced_market_regime() -> dict:
     """
     V3.1.12: Multi-factor regime detection
-    V3.1.21: Cached for 5 minutes to reduce API calls
-    """
-    # Check cache first
-    cached = REGIME_CACHE.get("regime", 300)  # 5 min cache
-    if cached:
-        return cached
-    
-    """
-    V3.1.12: Multi-factor regime detection
     
     Factors (with weights):
     1. BTC 24h change: -3 to +3 (primary driver)
@@ -751,8 +614,6 @@ def get_enhanced_market_regime() -> dict:
     for f in factors[:6]:
         print(f"  [REGIME]   > {f}")
     
-    # V3.1.21: Cache the result
-    REGIME_CACHE.set("regime", result)
     return result
 
 
