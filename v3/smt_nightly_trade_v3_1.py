@@ -1906,7 +1906,7 @@ class JudgePersona:
             
             # 3. V3.1.20: WHALE VETO
             # If WHALE persona voted SHORT, don't go LONG regardless of other signals
-            whale_vote = persona_votes.get("WHALE", {})
+            whale_vote = next((v for v in persona_votes if v.get("persona") == "WHALE"), {})
             if whale_vote.get("signal") == "SHORT":
                 whale_conf = whale_vote.get("confidence", 0)
                 return self._wait_decision(f"BLOCKED: WHALE VETO - Whales voting SHORT ({whale_conf:.0%}), refusing LONG", persona_votes, vote_summary)
