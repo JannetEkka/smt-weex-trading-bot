@@ -1091,6 +1091,8 @@ class SentimentPersona:
     def __init__(self):
         self.name = "SENTIMENT"
         self.weight = 1.5  # V3.1.7: Reduced from 2.0
+        self.cache = {}  # V3.1.22: Gemini cache
+        self.cache_ttl = 1800  # 30 min
     
     def analyze(self, pair: str, pair_info: Dict, competition_status: Dict) -> Dict:
         try:
