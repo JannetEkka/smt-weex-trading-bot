@@ -1095,6 +1095,12 @@ class SentimentPersona:
         self.cache_ttl = 1800  # 30 min
     
     def analyze(self, pair: str, pair_info: Dict, competition_status: Dict) -> Dict:
+        # V3.1.22: Check cache first
+        cache_key = f"{pair}_{int(time.time() // self.cache_ttl)}"
+        if hasattr(self, 'cache') and cache_key in self.cache:
+            print(f'  [SENTIMENT] Cache hit for {pair}')
+            return self.cache[cache_key]
+        
         try:
             from google import genai
             from google.genai.types import GenerateContentConfig, GoogleSearch, Tool
@@ -1149,7 +1155,7 @@ Respond with JSON only:
             
             signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
             
-            return {
+            result = {
                 "persona": self.name,
                 "signal": signal,
                 "confidence": data.get("confidence", 0.5),
@@ -1157,6 +1163,11 @@ Respond with JSON only:
                 "sentiment": data["sentiment"],
                 "market_context": market_context[:800],
             }
+            # V3.1.22: Cache result
+            if hasattr(self, 'cache'):
+                self.cache[cache_key] = result
+                print(f'  [SENTIMENT] Cached {pair} for 30min')
+            return result
             
         except Exception as e:
             return {
