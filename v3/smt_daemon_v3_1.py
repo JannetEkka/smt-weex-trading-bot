@@ -667,16 +667,31 @@ def monitor_positions():
                     peak_pnl_pct = pnl_pct
                     tracker.save_state()
                 
-                # V3.1.20 PREDATOR: Trailing protection locks minimum profit
-                # Only exit if peak was +3.5% or more AND now below +1.5%
-                # This guarantees profit while allowing trades to breathe
-                if peak_pnl_pct >= 3.5 and pnl_pct < 1.5:
-                    should_exit = True
-                    exit_reason = f"trailing_protection (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
-                    state.early_exits += 1
+                # V3.1.22 TIER-AWARE PROFIT GUARD
+                # Tier 3 (DOGE, XRP, ADA): Tighter - they reverse fast
+                # Tier 1/2 (BTC, ETH, SOL): More room to breathe
+                if tier == 3:
+                    # Tier 3: Exit if peak >= 2% and drops to 0.5%
+                    if peak_pnl_pct >= 2.0 and pnl_pct < 0.5:
+                        should_exit = True
+                        exit_reason = f"T3_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
+                        state.early_exits += 1
+                elif tier == 2:
+                    # Tier 2: Exit if peak >= 2.5% and drops to 1.0%
+                    if peak_pnl_pct >= 2.5 and pnl_pct < 1.0:
+                        should_exit = True
+                        exit_reason = f"T2_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
+                        state.early_exits += 1
+                else:
+                    # Tier 1: Exit if peak >= 3.0% and drops to 1.5%
+                    if peak_pnl_pct >= 3.0 and pnl_pct < 1.5:
+                        should_exit = True
+                        exit_reason = f"T1_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
+                        state.early_exits += 1
                 
+
                 # 1. Max hold time exceeded (tier-specific)
-                elif hours_open >= max_hold:
+                if hours_open >= max_hold:
                     should_exit = True
                     exit_reason = f"max_hold_T{tier} ({hours_open:.1f}h > {max_hold}h)"
                 
