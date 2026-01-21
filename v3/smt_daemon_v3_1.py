@@ -616,7 +616,6 @@ def monitor_positions():
                 early_exit_loss = tier_config["early_exit_loss_pct"]
                 force_exit_loss = tier_config["force_exit_loss_pct"]
                 
-                logger.debug(f"  {symbol} (T{tier}): {hours_open:.1f}h, PnL: {pnl_pct:+.2f}%")
                 
                 # ===== V3.1.2: RUNNER LOGIC (check FIRST before exits) =====
                 runner_config = get_runner_config(tier)
@@ -667,6 +666,7 @@ def monitor_positions():
                     peak_pnl_pct = pnl_pct
                     tracker.save_state()
                 
+                logger.info(f"  [MONITOR] {symbol} T{tier}: {pnl_pct:+.2f}% (peak: {peak_pnl_pct:.2f}%)")
                 # V3.1.22 TIER-AWARE PROFIT GUARD
                 # Tier 3 (DOGE, XRP, ADA): Tighter - they reverse fast
                 # Tier 1/2 (BTC, ETH, SOL): More room to breathe
