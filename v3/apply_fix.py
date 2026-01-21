@@ -1,0 +1,199 @@
+import re
+
+# Read the file
+with open('smt_nightly_trade_v3_1.py', 'r') as f:
+    content = f.read()
+
+# 1. Add random import if not present
+if 'import random' not in content:
+    content = content.replace('import numpy as np', 'import numpy as np\nimport random')
+
+# 2. Add rate limiter globals after imports (before first function)
+rate_limiter_code = '''
+# ============================================================
+# V3.1.21: GEMINI API RATE LIMITER
+# ============================================================
+_last_gemini_call = 0
+_gemini_call_interval = 2.0  # seconds between calls
+
+def _rate_limit_gemini():
+    """Ensure minimum interval between Gemini API calls"""
+    global _last_gemini_call
+    import time
+    now = time.time()
+    elapsed = now - _last_gemini_call
+    if elapsed < _gemini_call_interval:
+        sleep_time = _gemini_call_interval - elapsed
+        print(f"  [SENTIMENT] Rate limiting: sleeping {sleep_time:.1f}s")
+        time.sleep(sleep_time)
+    _last_gemini_call = time.time()
+
+def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float = 60.0) -> float:
+    """Calculate backoff delay with jitter"""
+    import random
+    delay = min(base_delay * (2 ** attempt), max_delay)
+    jitter = random.uniform(0, delay * 0.1)
+    return delay + jitter
+
+'''
+
+# Find where to insert (before TIER_CONFIG or first class)
+if '_last_gemini_call' not in content:
+    # Insert before TIER_CONFIG
+    content = content.replace('TIER_CONFIG = {', rate_limiter_code + 'TIER_CONFIG = {')
+
+# 3. Replace SentimentPersona class
+new_sentiment_class = '''
+# ============================================================
+# PERSONA 2: MARKET SENTIMENT (Gemini) - V3.1.21 RATE LIMIT FIX
+# ============================================================
+
+class SentimentPersona:
+    """Uses Gemini with Google Search grounding for market sentiment.
+    
+    V3.1.21: RATE LIMIT FIX
+    - Exponential backoff on 429 errors
+    - Rate limiting between API calls  
+    - Combined grounding + analysis into single call (50% fewer API calls!)
+    - 5-minute cache per pair
+    """
+    
+    def __init__(self):
+        self.name = "SENTIMENT"
+        self.weight = 1.5
+        self._cache = {}  # {pair: (timestamp, result)}
+        self._cache_ttl = 300  # 5 minutes
+    
+    def analyze(self, pair: str, pair_info: Dict, competition_status: Dict) -> Dict:
+        import time
+        
+        # Check cache first
+        cached = self._get_cached(pair)
+        if cached:
+            print(f"  [SENTIMENT] Using cached result for {pair}")
+            return cached
+        
+        # Rate limit before making call
+        _rate_limit_gemini()
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                result = self._analyze_with_retry(pair, pair_info, competition_status)
+                self._set_cache(pair, result)
+                return result
+                
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                if "429" in error_str or "resource exhausted" in error_str or "quota" in error_str:
+                    if attempt < max_retries - 1:
+                        backoff = _exponential_backoff(attempt)
+                        print(f"  [SENTIMENT] 429 error, retrying in {backoff:.1f}s (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(backoff)
+                        continue
+                    else:
+                        print(f"  [SENTIMENT] Rate limit exceeded after {max_retries} retries")
+                        return self._fallback_result(pair, f"Rate limited after {max_retries} retries")
+                else:
+                    print(f"  [SENTIMENT] Error: {e}")
+                    return self._fallback_result(pair, str(e))
+        
+        return self._fallback_result(pair, "Max retries exceeded")
+    
+    def _get_cached(self, pair: str):
+        """Get cached result if still valid"""
+        import time
+        if pair in self._cache:
+            timestamp, result = self._cache[pair]
+            if time.time() - timestamp < self._cache_ttl:
+                return result
+            else:
+                del self._cache[pair]
+        return None
+    
+    def _set_cache(self, pair: str, result: dict):
+        """Cache result with timestamp"""
+        import time
+        self._cache[pair] = (time.time(), result)
+    
+    def _analyze_with_retry(self, pair: str, pair_info: Dict, competition_status: Dict) -> Dict:
+        """Single API call combining grounding + analysis (V3.1.21)"""
+        from google import genai
+        from google.genai.types import GenerateContentConfig, GoogleSearch, Tool
+        
+        client = genai.Client()
+        
+        # V3.1.21: COMBINED PROMPT - One API call instead of two!
+        combined_prompt = f"""Search for "{pair} cryptocurrency price action last 24 hours" and analyze:
+
+You are a SHORT-TERM crypto trader making a 4-24 hour trade decision for {pair}.
+
+IGNORE: Long-term "moon" predictions, "institutional adoption", "ETF hopes", price targets for next year.
+FOCUS ON: Last 24 hours price action, support/resistance breaks, volume on red vs green candles, liquidation data.
+
+Based ONLY on short-term price action and momentum:
+- If price is breaking DOWN through support or volume is spiking on RED candles = BEARISH
+- If price is breaking UP through resistance or volume is spiking on GREEN candles = BULLISH  
+- If choppy/sideways with no clear direction = NEUTRAL
+
+Respond with JSON only:
+{{"sentiment": "BULLISH" or "BEARISH" or "NEUTRAL", "confidence": 0.0-1.0, "key_factor": "short-term reason only", "market_context": "brief summary of what you found"}}"""
+        
+        grounding_config = GenerateContentConfig(
+            tools=[Tool(google_search=GoogleSearch())],
+            temperature=0.2,
+            response_mime_type="application/json"
+        )
+        
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=combined_prompt,
+            config=grounding_config
+        )
+        
+        data = json.loads(response.text)
+        
+        signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
+        
+        return {
+            "persona": self.name,
+            "signal": signal,
+            "confidence": data.get("confidence", 0.5),
+            "reasoning": data.get("key_factor", "Market sentiment analysis"),
+            "sentiment": data["sentiment"],
+            "market_context": data.get("market_context", "")[:800],
+        }
+    
+    def _fallback_result(self, pair: str, error_msg: str) -> Dict:
+        """Return neutral result on error"""
+        return {
+            "persona": self.name,
+            "signal": "NEUTRAL",
+            "confidence": 0.3,
+            "reasoning": f"Sentiment analysis error: {error_msg}",
+        }
+
+'''
+
+# Find and replace the SentimentPersona class
+# Pattern to match the entire class
+pattern = r'# ={50,}\n# PERSONA 2: MARKET SENTIMENT.*?(?=# ={50,}\n# PERSONA 3:)'
+replacement = new_sentiment_class
+
+content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+
+# Write back
+with open('smt_nightly_trade_v3_1.py', 'w') as f:
+    f.write(content)
+
+print("Fix applied successfully!")
+print("\nChanges made:")
+print("1. Added 'import random'")
+print("2. Added rate limiter globals and functions")
+print("3. Replaced SentimentPersona class with V3.1.21 version")
+print("\nKey improvements:")
+print("- Combined 2 API calls into 1 (50% reduction)")
+print("- Added 2-second delay between calls")
+print("- Added exponential backoff on 429 errors")
+print("- Added 5-minute cache per pair")

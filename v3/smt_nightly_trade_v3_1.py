@@ -60,6 +60,7 @@ import base64
 import pickle
 import requests
 import numpy as np
+import random
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple
 from collections import deque
@@ -776,6 +777,32 @@ MIN_CONFIDENCE_TO_TRADE = 0.70  # V3.1.20 PREDATOR MODE: Higher conviction trade
 # Tier 2: Mid volatility (SOL) - volatile but not meme-tier
 # Tier 3: Fast/Meme (DOGE, XRP, ADA) - WIDENED SL to stop whipsaw losses
 
+
+# ============================================================
+# V3.1.21: GEMINI API RATE LIMITER
+# ============================================================
+_last_gemini_call = 0
+_gemini_call_interval = 2.0  # seconds between calls
+
+def _rate_limit_gemini():
+    """Ensure minimum interval between Gemini API calls"""
+    global _last_gemini_call
+    import time
+    now = time.time()
+    elapsed = now - _last_gemini_call
+    if elapsed < _gemini_call_interval:
+        sleep_time = _gemini_call_interval - elapsed
+        print(f"  [SENTIMENT] Rate limiting: sleeping {sleep_time:.1f}s")
+        time.sleep(sleep_time)
+    _last_gemini_call = time.time()
+
+def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float = 60.0) -> float:
+    """Calculate backoff delay with jitter"""
+    import random
+    delay = min(base_delay * (2 ** attempt), max_delay)
+    jitter = random.uniform(0, delay * 0.1)
+    return delay + jitter
+
 TIER_CONFIG = {
     1: {  # BTC, ETH, BNB, LTC - Stable, slow movers
         "name": "STABLE",
@@ -1220,56 +1247,94 @@ class WhalePersona:
             return None
 
 
+
 # ============================================================
-# PERSONA 2: MARKET SENTIMENT (Gemini)
+# PERSONA 2: MARKET SENTIMENT (Gemini) - V3.1.21 RATE LIMIT FIX
 # ============================================================
 
 class SentimentPersona:
-    """Uses Gemini with Google Search grounding for market sentiment."""
+    """Uses Gemini with Google Search grounding for market sentiment.
+    
+    V3.1.21: RATE LIMIT FIX
+    - Exponential backoff on 429 errors
+    - Rate limiting between API calls  
+    - Combined grounding + analysis into single call (50% fewer API calls!)
+    - 5-minute cache per pair
+    """
     
     def __init__(self):
         self.name = "SENTIMENT"
-        self.weight = 1.5  # V3.1.7: Reduced from 2.0
-        self.cache = {}  # V3.1.22: Gemini cache
-        self.cache_ttl = 1800  # 30 min
+        self.weight = 1.5
+        self._cache = {}  # {pair: (timestamp, result)}
+        self._cache_ttl = 300  # 5 minutes
     
     def analyze(self, pair: str, pair_info: Dict, competition_status: Dict) -> Dict:
-        # V3.1.22: Check cache first
-        cache_key = f"{pair}_{int(time.time() // self.cache_ttl)}"
-        if hasattr(self, 'cache') and cache_key in self.cache:
-            print(f'  [SENTIMENT] Cache hit for {pair}')
-            return self.cache[cache_key]
+        import time
         
-        try:
-            from google import genai
-            from google.genai.types import GenerateContentConfig, GoogleSearch, Tool
-            
-            client = genai.Client()
-            
-            # V3.1.11: Reality Check prompt - focus on SHORT-TERM price action, not "moon" news
-            search_query = f"{pair} cryptocurrency price action last 24 hours breaking support resistance selling pressure"
-            
-            grounding_config = GenerateContentConfig(
-                tools=[Tool(google_search=GoogleSearch())],
-                temperature=0.3
-            )
-            
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=search_query,
-                config=grounding_config
-            )
-            
-            market_context = response.text[:1500] if response.text else ""
-            
-            # V3.1.11: Reality Check - ignore long-term hopium, focus on 4-24h trading window
-            sentiment_prompt = f"""You are a SHORT-TERM crypto trader making a 4-24 hour trade decision for {pair}.
+        # Check cache first
+        cached = self._get_cached(pair)
+        if cached:
+            print(f"  [SENTIMENT] Using cached result for {pair}")
+            return cached
+        
+        # Rate limit before making call
+        _rate_limit_gemini()
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                result = self._analyze_with_retry(pair, pair_info, competition_status)
+                self._set_cache(pair, result)
+                return result
+                
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                if "429" in error_str or "resource exhausted" in error_str or "quota" in error_str:
+                    if attempt < max_retries - 1:
+                        backoff = _exponential_backoff(attempt)
+                        print(f"  [SENTIMENT] 429 error, retrying in {backoff:.1f}s (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(backoff)
+                        continue
+                    else:
+                        print(f"  [SENTIMENT] Rate limit exceeded after {max_retries} retries")
+                        return self._fallback_result(pair, f"Rate limited after {max_retries} retries")
+                else:
+                    print(f"  [SENTIMENT] Error: {e}")
+                    return self._fallback_result(pair, str(e))
+        
+        return self._fallback_result(pair, "Max retries exceeded")
+    
+    def _get_cached(self, pair: str):
+        """Get cached result if still valid"""
+        import time
+        if pair in self._cache:
+            timestamp, result = self._cache[pair]
+            if time.time() - timestamp < self._cache_ttl:
+                return result
+            else:
+                del self._cache[pair]
+        return None
+    
+    def _set_cache(self, pair: str, result: dict):
+        """Cache result with timestamp"""
+        import time
+        self._cache[pair] = (time.time(), result)
+    
+    def _analyze_with_retry(self, pair: str, pair_info: Dict, competition_status: Dict) -> Dict:
+        """Single API call combining grounding + analysis (V3.1.21)"""
+        from google import genai
+        from google.genai.types import GenerateContentConfig, GoogleSearch, Tool
+        
+        client = genai.Client()
+        
+        # V3.1.21: COMBINED PROMPT - One API call instead of two!
+        combined_prompt = f"""Search for "{pair} cryptocurrency price action last 24 hours" and analyze:
+
+You are a SHORT-TERM crypto trader making a 4-24 hour trade decision for {pair}.
 
 IGNORE: Long-term "moon" predictions, "institutional adoption", "ETF hopes", price targets for next year.
 FOCUS ON: Last 24 hours price action, support/resistance breaks, volume on red vs green candles, liquidation data.
-
-Market Context:
-{market_context}
 
 Based ONLY on short-term price action and momentum:
 - If price is breaking DOWN through support or volume is spiking on RED candles = BEARISH
@@ -1277,45 +1342,41 @@ Based ONLY on short-term price action and momentum:
 - If choppy/sideways with no clear direction = NEUTRAL
 
 Respond with JSON only:
-{{"sentiment": "BULLISH" or "BEARISH" or "NEUTRAL", "confidence": 0.0-1.0, "key_factor": "short-term reason only"}}"""
-            
-            json_config = GenerateContentConfig(
-                temperature=0.1,
-                response_mime_type="application/json"
-            )
-            
-            result = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=sentiment_prompt,
-                config=json_config
-            )
-            
-            data = json.loads(result.text)
-            
-            signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
-            
-            result = {
-                "persona": self.name,
-                "signal": signal,
-                "confidence": data.get("confidence", 0.5),
-                "reasoning": data.get("key_factor", "Market sentiment analysis"),
-                "sentiment": data["sentiment"],
-                "market_context": market_context[:800],
-            }
-            # V3.1.22: Cache result
-            if hasattr(self, 'cache'):
-                self.cache[cache_key] = result
-                print(f'  [SENTIMENT] Cached {pair} for 30min')
-            return result
-            
-        except Exception as e:
-            return {
-                "persona": self.name,
-                "signal": "NEUTRAL",
-                "confidence": 0.3,
-                "reasoning": f"Sentiment analysis error: {str(e)}",
-            }
-
+{{"sentiment": "BULLISH" or "BEARISH" or "NEUTRAL", "confidence": 0.0-1.0, "key_factor": "short-term reason only", "market_context": "brief summary of what you found"}}"""
+        
+        grounding_config = GenerateContentConfig(
+            tools=[Tool(google_search=GoogleSearch())],
+            temperature=0.2,
+            response_mime_type="application/json"
+        )
+        
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=combined_prompt,
+            config=grounding_config
+        )
+        
+        data = json.loads(response.text)
+        
+        signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
+        
+        return {
+            "persona": self.name,
+            "signal": signal,
+            "confidence": data.get("confidence", 0.5),
+            "reasoning": data.get("key_factor", "Market sentiment analysis"),
+            "sentiment": data["sentiment"],
+            "market_context": data.get("market_context", "")[:800],
+        }
+    
+    def _fallback_result(self, pair: str, error_msg: str) -> Dict:
+        """Return neutral result on error"""
+        return {
+            "persona": self.name,
+            "signal": "NEUTRAL",
+            "confidence": 0.3,
+            "reasoning": f"Sentiment analysis error: {error_msg}",
+        }
 
 # ============================================================
 # PERSONA 3: ORDER FLOW
