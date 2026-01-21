@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.20 - PREDATOR MODE
+SMT Trading Daemon V3.1.22 - CAPITAL PROTECTION
 =========================
 No partial closes. Higher conviction trades only.
 

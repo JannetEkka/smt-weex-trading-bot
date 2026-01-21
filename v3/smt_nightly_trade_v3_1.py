@@ -765,10 +765,10 @@ FLOOR_BALANCE = 950.0  # Protect principal - stop trading below this
 
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 5  # V3.1.16: Reduced for focused positions
+MAX_OPEN_POSITIONS = 3  # V3.1.22 CAPITAL PROTECTION  # V3.1.16: Reduced for focused positions
 MAX_SINGLE_POSITION_PCT = 0.20  # V3.1.9: 20% per trade max (was 8%)
 MIN_SINGLE_POSITION_PCT = 0.10  # V3.1.9: 10% minimum (was 3%)
-MIN_CONFIDENCE_TO_TRADE = 0.70  # V3.1.20 PREDATOR MODE: Higher conviction trades only
+MIN_CONFIDENCE_TO_TRADE = 0.80  # V3.1.22 CAPITAL PROTECTION  # V3.1.20 PREDATOR MODE: Higher conviction trades only
 
 # ============================================================
 # V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
@@ -806,30 +806,30 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
 TIER_CONFIG = {
     1: {  # BTC, ETH, BNB, LTC - Stable, slow movers
         "name": "STABLE",
-        "tp_pct": 6.0,           # V3.1.20 PREDATOR: 6% TP (was 5%) - 120% margin gain at 20x
-        "sl_pct": 2.5,           # V3.1.20 PREDATOR: 2.5% SL (was 2%) - survive wicks
+        "tp_pct": 4.0,           # V3.1.22: 4% TP - take profits faster (was 5%) - 120% margin gain at 20x
+        "sl_pct": 1.5,           # V3.1.22: 1.5% SL - protect capital (was 2%) - survive wicks
         "max_hold_hours": 72,    # Keep 72h (3 days)
         "early_exit_hours": 12,  # Check early exit after 12h
         "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 12h
-        "force_exit_loss_pct": -4.0,  # Hard stop at -4%
+        "force_exit_loss_pct": -2.0,  # V3.1.22: Hard stop at -2%
     },
     2: {  # SOL, LTC - Mid volatility
         "name": "MID",
-        "tp_pct": 5.0,           # V3.1.20 PREDATOR: 5% TP (was 4%) - 100% margin gain at 20x
-        "sl_pct": 2.2,           # V3.1.20 PREDATOR: 2.2% SL (was 1.75%) - survive wicks
+        "tp_pct": 3.5,           # V3.1.22: 3.5% TP (was 4%) - 100% margin gain at 20x
+        "sl_pct": 1.5,           # V3.1.22: 1.5% SL (was 1.75%) - survive wicks
         "max_hold_hours": 48,    # Keep 48h (2 days)
         "early_exit_hours": 6,   # Check early exit after 6h
         "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 6h
-        "force_exit_loss_pct": -4.0,  # Hard stop at -4%
+        "force_exit_loss_pct": -2.0,  # V3.1.22: Hard stop at -2%
     },
     3: {  # DOGE, XRP, ADA - Fast movers
         "name": "FAST",
-        "tp_pct": 4.0,           # V3.1.20 PREDATOR: Keep 4% - these move fast anyway
-        "sl_pct": 2.0,           # Keep 2% - tight for scalps
+        "tp_pct": 3.0,           # V3.1.22: 3% TP - these move fast anyway
+        "sl_pct": 1.5,           # V3.1.22: 1.5% SL - tight for scalps
         "max_hold_hours": 24,    # Keep 24h
         "early_exit_hours": 6,   # Check early exit after 6h
         "early_exit_loss_pct": -1.5,  # Exit if -1.5% after 6h
-        "force_exit_loss_pct": -4.0,  # Hard stop at -4%
+        "force_exit_loss_pct": -2.0,  # V3.1.22: Hard stop at -2%
     },
 }
 
