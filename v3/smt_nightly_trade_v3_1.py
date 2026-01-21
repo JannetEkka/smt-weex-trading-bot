@@ -1347,7 +1347,7 @@ Respond with JSON only:
         grounding_config = GenerateContentConfig(
             tools=[Tool(google_search=GoogleSearch())],
             temperature=0.2,
-            response_mime_type="application/json"
+            
         )
         
         response = client.models.generate_content(
@@ -1356,7 +1356,8 @@ Respond with JSON only:
             config=grounding_config
         )
         
-        data = json.loads(response.text)
+        clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+        data = json.loads(clean_text)
         
         signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
         
