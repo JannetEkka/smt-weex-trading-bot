@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.23 - REGIME-ALIGNED TRADING
+SMT Trading Daemon V3.1.24 - REGIME-ALIGNED + RL DATA COLLECTION
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -48,6 +48,15 @@ import requests
 from datetime import datetime, timezone, timedelta
 from threading import Event
 from typing import Dict, List, Optional
+# V3.1.23: RL Data Collection
+try:
+    from rl_data_collector import RLDataCollector
+    rl_collector = RLDataCollector()
+    RL_ENABLED = True
+except ImportError:
+    rl_collector = None
+    RL_ENABLED = False
+
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -478,6 +487,37 @@ def check_trading_signals():
                     "has_short": has_short,
                     "trade_type": trade_type,
                 })
+                # V3.1.23: Log decision for RL training
+                if RL_ENABLED and rl_collector:
+                    try:
+                        persona_dict = {}
+                        for v in decision.get("persona_votes", []):
+                            persona_dict[v.get("persona", "?")] = {
+                                "signal": v.get("signal", "WAIT"),
+                                "confidence": v.get("confidence", 0.5)
+                            }
+                        
+                        rl_collector.log_decision(
+                            symbol=symbol,
+                            action=signal,
+                            confidence=confidence,
+                            persona_votes=persona_dict,
+                            market_state={
+                                "btc_24h": regime.get("change_24h", 0) if regime else 0,
+                                "btc_4h": regime.get("change_4h", 0) if regime else 0,
+                                "regime": regime.get("regime", "NEUTRAL") if regime else "NEUTRAL",
+                            },
+                            portfolio_state={
+                                "num_positions": len(open_positions),
+                                "long_exposure": sum(1 for p in open_positions if p.get("side") == "LONG") / 8,
+                                "short_exposure": sum(1 for p in open_positions if p.get("side") == "SHORT") / 8,
+                                "upnl_pct": sum(float(p.get("unrealized_pnl", 0)) for p in open_positions) / max(balance, 1) * 100,
+                            },
+                            tier=tier,
+                        )
+                    except Exception as e:
+                        logger.debug(f"RL log error: {e}")
+
                 
                 # Add to opportunities if tradeable
                 if can_trade_this and signal in ("LONG", "SHORT"):
