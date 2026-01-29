@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.1.21 - BEAR HUNTER + BULL SYMMETRY MODE
+SMT Nightly Trade V3.1.23 - RAPID REGIME DETECTION
 =============================================================
 No partial closes. Higher conviction trades only.
 
@@ -151,43 +151,83 @@ def check_flash_crash() -> dict:
         print(f"  [FLASH CRASH] Error: {e}")
     return result
 
-def apply_regime_hysteresis(score: int, raw_regime: str) -> str:
+def apply_regime_hysteresis(score: int, raw_regime: str, btc_4h_change: float = 0) -> str:
+    """
+    V3.1.23: RAPID REGIME DETECTION
+    
+    Changes:
+    1. Lock reduced from 30 min to 10 min
+    2. MOMENTUM OVERRIDE: If BTC 4h change > 1.5%, IMMEDIATE switch (bypass hysteresis)
+    3. Strong signals (score >= 2 or <= -2) switch immediately
+    """
     current = REGIME_STATE.get("current_regime", "NEUTRAL")
     history = REGIME_STATE.get("regime_score_history", [])
     history.append(score)
     if len(history) > 3: history = history[-3:]
     REGIME_STATE["regime_score_history"] = history
     now = time.time()
+    
+    # V3.1.23: MOMENTUM OVERRIDE - bypass hysteresis for strong 4h moves
+    if btc_4h_change < -1.5 and current != "BEARISH":
+        REGIME_STATE["current_regime"] = "BEARISH"
+        REGIME_STATE["regime_locked_until"] = now + 600  # 10 min lock
+        print(f"  [HYSTERESIS] MOMENTUM OVERRIDE: -> BEARISH (4h: {btc_4h_change:+.1f}%)")
+        return "BEARISH"
+    
+    if btc_4h_change > 1.5 and current != "BULLISH":
+        REGIME_STATE["current_regime"] = "BULLISH"
+        REGIME_STATE["regime_locked_until"] = now + 600  # 10 min lock
+        print(f"  [HYSTERESIS] MOMENTUM OVERRIDE: -> BULLISH (4h: {btc_4h_change:+.1f}%)")
+        return "BULLISH"
+    
+    # V3.1.23: Reduced lock from 30 min to 10 min
     if REGIME_STATE.get("regime_locked_until", 0) > now:
         remaining = (REGIME_STATE["regime_locked_until"] - now) / 60
         print(f"  [HYSTERESIS] Locked to {current} for {remaining:.0f}m")
         return current
+    
+    # V3.1.23: Strong signals (score >= 2 or <= -2) switch immediately
+    if score <= -2 and current != "BEARISH":
+        REGIME_STATE["current_regime"] = "BEARISH"
+        REGIME_STATE["regime_locked_until"] = now + 600
+        print(f"  [HYSTERESIS] STRONG BEARISH (score: {score}) -> BEARISH")
+        return "BEARISH"
+    
+    if score >= 2 and current != "BULLISH":
+        REGIME_STATE["current_regime"] = "BULLISH"
+        REGIME_STATE["regime_locked_until"] = now + 600
+        print(f"  [HYSTERESIS] STRONG BULLISH (score: {score}) -> BULLISH")
+        return "BULLISH"
+    
+    # Normal hysteresis for weaker signals
     if len(history) >= 2:
         avg = sum(history[-2:]) / 2
         if current == "BEARISH" and avg >= 1:
             new_r = "NEUTRAL" if avg < 2 else "BULLISH"
             REGIME_STATE["current_regime"] = new_r
-            REGIME_STATE["regime_locked_until"] = now + 1800
+            REGIME_STATE["regime_locked_until"] = now + 600  # V3.1.23: 10 min
             print(f"  [HYSTERESIS] BEARISH -> {new_r}")
             return new_r
         if current == "BULLISH" and avg <= -1:
             new_r = "NEUTRAL" if avg > -2 else "BEARISH"
             REGIME_STATE["current_regime"] = new_r
-            REGIME_STATE["regime_locked_until"] = now + 1800
+            REGIME_STATE["regime_locked_until"] = now + 600  # V3.1.23: 10 min
             print(f"  [HYSTERESIS] BULLISH -> {new_r}")
             return new_r
         if current == "NEUTRAL":
             if all(s <= -1 for s in history[-2:]):
                 REGIME_STATE["current_regime"] = "BEARISH"
-                REGIME_STATE["regime_locked_until"] = now + 1800
+                REGIME_STATE["regime_locked_until"] = now + 600
                 return "BEARISH"
             if all(s >= 1 for s in history[-2:]):
                 REGIME_STATE["current_regime"] = "BULLISH"
-                REGIME_STATE["regime_locked_until"] = now + 1800
+                REGIME_STATE["regime_locked_until"] = now + 600
                 return "BULLISH"
         return current
     REGIME_STATE["current_regime"] = raw_regime
     return raw_regime
+
+
 
 
 SENTIMENT_CACHE_TTL = 900  # 15 minutes
@@ -605,7 +645,7 @@ def get_enhanced_market_regime() -> dict:
     V3.1.21: Cached for 5 minutes to reduce API calls
     """
     # Check cache first
-    cached = REGIME_CACHE.get("regime", 300)  # 5 min cache
+    cached = REGIME_CACHE.get("regime", 120)  # V3.1.23: 2 min cache for faster reaction
     if cached:
         return cached
     
@@ -740,11 +780,15 @@ def get_enhanced_market_regime() -> dict:
     result["score"] = score
     result["factors"] = factors
     
-    if score <= -3: result["regime"] = "BEARISH"; result["confidence"] = 0.85
-    elif score <= -1: result["regime"] = "BEARISH"; result["confidence"] = 0.65
-    elif score >= 3: result["regime"] = "BULLISH"; result["confidence"] = 0.85
-    elif score >= 1: result["regime"] = "BULLISH"; result["confidence"] = 0.65
-    else: result["regime"] = "NEUTRAL"; result["confidence"] = 0.5
+    # V3.1.23: Determine raw regime from score
+    if score <= -3: raw_regime = "BEARISH"; result["confidence"] = 0.85
+    elif score <= -1: raw_regime = "BEARISH"; result["confidence"] = 0.65
+    elif score >= 3: raw_regime = "BULLISH"; result["confidence"] = 0.85
+    elif score >= 1: raw_regime = "BULLISH"; result["confidence"] = 0.65
+    else: raw_regime = "NEUTRAL"; result["confidence"] = 0.5
+    
+    # V3.1.23: Apply hysteresis with momentum override (pass btc_4h for fast switching)
+    result["regime"] = apply_regime_hysteresis(score, raw_regime, result.get("btc_4h", 0))
     
     print(f"  [REGIME] {result['regime']} (score: {score}, conf: {result['confidence']:.0%})")
     print(f"  [REGIME] BTC 24h: {result['btc_24h']:+.1f}% | F&G: {result['fear_greed']} | Funding: {result['avg_funding']:.5f}")
