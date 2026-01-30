@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.1.23 - RAPID REGIME DETECTION
+SMT Nightly Trade V3.1.24 - STOP LOSING LONGS
 =============================================================
 No partial closes. Higher conviction trades only.
 
@@ -1899,15 +1899,15 @@ class JudgePersona:
                 weights = {
                     "WHALE": 2.5,      # V3.1.21: Whales lead the way up - TRUST THEM
                     "SENTIMENT": 2.0 if signal == "LONG" else 0.8,  # V3.1.21: Trust LONG sentiment (symmetric)
-                    "FLOW": 2.0,       # V3.1.21: Trust buying pressure in bull
+                    "FLOW": 1.2,       # V3.1.24: REDUCED from 2.0 - taker spikes fake
                     "TECHNICAL": 1.5   # V3.1.21: Trust momentum
                 }
             else:  # NEUTRAL
                 weights = {
                     "WHALE": 1.5,      # Slightly reduced
-                    "SENTIMENT": 1.0,  # Reduced - noise in chop
-                    "FLOW": 1.5,       # Increased - flow matters in chop
-                    "TECHNICAL": 1.5   # Increased - technicals guide in ranges
+                    "SENTIMENT": 1.2,  # V3.1.24: Increased - sentiment has been right
+                    "FLOW": 1.0,       # V3.1.24: REDUCED from 1.5 - don't trust in chop
+                    "TECHNICAL": 1.5   # Technicals guide in ranges
                 }
             
             weight = weights.get(persona, 1.0)
@@ -1962,8 +1962,12 @@ class JudgePersona:
         min_confidence = MIN_CONFIDENCE_TO_TRADE  # 70% base
         
         if decision == "LONG":
+            # V3.1.24: Require at least 2 personas agreeing on LONG
+            if long_votes < 2:
+                return self._wait_decision(f"BLOCKED: LONG needs 2+ personas (only {long_votes})", persona_votes, vote_summary)
+            
             if regime["regime"] == "BULLISH":
-                min_confidence = 0.50  # V3.1.21: SYMMETRIC - 50% for LONGs in BULLISH (like SHORTs in BEARISH)
+                min_confidence = 0.70  # V3.1.24: Raised from 50% - stop bad LONGs
                 print(f"  [JUDGE] V3.1.21: BULLISH regime - LONG threshold lowered to 50%")
                 print(f"  [JUDGE] V3.1.20: BULLISH regime - LONG needs 70%")
             elif regime["regime"] == "NEUTRAL":
@@ -2001,9 +2005,9 @@ class JudgePersona:
         
         # V3.1.20 PREDATOR: STRICT LONG FILTERS
         if decision == "LONG":
-            # 1. Block LONGs in BEARISH regime
-            if regime["regime"] == "BEARISH":
-                return self._wait_decision(f"BLOCKED: LONG in BEARISH regime (24h: {regime.get('btc_24h', 0):+.1f}%)", persona_votes, vote_summary)
+            # 1. V3.1.24: Block LONGs in BEARISH or NEUTRAL regime
+            if regime["regime"] in ("BEARISH", "NEUTRAL"):
+                return self._wait_decision(f"BLOCKED: LONG in {regime['regime']} regime (24h: {regime.get('btc_24h', 0):+.1f}%)", persona_votes, vote_summary)
             
             # 2. V3.1.20: POSITIVE MOMENTUM REQUIREMENT
             # In NEUTRAL, require BTC > +0.2% (actually climbing, not just "flat")
@@ -2018,7 +2022,7 @@ class JudgePersona:
                 return self._wait_decision(f"BLOCKED: WHALE VETO - Whales voting SHORT ({whale_conf:.0%}), refusing LONG", persona_votes, vote_summary)
             
             # 4. Block if 24h is negative
-            if regime.get("btc_24h", 0) < -0.5:
+            if regime.get("btc_24h", 0) < 0:  # V3.1.24: Any negative blocks LONG
                 return self._wait_decision(f"BLOCKED: LONG while BTC dropping (24h: {regime.get('btc_24h', 0):+.1f}%)", persona_votes, vote_summary)
             
             # 5. Block LONGs if OI shows short buildup
