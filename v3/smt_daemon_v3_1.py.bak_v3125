@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.26 - HYBRID REGIME + RL DATA COLLECTION
+SMT Trading Daemon V3.1.25 - HYBRID REGIME + RL DATA COLLECTION
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -306,10 +306,6 @@ def check_trading_signals():
         bonus_slots = min(risk_free_count, MAX_BONUS_SLOTS)
         effective_max_positions = BASE_SLOTS + bonus_slots
         
-        # V3.1.26: High confidence override
-        CONFIDENCE_OVERRIDE_THRESHOLD = 0.85  # 85%+ signals can exceed normal limits
-        MAX_CONFIDENCE_SLOTS = 2  # Up to 2 extra slots for high conviction trades
-        
         available_slots = effective_max_positions - len(open_positions)
         
         # V3.1.19: Override slot availability if low equity
@@ -491,12 +487,9 @@ def check_trading_signals():
                     "has_short": has_short,
                     "trade_type": trade_type,
                 })
-                # V3.1.24: Log decision for RL training
+                # V3.1.23: Log decision for RL training
                 if RL_ENABLED and rl_collector:
                     try:
-                        # Get regime data for RL logging
-                        rl_regime = get_market_regime_for_exit()
-                        
                         persona_dict = {}
                         for v in decision.get("persona_votes", []):
                             persona_dict[v.get("persona", "?")] = {
@@ -510,9 +503,9 @@ def check_trading_signals():
                             confidence=confidence,
                             persona_votes=persona_dict,
                             market_state={
-                                "btc_24h": rl_regime.get("change_24h", 0),
-                                "btc_4h": rl_regime.get("change_4h", 0),
-                                "regime": rl_regime.get("regime", "NEUTRAL"),
+                                "btc_24h": regime.get("change_24h", 0) if regime else 0,
+                                "btc_4h": regime.get("change_4h", 0) if regime else 0,
+                                "regime": regime.get("regime", "NEUTRAL") if regime else "NEUTRAL",
                             },
                             portfolio_state={
                                 "num_positions": len(open_positions),
@@ -523,7 +516,7 @@ def check_trading_signals():
                             tier=tier,
                         )
                     except Exception as e:
-                        logger.warning(f"RL log error: {e}")
+                        logger.debug(f"RL log error: {e}")
 
                 
                 # Add to opportunities if tradeable
@@ -555,23 +548,13 @@ def check_trading_signals():
             current_positions = len(open_positions)
             available_slots = effective_max_positions - current_positions
             
-            # V3.1.26: Track confidence override slots used
-            confidence_slots_used = 0
-            
             trades_executed = 0
             
             for opportunity in trade_opportunities:
-                confidence = opportunity["decision"]["confidence"]
-                
                 # Check if we still have slots
                 if trades_executed >= available_slots:
-                    # V3.1.26: High confidence override - can use extra slots
-                    if confidence >= CONFIDENCE_OVERRIDE_THRESHOLD and confidence_slots_used < MAX_CONFIDENCE_SLOTS:
-                        logger.info(f"CONFIDENCE OVERRIDE: {confidence:.0%} >= 85% - using conviction slot {confidence_slots_used + 1}/{MAX_CONFIDENCE_SLOTS}")
-                        confidence_slots_used += 1
-                    else:
-                        logger.info(f"Max positions reached, skipping remaining opportunities")
-                        break
+                    logger.info(f"Max positions reached, skipping remaining opportunities")
+                    break
                 
                 tier = opportunity["tier"]
                 tier_config = get_tier_config(tier)
