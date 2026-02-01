@@ -860,34 +860,7 @@ def quick_cleanup_check():
                         logger.debug(f"RL outcome log error: {e}")
                 
                 cleanup = cancel_all_orders_for_symbol(symbol)
-                
-                # V3.1.25: Calculate actual PnL for RL matching
-                trade = tracker.active.get(symbol, {})
-                entry_price = trade.get("entry_price", 0)
-                side = trade.get("side", "LONG")
-                position_usdt = trade.get("position_usdt", 0)
-                pnl_usd = 0
-                hit_tp = False
-                
-                if entry_price > 0 and position_usdt > 0:
-                    try:
-                        current_price = get_price(symbol)
-                        if side == "LONG":
-                            pnl_pct = ((current_price - entry_price) / entry_price) * 100
-                        else:
-                            pnl_pct = ((entry_price - current_price) / entry_price) * 100
-                        pnl_usd = (pnl_pct / 100) * position_usdt
-                        hit_tp = pnl_usd > 0
-                    except:
-                        pass
-                
-                tracker.close_trade(symbol, {
-                    "reason": "tp_sl_hit",
-                    "cleanup": cleanup,
-                    "symbol": symbol,
-                    "pnl": round(pnl_usd, 2),
-                    "hit_tp": hit_tp,
-                })
+                tracker.close_trade(symbol, {"reason": "tp_sl_hit", "cleanup": cleanup})
                 state.trades_closed += 1
                 position_closed = True
         
