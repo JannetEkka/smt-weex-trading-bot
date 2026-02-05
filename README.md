@@ -1,258 +1,346 @@
-# SMT V3 Pipeline
-## WEEX AI Wars Hackathon (Jan 12 - Feb 2, 2026)
+# SMT - Smart Money Tracker
+
+**AI-Powered Whale Intelligence Trading Bot**
+
+Built for WEEX AI Wars: Alpha Awakens Hackathon
 
 ---
 
-## Folder Structure
+## Results
+
+| Metric | Value |
+|--------|-------|
+| Prelims ROI | +566% |
+| Starting Balance | $1,000 USDT |
+| Final Equity | $6,662 USDT |
+| Prelims Rank | #1 in Group, #2 Overall |
+| Survival | Survived Jan 18 flash crash |
+
+---
+
+## What is SMT?
+
+Smart Money Tracker is an autonomous AI trading bot that tracks Ethereum whale wallets and executes trades based on their behavior patterns.
+
+**The Edge:** While other bots react to price movements, SMT watches what smart money is doing *before* the price moves.
+
+Most trading bots use technical indicators (RSI, MACD, moving averages). These are lagging indicators - they tell you what already happened.
+
+SMT uses on-chain whale intelligence as a *leading* indicator. When large wallets move funds to exchanges, they're often preparing to sell. When they withdraw, they're accumulating. SMT detects these patterns and acts on them.
+
+---
+
+## Architecture Overview
 
 ```
-v3/
-├── smt_nightly_trade_v3.py    # Main trading pipeline
-├── smt_daemon_v3.py           # 24/7 daemon service
-├── smt_position_monitor_v3.py # Position monitoring
-├── smt                        # Control script (chmod +x)
-├── smt-trading.service        # systemd service file
-├── setup_daemon.sh            # One-time setup script
-├── requirements-v3.txt        # Python dependencies
-├── .env.example               # Environment variables template
-├── test_contract_info.py      # Test WEEX contract stepSize
-└── README.md                  # This file
+┌─────────────────────────────────────────────────────────────────┐
+│                        SMT V3.1 ARCHITECTURE                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
+│   │   WHALE     │  │  SENTIMENT  │  │    FLOW     │            │
+│   │  Etherscan  │  │   Gemini    │  │  Order Book │            │
+│   │  On-chain   │  │  + Search   │  │  Taker Ratio│            │
+│   └──────┬──────┘  └──────┬──────┘  └──────┬──────┘            │
+│          │                │                │                    │
+│          │    ┌───────────┴───────────┐    │                    │
+│          │    │                       │    │                    │
+│          ▼    ▼                       ▼    ▼                    │
+│   ┌─────────────┐              ┌─────────────┐                  │
+│   │  TECHNICAL  │              │    JUDGE    │                  │
+│   │  RSI, SMA   │─────────────▶│   Gemini    │                  │
+│   │  Momentum   │              │  Weighs All │                  │
+│   └─────────────┘              └──────┬──────┘                  │
+│                                       │                         │
+│                                       ▼                         │
+│                              ┌─────────────────┐                │
+│                              │  REGIME FILTER  │                │
+│                              │  BTC Trend Gate │                │
+│                              └────────┬────────┘                │
+│                                       │                         │
+│                                       ▼                         │
+│                              ┌─────────────────┐                │
+│                              │  WEEX EXECUTION │                │
+│                              │  20x Leverage   │                │
+│                              └─────────────────┘                │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## First Successful Trade (Jan 8, 2026)
+## The 5 Persona System
 
-```
-Order ID: 704036529323901285
-Pair: SOL
-Signal: LONG
-Size: 0.7 SOL (~$95 USDT)
-Entry: $135.17
-TP: $141.93 (+5.0%)
-SL: $131.79 (-2.5%)
-Leverage: 20x
-```
+SMT uses a "multiple personality" approach. Five AI personas analyze the market independently, then a Judge persona weighs their opinions and makes the final call.
 
-**Potential Outcomes:**
-- TP hit: +$95 profit
-- SL hit: -$47.5 loss
+### Persona 1: WHALE (Weight: 2.5x in bullish regime)
 
----
+**Purpose:** On-chain whale intelligence - our unique edge
 
-## WEEX StepSize Requirements
+**Data Source:** Etherscan V2 API
 
-Different pairs have different minimum step sizes:
+**What it does:**
+- Monitors 8+ high-value Ethereum wallets
+- Tracks CEX deposit/withdrawal patterns
+- Detects accumulation vs distribution behavior
 
-| Pair | stepSize | min_order | Example $100 |
-|------|----------|-----------|--------------|
-| ETH | 0.001 | 0.001 | 0.032 |
-| BTC | 0.0001 | 0.0001 | 0.0011 |
-| SOL | 0.1 | 0.1 | 0.7 |
-| DOGE | 1 | 100 | 696 |
-| XRP | 1 | 10 | 47 |
-| ADA | 1 | 10 | 253 |
-| BNB | 0.1 | 0.1 | 0.1 |
-| LTC | 0.1 | 0.1 | 1.2 |
+**Signal Logic:**
+- Net inflow to CEX > 500 ETH = BEARISH (preparing to sell)
+- Net outflow from CEX > 500 ETH = BULLISH (accumulating)
 
-The pipeline auto-fetches stepSize from WEEX API and rounds accordingly.
+**Why it matters:** Whales move before retail. If Binance hot wallets are receiving large deposits, selling pressure is coming.
 
 ---
 
-## V3 Architecture
+### Persona 2: SENTIMENT (Weight: 2.0x)
 
-### Pipeline Flow
-```
-1. Whale Discovery (Etherscan V2)
-   - Fetch large transactions (>100 ETH, last 6 hours)
-   - Discover whale addresses from CEX interactions
-   
-2. Whale Classification (CatBoost or Rule-based fallback)
-   - Extract 32 features from 90-day tx history
-   - Classify: CEX_Wallet, Large_Holder, DeFi_Trader, Staker, Miner
-   - Generate signal based on flow direction
-   
-3. Multi-Pair Analysis (Gemini 2.5 Flash + Google Search)
-   - Tier 1 (ETH, BTC): Whale data + Grounding
-   - Tier 2 (SOL, DOGE, XRP, ADA, BNB, LTC): Grounding only
-   - Competition-aware prompts with balance, TP/SL calculations
-   
-4. Trade Execution (WEEX API)
-   - Smart position sizing (5-20% based on confidence)
-   - Set TP/SL on order
-   - Auto-upload AI log to WEEX
-   
-5. Position Monitoring (Daemon)
-   - Check every 5 minutes for TP/SL hit
-   - Cancel remaining orders when position closes
-   - Force close after max hold time (48h default, 6h final days)
-```
+**Purpose:** Real-time market sentiment analysis
 
-### Key Features
-- **Dynamic position sizing**: Based on balance, confidence, competition timeline
-- **Competition-aware prompts**: Includes balance, P&L, days remaining, risk/reward calculations
-- **Auto order cleanup**: Cancels orphaned TP/SL orders when position closes
-- **Test mode**: `--test` flag for dry runs without real trades
-- **24/7 daemon**: systemd service with auto-restart
+**Data Source:** Gemini 2.5 Flash with Google Search grounding
+
+**What it does:**
+- Searches current news for the trading pair
+- Analyzes social sentiment
+- Identifies structural breaks (support/resistance)
+
+**Signal Logic:**
+- Breaking DOWN through support = BEARISH
+- Breaking UP through resistance = BULLISH
+- Choppy/sideways = NEUTRAL
 
 ---
 
-## Files on VM
+### Persona 3: FLOW (Weight: 1.0-2.5x based on regime)
 
-| File | Purpose |
-|------|---------|
-| `smt_nightly_trade_v3.py` | Main pipeline (1663 lines) |
-| `smt_daemon_v3.py` | 24/7 daemon service |
-| `smt_position_monitor_v3.py` | Position monitoring |
-| `smt-trading.service` | systemd service file |
-| `smt` | Control script |
-| `requirements-v3.txt` | Python dependencies |
-| `.env` | API credentials |
+**Purpose:** Order flow and market microstructure
+
+**Data Source:** WEEX API (order book, trades)
+
+**What it does:**
+- Analyzes bid/ask depth ratio
+- Tracks taker buy/sell ratio
+- Monitors funding rates
+
+**Signal Logic:**
+- Taker ratio > 1.5 + strong bid depth = BULLISH
+- Taker ratio < 0.7 + strong ask depth = BEARISH
+
+**Special Logic:** In bearish regimes, extreme taker buying is often short covering, not reversal. The persona adjusts for this.
 
 ---
 
-## Commands
+### Persona 4: TECHNICAL (Weight: 1.5-2.0x)
 
-### Run Pipeline Once
+**Purpose:** Traditional technical indicators
+
+**Data Source:** WEEX candle data
+
+**Indicators:**
+- RSI (14 period)
+- SMA 20 & SMA 50
+- 5-candle momentum
+
+**Signal Logic:**
+- RSI < 30 = Oversold = LONG candidate
+- RSI > 70 = Overbought = SHORT candidate
+- Price above both SMAs = BULLISH trend
+- Price below both SMAs = BEARISH trend
+
+---
+
+### Persona 5: JUDGE (Final Decision)
+
+**Purpose:** Weighs all persona votes and makes the final call
+
+**Data Source:** All persona outputs + market regime
+
+**What it does:**
+- Calculates weighted scores for LONG/SHORT/NEUTRAL
+- Applies regime-specific weight adjustments
+- Requires minimum 70-80% confidence to trade
+- Can veto trades that conflict with whale signals
+
+**Regime-Aware Weighting:**
+
+| Regime | WHALE | SENTIMENT | FLOW | TECHNICAL |
+|--------|-------|-----------|------|-----------|
+| BULLISH | 2.5x | 2.0x (LONG) | 1.2x | 1.5x |
+| BEARISH | 0.5x | 2.0x (SHORT) | 2.5x | 2.0x |
+| NEUTRAL | 1.5x | 1.2x | 1.0x | 1.5x |
+
+---
+
+## Regime Filter
+
+Before any trade executes, SMT checks the overall market regime based on BTC's behavior.
+
+**Regime Detection:**
+- BTC 24h change < -1% = BEARISH
+- BTC 24h change > +1.5% = BULLISH
+- Otherwise = NEUTRAL
+
+**Trading Rules:**
+- BEARISH regime: Block all LONG entries
+- BULLISH regime: Block all SHORT entries (unless very high confidence)
+- Regime shifts trigger position review
+
+**Why this matters:** During the Jan 18 flash crash, the regime filter prevented new LONG entries while BTC was dumping. Many competitors got liquidated. SMT survived.
+
+---
+
+## Tier-Based Risk Management
+
+Not all coins behave the same. SMT uses a tiered system:
+
+| Tier | Coins | TP | SL | Max Hold | Rationale |
+|------|-------|----|----|----------|-----------|
+| 1 (Stable) | BTC, ETH, BNB, LTC | 5% | 2% | 72h | Slow movers, hold longer |
+| 2 (Mid) | SOL | 4% | 1.75% | 48h | Medium volatility |
+| 3 (Fast) | DOGE, XRP, ADA | 4% | 2% | 24h | High volatility, quick exits |
+
+---
+
+## Risk Controls
+
+### Position Sizing
+- Maximum 20% of balance per trade
+- Minimum 10% of balance per trade
+- Maximum 3 open positions at once
+
+### Hard Stops
+- Regime-aligned positions: Trust the SL
+- Positions fighting regime + losing > $50: Force exit
+- Flash crash detected (3% drop): Pause trading for 4 hours
+
+### Trailing Protection
+- Track peak PnL for each position
+- If position was +2% but now negative: Exit immediately
+
+---
+
+## Flash Crash Protection
+
+On January 18, 2026, Greenland tariff news caused BTC to flash crash. Many competitors were liquidated.
+
+**SMT's response:**
+1. Regime filter detected BEARISH (BTC 24h < -1%)
+2. Blocked all new LONG entries
+3. Flash crash protection paused trading for 4 hours
+4. Existing positions hit SL but within acceptable loss
+
+**Result:** SMT survived while others got wiped out.
+
+---
+
+## Technology Stack
+
+| Component | Technology |
+|-----------|------------|
+| Whale Data | Etherscan V2 API (chain_id=1) |
+| AI Validation | Gemini 2.5 Flash + Google Search |
+| Trade Execution | WEEX Contract API v2 |
+| Hosting | Google Compute Engine (e2-micro) |
+| Language | Python 3.11 |
+
+---
+
+## File Structure
+
+```
+smt-weex-trading-bot/
+├── v3/
+│   ├── smt_nightly_trade_v3_1.py   # Core trading logic + all personas
+│   ├── smt_daemon_v3_1.py          # 24/7 daemon
+│   ├── trade_state_v3_1_*.json     # Position tracking
+│   ├── rl_training_data/           # RL shadow mode data
+│   │   └── exp_*.jsonl
+│   └── logs/
+│       └── daemon_*.log
+├── v4/                              # Post-hackathon RL development
+│   ├── config.py
+│   ├── secrets_manager.py
+│   └── rl_data_collector.py
+└── docs/
+    ├── policy_description.md
+    └── ai_participation.md
+```
+
+---
+
+## Running the Bot
+
+### Prerequisites
+- Python 3.11+
+- Google Cloud account with Vertex AI enabled
+- WEEX API credentials (IP whitelisted)
+- Etherscan API key
+
+### Environment Variables
 ```bash
-# Test mode (no real trades)
-python3 smt_nightly_trade_v3.py --test
-
-# Live mode
-python3 smt_nightly_trade_v3.py
+export GOOGLE_CLOUD_PROJECT=your-project-id
+export GOOGLE_GENAI_USE_VERTEXAI=True
+export WEEX_API_KEY=your-key
+export WEEX_API_SECRET=your-secret
+export WEEX_API_PASSPHRASE=your-passphrase
+export ETHERSCAN_API_KEY=your-key
 ```
 
-### Daemon Control
+### Start Daemon
 ```bash
-./smt start      # Start 24/7 daemon
-./smt stop       # Stop daemon
-./smt status     # Check status
-./smt logs       # View logs
-./smt test       # Run in test mode
-./smt positions  # Show WEEX positions
-./smt cleanup    # Cancel all pending orders
+cd ~/smt-weex-trading-bot/v3
+nohup python3 smt_daemon_v3_1.py > daemon.log 2>&1 &
 ```
 
-### Manual systemd
+### Monitor
 ```bash
-sudo systemctl start smt-trading
-sudo systemctl stop smt-trading
-sudo systemctl status smt-trading
-sudo systemctl enable smt-trading  # Auto-start on boot
+tail -f daemon.log
+ps aux | grep smt_daemon
 ```
 
 ---
 
-## Configuration
+## What's Next: V4 Roadmap
 
-### Trading Parameters
-```python
-MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 5
-MAX_SINGLE_POSITION_PCT = 0.25  # Max 25% of balance per trade
-MAX_TOTAL_EXPOSURE_PCT = 0.60   # Max 60% total exposure
+SMT V3.1 uses rule-based weighting for the personas. V4 will use Reinforcement Learning to automatically learn optimal weights.
 
-# Position sizing by confidence
-Tier 1 (Whale data): 5-20% of balance
-Tier 2 (Grounding only): 5-10% of balance
-```
+**Current (V3.1):** Manual weights - I decide WHALE gets 2.5x in bullish regime
 
-### Competition Dates
-```python
-COMPETITION_START = datetime(2026, 1, 12)
-COMPETITION_END = datetime(2026, 2, 2)
-```
+**Future (V4):** RL agent learns - Model discovers optimal weights from trading results
 
-### Timing (Daemon)
-```python
-SIGNAL_CHECK_INTERVAL = 4 hours   # Check for new trades
-POSITION_MONITOR_INTERVAL = 5 min # Check positions
-CLEANUP_CHECK_INTERVAL = 30 sec   # Quick cleanup check
-```
+**Data Collection:** V3.1 is already collecting training data in shadow mode (200+ entries). After the hackathon, this data will train the RL agent.
 
 ---
 
-## Known Issues & Fixes
+## Lessons Learned
 
-### 1. Daemon now auto-detects practice mode
-If you have balance before Jan 12, the daemon will run in practice mode automatically.
-You can also force it with: `./smt test --force`
+1. **Trust your unique data.** Whale signals were right more often than I gave them credit for. When whales disagreed with sentiment, I should have listened to whales.
 
-### 2. pip --break-system-packages
-Old pip version doesn't support this flag.
-**Fix:** Just run `pip3 install -r requirements-v3.txt` (already works)
+2. **Survival beats profit.** The competitors who got liquidated are out. If you're still playing, you have infinite chances.
 
----
+3. **Regime awareness is critical.** Don't LONG in a bear market. Don't SHORT in a bull market. Sounds obvious, but most bots ignore this.
 
-## VM Details
-
-```
-Name: smt-api-test
-Zone: asia-southeast1-b
-IP: 34.87.116.79 (whitelisted by WEEX)
-User: smtforweex
-Repo: ~/smt-weex-trading-bot
-```
-
-### SSH Commands
-```bash
-# Start VM
-gcloud compute instances start smt-api-test --zone=asia-southeast1-b
-
-# SSH
-gcloud compute ssh smt-api-test --zone=asia-southeast1-b
-
-# Stop VM (save costs)
-gcloud compute instances stop smt-api-test --zone=asia-southeast1-b
-```
+4. **Cut losers fast, let winners run.** Still working on this one.
 
 ---
 
-## Next Steps
+## Contact
 
-1. **Update requirements on VM**:
-   ```bash
-   pip3 install -r requirements-v3.txt
-   ```
+**Project:** Smart Money Tracker (SMT)
 
-2. **Practice trades NOW** - daemon auto-detects balance and runs
+**Founder:** Jannet Ekka
 
-3. **Start daemon**:
-   ```bash
-   ./smt start
-   ```
+**Email:** jtech26smt@gmail.com
 
-4. **Commit to repo**:
-   ```bash
-   git add .
-   git commit -m "V3 pipeline - tested and working with practice mode"
-   git push
-   ```
-
-5. **Monitor**:
-   ```bash
-   ./smt logs
-   ./smt positions
-   ```
+**Twitter:** @JTechSMT
 
 ---
 
-## WEEX AI Log Requirement
+## License
 
-Pipeline auto-uploads AI logs to WEEX after each decision:
-- Whale Discovery
-- Signal Generation
-- Trade Execution
-- Position Close
-
-Endpoint: `POST /capi/v2/order/uploadAiLog`
+MIT License - See LICENSE file
 
 ---
 
-## GitHub Repo
-https://github.com/JannetEkka/smt-weex-trading-bot
+*Built for WEEX AI Wars: Alpha Awakens Hackathon*
 
----
-
-*Last updated: January 7, 2026*
-*Pipeline version: SMT-v3.0-Competition*
+*January - February 2026*
