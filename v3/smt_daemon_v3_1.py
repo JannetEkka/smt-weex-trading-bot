@@ -387,6 +387,18 @@ def check_trading_signals():
                 status_str = f" [{', '.join(status_parts)}]" if status_parts else ""
                 logger.info(f"  {pair} (T{tier}): {signal} ({confidence:.0%}){status_str}")
                 
+                # Telegram alert for BTC trades
+                if pair == "BTC" and signal in ("LONG", "SHORT") and confidence >= MIN_CONFIDENCE_TO_TRADE:
+                    try:
+                        from telegram_alerts import send_telegram_alert
+                        tier_cfg = get_tier_config(tier)
+                        current_price = get_price("cmt_btcusdt")
+                        alert_msg = f"""🚨 <b>SMT SIGNAL - BTC</b>\n\nDirection: <b>{signal}</b>\nConfidence: <b>{confidence:.0%}</b>\n\nEntry: ${current_price:,.2f}\nTP: {tier_cfg["tp_pct"]}% (${current_price * (1 + tier_cfg["tp_pct"]/100):,.2f})\nSL: {tier_cfg["sl_pct"]}% (${current_price * (1 - tier_cfg["sl_pct"]/100):,.2f})\n\nReasoning:\n{decision.get("reasoning", "N/A")[:500]}"""
+                        send_telegram_alert(alert_msg)
+                        logger.info("[TELEGRAM] BTC alert sent")
+                    except Exception as e:
+                        logger.error(f"[TELEGRAM] Alert failed: {e}")
+                
                 # Determine tradability
                 can_trade_this = False
                 trade_type = "none"

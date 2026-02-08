@@ -802,8 +802,8 @@ def get_enhanced_market_regime() -> dict:
 
 
 # Competition
-COMPETITION_START = datetime(2026, 1, 12, tzinfo=timezone.utc)
-COMPETITION_END = datetime(2026, 2, 2, tzinfo=timezone.utc)
+COMPETITION_START = datetime(2026, 2, 8, 15, 0, 0, tzinfo=timezone.utc)
+COMPETITION_END = datetime(2026, 2, 24, 20, 0, 0, tzinfo=timezone.utc)
 STARTING_BALANCE = 1000.0
 FLOOR_BALANCE = 950.0  # Protect principal - stop trading below this
 
