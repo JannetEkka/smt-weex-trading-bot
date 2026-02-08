@@ -627,6 +627,27 @@ Reasoning:
                         logger.info(f"Trade executed: {trade_result.get('order_id')}")
                         logger.info(f"  TP: {trade_result.get('tp_pct'):.1f}%, SL: {trade_result.get('sl_pct'):.1f}%")
                         
+                        # Telegram: Trade executed
+                        try:
+                            from telegram_alerts import send_telegram_alert
+                            pair = opportunity["pair"]
+                            decision = opportunity["decision"]
+                            signal = decision["signal"]
+                            confidence = decision["confidence"]
+                            tier_cfg = trade_result
+                            msg = f"""✅ <b>TRADE EXECUTED - {pair}</b>
+
+{signal} opened!
+Confidence: {confidence:.0%}
+Entry: ${trade_result.get('entry_price'):,.2f}
+TP: ${trade_result.get('tp_price'):,.2f} ({tier_cfg.get('tp_pct'):.1f}%)
+SL: ${trade_result.get('sl_price'):,.2f} ({tier_cfg.get('sl_pct'):.1f}%)
+
+Order ID: {trade_result.get('order_id')}"""
+                            send_telegram_alert(msg)
+                        except Exception as e:
+                            logger.error(f"Telegram trade alert failed: {e}")
+                        
                         tracker.add_trade(opportunity["pair_info"]["symbol"], trade_result)
                         state.trades_opened += 1
                         ai_log["trades"].append(trade_result)
@@ -1274,6 +1295,21 @@ def regime_aware_exit_check():
                 )
                 
                 logger.info(f"[REGIME EXIT] Closed {symbol_clean}, order: {order_id}")
+                
+                # Telegram: Regime exit
+                try:
+                    from telegram_alerts import send_telegram_alert
+                    msg = f"""⚠️ <b>REGIME EXIT - {symbol_clean}</b>
+
+{side} closed by AI
+Reason: {reason}
+PnL: ${pnl:.2f}
+
+Market regime: {regime['regime']}
+BTC 24h: {regime['change_24h']:+.1f}%"""
+                    send_telegram_alert(msg)
+                except Exception as e:
+                    logger.error(f"Telegram regime exit alert failed: {e}")
         
         if closed_count > 0:
             logger.info(f"[REGIME EXIT] Closed {closed_count} positions fighting the trend")
