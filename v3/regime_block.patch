@@ -1,0 +1,13 @@
+        if confidence < min_confidence:
+            return self._wait_decision(f"Confidence too low: {confidence:.0%} (Tier {tier} needs {min_confidence:.0%})", persona_votes, vote_summary)
+        
+        # V3.1.27: REGIME BLOCKING - Don't fight the trend
+        if regime["regime"] == "BULLISH" and decision == "SHORT":
+            print(f"  [JUDGE] BLOCKED: Don't SHORT in BULLISH regime (BTC: {regime.get('btc_24h', 0):+.1f}%)")
+            return self._wait_decision(f"BLOCKED: Don't SHORT in BULLISH regime", persona_votes, vote_summary)
+        
+        if regime["regime"] == "BEARISH" and decision == "LONG":
+            print(f"  [JUDGE] BLOCKED: Don't LONG in BEARISH regime (BTC: {regime.get('btc_24h', 0):+.1f}%)")
+            return self._wait_decision(f"BLOCKED: Don't LONG in BEARISH regime", persona_votes, vote_summary)
+        
+        # V3.1.21: RSI OVERBOUGHT FILTER (symmetric with oversold SHORT filter)
