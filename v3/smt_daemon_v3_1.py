@@ -157,6 +157,17 @@ except ImportError as e:
     logger.error(traceback.format_exc())
     sys.exit(1)
 
+# V3.1.29: Pyramiding system import
+try:
+    from pyramiding_system import move_sl_to_breakeven, should_pyramid, execute_pyramid
+    logger.info("Pyramiding system loaded")
+except ImportError:
+    logger.warning("Pyramiding system not available")
+    move_sl_to_breakeven = lambda *args, **kwargs: False
+    should_pyramid = lambda *args, **kwargs: {"should_add": False}
+    execute_pyramid = lambda *args, **kwargs: {"success": False}
+
+
 
 # ============================================================
 # DAEMON STATE
@@ -626,27 +637,6 @@ Reasoning:
                     if trade_result.get("executed"):
                         logger.info(f"Trade executed: {trade_result.get('order_id')}")
                         logger.info(f"  TP: {trade_result.get('tp_pct'):.1f}%, SL: {trade_result.get('sl_pct'):.1f}%")
-                        
-                        # Telegram: Trade executed
-                        try:
-                            from telegram_alerts import send_telegram_alert
-                            pair = opportunity["pair"]
-                            decision = opportunity["decision"]
-                            signal = decision["signal"]
-                            confidence = decision["confidence"]
-                            tier_cfg = trade_result
-                            msg = f"""✅ <b>TRADE EXECUTED - {pair}</b>
-
-{signal} opened!
-Confidence: {confidence:.0%}
-Entry: ${trade_result.get('entry_price'):,.2f}
-TP: ${trade_result.get('tp_price'):,.2f} ({tier_cfg.get('tp_pct'):.1f}%)
-SL: ${trade_result.get('sl_price'):,.2f} ({tier_cfg.get('sl_pct'):.1f}%)
-
-Order ID: {trade_result.get('order_id')}"""
-                            send_telegram_alert(msg)
-                        except Exception as e:
-                            logger.error(f"Telegram trade alert failed: {e}")
                         
                         tracker.add_trade(opportunity["pair_info"]["symbol"], trade_result)
                         state.trades_opened += 1
@@ -1195,9 +1185,8 @@ def regime_aware_exit_check():
                 except:
                     pass
             
-            # V3.1.20 PREDATOR: No regime exits within first 4 hours - UNLESS SPIKING
-            is_spiking = abs(regime.get('change_1h', 0)) > 1.5
-            if hours_open < 4 and not is_spiking:
+            # V3.1.20 PREDATOR: No regime exits within first 4 hours - let trades breathe
+            if hours_open < 4:
                 continue
             
             # V3.1.25: SPIKE detection - fast exit on sudden moves
@@ -1219,23 +1208,23 @@ def regime_aware_exit_check():
             # Trust the 2% SL on WEEX for normal stops
             
             # LONG losing in BEARISH market
-            if regime["regime"] == "BEARISH" and side == "LONG" and pnl < -8:
+            if regime["regime"] == "BEARISH" and side == "LONG" and pnl < -15:
                 should_close = True
                 reason = f"LONG losing ${abs(pnl):.1f} in BEARISH market (24h: {regime['change_24h']:+.1f}%)"
             
             # SHORT losing in BULLISH market
-            elif regime["regime"] == "BULLISH" and side == "SHORT" and pnl < -8:
+            elif regime["regime"] == "BULLISH" and side == "SHORT" and pnl < -15:
                 should_close = True
                 reason = f"SHORT losing ${abs(pnl):.1f} in BULLISH market (24h: {regime['change_24h']:+.1f}%)"
             
             # V3.1.23 FIX: HARD STOP only for positions FIGHTING regime (raised to $50)
             # LONG in BEARISH/NEUTRAL losing badly = cut it
-            elif side == "LONG" and pnl < -25 and regime["regime"] in ("BEARISH", "NEUTRAL"):
+            elif side == "LONG" and pnl < -50 and regime["regime"] in ("BEARISH", "NEUTRAL"):
                 should_close = True
                 reason = f"HARD STOP: LONG losing ${abs(pnl):.1f} in {regime['regime']} market"
             
             # SHORT in BULLISH losing badly = cut it (but NOT in BEARISH/NEUTRAL!)
-            elif side == "SHORT" and pnl < -25 and regime["regime"] == "BULLISH":
+            elif side == "SHORT" and pnl < -50 and regime["regime"] == "BULLISH":
                 should_close = True
                 reason = f"HARD STOP: SHORT losing ${abs(pnl):.1f} in BULLISH market"
             
@@ -1295,21 +1284,6 @@ def regime_aware_exit_check():
                 )
                 
                 logger.info(f"[REGIME EXIT] Closed {symbol_clean}, order: {order_id}")
-                
-                # Telegram: Regime exit
-                try:
-                    from telegram_alerts import send_telegram_alert
-                    msg = f"""⚠️ <b>REGIME EXIT - {symbol_clean}</b>
-
-{side} closed by AI
-Reason: {reason}
-PnL: ${pnl:.2f}
-
-Market regime: {regime['regime']}
-BTC 24h: {regime['change_24h']:+.1f}%"""
-                    send_telegram_alert(msg)
-                except Exception as e:
-                    logger.error(f"Telegram regime exit alert failed: {e}")
         
         if closed_count > 0:
             logger.info(f"[REGIME EXIT] Closed {closed_count} positions fighting the trend")
