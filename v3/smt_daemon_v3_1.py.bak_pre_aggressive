@@ -1174,9 +1174,8 @@ def regime_aware_exit_check():
                 except:
                     pass
             
-            # V3.1.20 PREDATOR: No regime exits within first 4 hours - UNLESS SPIKING
-            is_spiking = abs(regime.get('change_1h', 0)) > 1.5
-            if hours_open < 4 and not is_spiking:
+            # V3.1.20 PREDATOR: No regime exits within first 4 hours - let trades breathe
+            if hours_open < 4:
                 continue
             
             # V3.1.25: SPIKE detection - fast exit on sudden moves
@@ -1198,23 +1197,23 @@ def regime_aware_exit_check():
             # Trust the 2% SL on WEEX for normal stops
             
             # LONG losing in BEARISH market
-            if regime["regime"] == "BEARISH" and side == "LONG" and pnl < -8:
+            if regime["regime"] == "BEARISH" and side == "LONG" and pnl < -15:
                 should_close = True
                 reason = f"LONG losing ${abs(pnl):.1f} in BEARISH market (24h: {regime['change_24h']:+.1f}%)"
             
             # SHORT losing in BULLISH market
-            elif regime["regime"] == "BULLISH" and side == "SHORT" and pnl < -8:
+            elif regime["regime"] == "BULLISH" and side == "SHORT" and pnl < -15:
                 should_close = True
                 reason = f"SHORT losing ${abs(pnl):.1f} in BULLISH market (24h: {regime['change_24h']:+.1f}%)"
             
             # V3.1.23 FIX: HARD STOP only for positions FIGHTING regime (raised to $50)
             # LONG in BEARISH/NEUTRAL losing badly = cut it
-            elif side == "LONG" and pnl < -25 and regime["regime"] in ("BEARISH", "NEUTRAL"):
+            elif side == "LONG" and pnl < -50 and regime["regime"] in ("BEARISH", "NEUTRAL"):
                 should_close = True
                 reason = f"HARD STOP: LONG losing ${abs(pnl):.1f} in {regime['regime']} market"
             
             # SHORT in BULLISH losing badly = cut it (but NOT in BEARISH/NEUTRAL!)
-            elif side == "SHORT" and pnl < -25 and regime["regime"] == "BULLISH":
+            elif side == "SHORT" and pnl < -50 and regime["regime"] == "BULLISH":
                 should_close = True
                 reason = f"HARD STOP: SHORT losing ${abs(pnl):.1f} in BULLISH market"
             
