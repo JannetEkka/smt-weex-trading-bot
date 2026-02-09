@@ -815,20 +815,20 @@ def monitor_positions():
                 # Tier 3 (DOGE, XRP, ADA): Tighter - they reverse fast
                 # Tier 1/2 (BTC, ETH, SOL): More room to breathe
                 if tier == 3:
-                    # Tier 3: Exit if peak >= 2% and drops to 0.5%
-                    if peak_pnl_pct >= 2.0 and pnl_pct < 0.5:
+                    # Tier 3: Exit if peak >= 2.5% and drops to 1.0% (V3.1.31 loosened for competition)
+                    if peak_pnl_pct >= 2.5 and pnl_pct < 1.0:
                         should_exit = True
                         exit_reason = f"T3_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
                         state.early_exits += 1
                 elif tier == 2:
-                    # Tier 2: Exit if peak >= 2.5% and drops to 1.0%
-                    if peak_pnl_pct >= 2.5 and pnl_pct < 1.0:
+                    # Tier 2: Exit if peak >= 3.0% and drops to 1.5% (V3.1.31 loosened for competition)
+                    if peak_pnl_pct >= 3.0 and pnl_pct < 1.5:
                         should_exit = True
                         exit_reason = f"T2_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
                         state.early_exits += 1
                 else:
-                    # Tier 1: Exit if peak >= 3.0% and drops to 1.5%
-                    if peak_pnl_pct >= 3.0 and pnl_pct < 1.5:
+                    # Tier 1: Exit if peak >= 3.5% and drops to 2.0% (V3.1.31 loosened for competition)
+                    if peak_pnl_pct >= 3.5 and pnl_pct < 2.0:
                         should_exit = True
                         exit_reason = f"T1_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
                         state.early_exits += 1
