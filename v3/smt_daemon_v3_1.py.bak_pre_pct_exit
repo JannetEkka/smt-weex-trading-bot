@@ -1135,8 +1135,8 @@ def regime_aware_exit_check():
     V3.1.9: AI cuts positions fighting the market regime.
     
     Logic:
-    - BEARISH market + LONG losing > 2% margin = AI closes position
-    - BULLISH market + SHORT losing > 2% margin = AI closes position
+    - BEARISH market + LONG losing > $8 = AI closes position
+    - BULLISH market + SHORT losing > $8 = AI closes position
     
     This frees margin for regime-aligned trades.
     """
@@ -1168,11 +1168,6 @@ def regime_aware_exit_check():
             symbol = pos['symbol']
             side = pos['side']
             pnl = float(pos.get('unrealized_pnl', 0))
-            margin = float(pos.get("margin", 500))
-            # V3.1.30: Percentage-based exit thresholds
-            regime_fight_threshold = -(margin * 0.02)   # -2% of margin
-            hard_stop_threshold = -(margin * 0.05)      # -5% of margin
-            spike_threshold = -(margin * 0.015)          # -1.5% of margin
             size = float(pos['size'])
             
             symbol_clean = symbol.replace('cmt_', '').upper()
@@ -1200,12 +1195,12 @@ def regime_aware_exit_check():
                 change_1h = regime.get("change_1h", 0)
                 
                 # SPIKE_UP = danger for SHORTs
-                if spike_type == "SPIKE_UP" and side == "SHORT" and pnl < spike_threshold:
+                if spike_type == "SPIKE_UP" and side == "SHORT" and pnl < -10:
                     should_close = True
                     reason = f"SPIKE_UP: BTC +{change_1h:.1f}% in 1h, SHORT losing ${abs(pnl):.1f}"
                 
                 # SPIKE_DOWN = danger for LONGs
-                elif spike_type == "SPIKE_DOWN" and side == "LONG" and pnl < spike_threshold:
+                elif spike_type == "SPIKE_DOWN" and side == "LONG" and pnl < -10:
                     should_close = True
                     reason = f"SPIKE_DOWN: BTC {change_1h:.1f}% in 1h, LONG losing ${abs(pnl):.1f}"
             
@@ -1213,23 +1208,23 @@ def regime_aware_exit_check():
             # Trust the 2% SL on WEEX for normal stops
             
             # LONG losing in BEARISH market
-            if regime["regime"] == "BEARISH" and side == "LONG" and pnl < regime_fight_threshold:
+            if regime["regime"] == "BEARISH" and side == "LONG" and pnl < -15:
                 should_close = True
-                reason = f"LONG losing ${abs(pnl):.1f} ({abs(pnl)/margin*100:.1f}% margin) in BEARISH market (24h: {regime['change_24h']:+.1f}%)"
+                reason = f"LONG losing ${abs(pnl):.1f} in BEARISH market (24h: {regime['change_24h']:+.1f}%)"
             
             # SHORT losing in BULLISH market
-            elif regime["regime"] == "BULLISH" and side == "SHORT" and pnl < regime_fight_threshold:
+            elif regime["regime"] == "BULLISH" and side == "SHORT" and pnl < -15:
                 should_close = True
-                reason = f"SHORT losing ${abs(pnl):.1f} ({abs(pnl)/margin*100:.1f}% margin) in BULLISH market (24h: {regime['change_24h']:+.1f}%)"
+                reason = f"SHORT losing ${abs(pnl):.1f} in BULLISH market (24h: {regime['change_24h']:+.1f}%)"
             
             # V3.1.23 FIX: HARD STOP only for positions FIGHTING regime (raised to $50)
             # LONG in BEARISH/NEUTRAL losing badly = cut it
-            elif side == "LONG" and pnl < hard_stop_threshold and regime["regime"] in ("BEARISH", "NEUTRAL"):
+            elif side == "LONG" and pnl < -50 and regime["regime"] in ("BEARISH", "NEUTRAL"):
                 should_close = True
                 reason = f"HARD STOP: LONG losing ${abs(pnl):.1f} in {regime['regime']} market"
             
             # SHORT in BULLISH losing badly = cut it (but NOT in BEARISH/NEUTRAL!)
-            elif side == "SHORT" and pnl < hard_stop_threshold and regime["regime"] == "BULLISH":
+            elif side == "SHORT" and pnl < -50 and regime["regime"] == "BULLISH":
                 should_close = True
                 reason = f"HARD STOP: SHORT losing ${abs(pnl):.1f} in BULLISH market"
             
