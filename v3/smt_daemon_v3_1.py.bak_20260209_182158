@@ -58,105 +58,6 @@ except ImportError:
     RL_ENABLED = False
 
 
-def fill_rl_outcomes_inline():
-    """V3.1.36: Auto-fill RL outcomes from trade_state after closes."""
-    if not RL_ENABLED:
-        return
-    try:
-        import glob as _glob
-        state_file = None
-        for c in ["trade_state_v3_1_7.json", "trade_state_v3_1_4.json"]:
-            if os.path.exists(c):
-                state_file = c
-                break
-        if not state_file or not os.path.exists("rl_training_data"):
-            return
-
-        with open(state_file, 'r') as f:
-            ts = json.load(f)
-        closed = ts.get('closed', [])
-        if not closed:
-            return
-
-        unfilled = {}
-        for fp in _glob.glob("rl_training_data/exp_*.jsonl"):
-            with open(fp, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        e = json.loads(line)
-                        if e.get('outcome') is None and e.get('action') in ('LONG','SHORT'):
-                            unfilled[e['id']] = {'entry': e, 'file': fp}
-                    except:
-                        continue
-        if not unfilled:
-            return
-
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-        filled = 0
-        for trade in closed[-20:]:
-            t_opened = trade.get('opened_at','')
-            t_side = trade.get('side','')
-            if not t_opened or not t_side:
-                continue
-            try:
-                opened_dt = datetime.fromisoformat(t_opened.replace('Z','+00:00'))
-            except:
-                continue
-            if opened_dt < cutoff:
-                continue
-            for eid, data in unfilled.items():
-                ent = data['entry']
-                if ent.get('action') != t_side:
-                    continue
-                try:
-                    rl_ts = datetime.fromisoformat(ent['ts'].replace('Z','+00:00'))
-                except:
-                    continue
-                diff = opened_dt - rl_ts
-                if timedelta(0) <= diff <= timedelta(minutes=10):
-                    cd = trade.get('close_data',{})
-                    pos_usdt = trade.get('position_usdt',0)
-                    pnl_usd = cd.get('pnl',0) or 0
-                    pnl_pct = (pnl_usd/pos_usdt)*100 if pos_usdt and pnl_usd else 0
-                    try:
-                        closed_dt = datetime.fromisoformat(trade.get('closed_at','').replace('Z','+00:00'))
-                        hh = (closed_dt - opened_dt).total_seconds()/3600
-                    except:
-                        hh = 0
-                    outcome = {
-                        "pnl": round(pnl_pct,4), "hours": round(hh,2),
-                        "reason": cd.get('reason','unknown'),
-                        "reward": rl_collector._calc_reward(pnl_pct,hh,0,0) if rl_collector else 0,
-                        "pnl_usd": round(pnl_usd,2), "win": pnl_usd > 0,
-                    }
-                    try:
-                        lines = []
-                        with open(data['file'],'r') as f:
-                            for l in f:
-                                l = l.strip()
-                                if not l: continue
-                                try:
-                                    x = json.loads(l)
-                                    if x.get('id') == eid:
-                                        x['outcome'] = outcome
-                                        filled += 1
-                                    lines.append(json.dumps(x, default=str))
-                                except:
-                                    lines.append(l)
-                        with open(data['file'],'w') as f:
-                            f.write('\n'.join(lines)+'\n')
-                    except:
-                        pass
-                    break
-        if filled > 0:
-            logger.info(f"[RL] Auto-filled {filled} outcome(s)")
-    except Exception as e:
-        logger.debug(f"RL auto-fill error: {e}")
-
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ============================================================
@@ -446,7 +347,7 @@ def check_trading_signals():
         
         # Confidence thresholds
         COOLDOWN_OVERRIDE_CONFIDENCE = 0.85
-        HEDGE_CONFIDENCE_THRESHOLD = 0.80  # V3.1.37: Lowered from 90% to allow hedging
+        HEDGE_CONFIDENCE_THRESHOLD = 0.90  # Need 75%+ to open opposite direction
         
         # Build map: symbol -> {side: position}
         # This tracks BOTH long and short for each symbol
@@ -727,63 +628,6 @@ Reasoning:
                 type_label = "[HEDGE] " if trade_type == "hedge" else ""
                 logger.info(f"EXECUTING {type_label}{pair} {signal} (T{tier}) - {confidence:.0%}")
                 
-                # V3.1.38: Hedge partial close - reduce 50% of opposite position
-                if trade_type == "hedge":
-                    try:
-                        opp_side = "SHORT" if signal == "LONG" else "LONG"
-                        sym = opportunity["pair_info"]["symbol"]
-                        sym_positions = position_map.get(sym, {})
-                        opp_pos = sym_positions.get(opp_side)
-                        
-                        if opp_pos:
-                            opp_size = float(opp_pos.get("size", 0))
-                            opp_entry = float(opp_pos.get("entry_price", 0))
-                            opp_pnl = float(opp_pos.get("unrealized_pnl", 0))
-                            
-                            # Calculate 50% close size
-                            from smt_nightly_trade_v3_1 import round_size_to_step
-                            close_size = round_size_to_step(opp_size * 0.5, sym)
-                            
-                            if close_size > 0:
-                                close_type = "3" if opp_side == "LONG" else "4"
-                                logger.info(f"  [HEDGE REDUCE] Closing 50% of {opp_side} {pair}: {close_size}/{opp_size} units")
-                                
-                                close_result = place_order(sym, close_type, close_size, tp_price=None, sl_price=None)
-                                close_oid = close_result.get("order_id")
-                                
-                                if close_oid:
-                                    logger.info(f"  [HEDGE REDUCE] Closed 50%: order {close_oid}")
-                                    
-                                    # Upload AI log for hedge partial close
-                                    upload_ai_log_to_weex(
-                                        stage=f"V3.1.38 Hedge Reduce: {opp_side} {pair}",
-                                        input_data={
-                                            "symbol": sym,
-                                            "existing_side": opp_side,
-                                            "existing_size": opp_size,
-                                            "existing_entry": opp_entry,
-                                            "existing_pnl": opp_pnl,
-                                            "new_signal": signal,
-                                            "new_confidence": confidence,
-                                        },
-                                        output_data={
-                                            "action": "HEDGE_PARTIAL_CLOSE",
-                                            "close_size": close_size,
-                                            "remaining_size": opp_size - close_size,
-                                            "close_order_id": close_oid,
-                                        },
-                                        explanation=f"AI Hedge: {signal} signal at {confidence:.0%} detected while {opp_side} is open (PnL: ${opp_pnl:.2f}). Reducing {opp_side} by 50% ({close_size} units) to free margin and reduce losing exposure before opening {signal}."
-                                    )
-                                    
-                                    state.trades_closed += 1
-                                else:
-                                    logger.warning(f"  [HEDGE REDUCE] Partial close failed: {close_result}")
-                            else:
-                                logger.info(f"  [HEDGE REDUCE] Position too small to split, skipping partial close")
-                    except Exception as e:
-                        logger.error(f"  [HEDGE REDUCE] Error: {e}")
-                        # Continue to open hedge even if partial close fails
-                
                 try:
                     trade_result = run_with_retry(
                         execute_trade,
@@ -887,37 +731,6 @@ def monitor_positions():
                         "pnl_pct": pnl_pct
                     })
                     state.trades_closed += 1
-                    
-                    # V3.1.36: AI log for TP/SL closes
-                    symbol_clean = symbol.replace("cmt_", "").upper()
-                    hit_tp = actual_pnl > 0
-                    exit_type = "TAKE_PROFIT" if hit_tp else "STOP_LOSS"
-                    try:
-                        hours_open = 0
-                        if trade.get("opened_at"):
-                            opened_at = datetime.fromisoformat(trade["opened_at"].replace("Z", "+00:00"))
-                            hours_open = (datetime.now(timezone.utc) - opened_at).total_seconds() / 3600
-                        
-                        upload_ai_log_to_weex(
-                            stage=f"V3.1.36 {exit_type}: {side} {symbol_clean}",
-                            input_data={
-                                "symbol": symbol,
-                                "side": side,
-                                "entry_price": entry_price,
-                                "position_usdt": position_usdt,
-                                "hours_open": round(hours_open, 2),
-                            },
-                            output_data={
-                                "action": "CLOSED",
-                                "exit_type": exit_type,
-                                "pnl_usd": round(actual_pnl, 2),
-                                "pnl_pct": round(pnl_pct, 2),
-                            },
-                            explanation=f"Position closed via {exit_type}. {side} {symbol_clean} held {hours_open:.1f}h. PnL: ${actual_pnl:.2f} ({pnl_pct:+.2f}%). Entry: ${entry_price:.4f}."
-                        )
-                    except Exception as e:
-                        logger.debug(f"AI log error for TP/SL close: {e}")
-                    
                     continue
                 
                 # Get tier config for this position
@@ -1144,35 +957,6 @@ def quick_cleanup_check():
                 })
                 state.trades_closed += 1
                 position_closed = True
-                
-                # V3.1.36: AI log for quick cleanup closes
-                symbol_clean = symbol.replace("cmt_", "").upper()
-                exit_type = "TAKE_PROFIT" if hit_tp else "STOP_LOSS"
-                try:
-                    hours_open = 0
-                    if trade.get("opened_at"):
-                        opened_at = datetime.fromisoformat(trade["opened_at"].replace("Z", "+00:00"))
-                        hours_open = (datetime.now(timezone.utc) - opened_at).total_seconds() / 3600
-                    
-                    upload_ai_log_to_weex(
-                        stage=f"V3.1.36 {exit_type}: {side} {symbol_clean}",
-                        input_data={
-                            "symbol": symbol,
-                            "side": side,
-                            "entry_price": entry_price,
-                            "position_usdt": position_usdt,
-                            "hours_open": round(hours_open, 2),
-                        },
-                        output_data={
-                            "action": "CLOSED",
-                            "exit_type": exit_type,
-                            "pnl_usd": round(pnl_usd, 2),
-                            "pnl_pct": round(pnl_pct, 2) if pnl_pct else 0,
-                        },
-                        explanation=f"Position closed via {exit_type}. {side} {symbol_clean} held {hours_open:.1f}h. PnL: ${pnl_usd:.2f}."
-                    )
-                except Exception as e:
-                    logger.debug(f"AI log error for quick cleanup close: {e}")
         
         if position_closed:
             logger.info("Position closed - checking for new opportunity")
@@ -1198,10 +982,6 @@ def log_health():
         f"Runners: {state.runners_triggered} | "
         f"Active: {active}"
     )
-    
-    # V3.1.36: Auto-fill RL outcomes every health check
-    if state.trades_closed > 0:
-        fill_rl_outcomes_inline()
 
 
 # ============================================================

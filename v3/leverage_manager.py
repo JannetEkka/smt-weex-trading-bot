@@ -6,8 +6,8 @@ Liquidation distance at 10x = ~9%, at 12x = ~7.5% -- SL at 1.5% gives 6%+ buffer
 
 class LeverageManager:
     def __init__(self):
-        self.MIN_LEVERAGE = 8
-        self.MAX_LEVERAGE = 12
+        self.MIN_LEVERAGE = 5  # V3.1.34: SURVIVAL
+        self.MAX_LEVERAGE = 8  # V3.1.34: SURVIVAL
         self.MAX_POSITION_PCT = 0.20  # 20% of balance per position
         self.MIN_LIQUIDATION_DISTANCE = 6  # 6% min buffer above SL
 

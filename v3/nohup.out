@@ -26497,3 +26497,242 @@ nohup: ignoring input
   "errors": 0
 }
   [LOG] Saved: logs/v3_1_1_20260201_042511.json
+2026-02-09 17:13:09 | INFO     | V3.1.9 imports successful (Market Trend Filter + Stricter Signals)
+2026-02-09 17:13:09 | INFO     | Pyramiding system loaded
+2026-02-09 17:13:09 | INFO     | ============================================================
+2026-02-09 17:13:09 | INFO     | SMT Daemon V3.1.14 - NO FLOOR + BUG FIX
+2026-02-09 17:13:09 | INFO     | ============================================================
+2026-02-09 17:13:09 | INFO     | V3.1.9 CRITICAL FIXES:
+2026-02-09 17:13:09 | INFO     |   - FIXED: undefined btc_trend bug blocking regime filter
+2026-02-09 17:13:09 | INFO     |   - FIXED: Regime filter now applies to ALL pairs incl BTC
+2026-02-09 17:13:09 | INFO     |   - BEARISH threshold: -1% (was -2%)
+2026-02-09 17:13:09 | INFO     |   - Block LONGs when BTC 24h < -0.5%
+2026-02-09 17:13:09 | INFO     |   - Regime cache: 5min (was 15min)
+2026-02-09 17:13:09 | INFO     | Tier Configuration:
+2026-02-09 17:13:09 | INFO     |   Tier 1 (STABLE): BTC, ETH, BNB, LTC
+2026-02-09 17:13:09 | INFO     |     TP: 4.0%, SL: 2.5%, Hold: 12h | No Runner
+2026-02-09 17:13:09 | INFO     |   Tier 2 (MID): SOL
+2026-02-09 17:13:09 | INFO     |     TP: 3.5%, SL: 2.0%, Hold: 8h | No Runner
+2026-02-09 17:13:09 | INFO     |   Tier 3 (FAST): DOGE, XRP, ADA
+2026-02-09 17:13:09 | INFO     |     TP: 3.0%, SL: 2.0%, Hold: 4h | No Runner
+2026-02-09 17:13:09 | INFO     | Cooldown Override: 85%+ confidence bypasses cooldown
+2026-02-09 17:13:09 | INFO     | ============================================================
+2026-02-09 17:13:09 | INFO     | Syncing tracker with WEEX positions...
+2026-02-09 17:13:09 | INFO     | Sync complete. Tracking 3 positions.
+2026-02-09 17:13:09 | INFO     | Competition ACTIVE - initial signal check
+2026-02-09 17:13:09 | INFO     | ============================================================
+2026-02-09 17:13:09 | INFO     | V3.1.9 SIGNAL CHECK - 20260209_171309
+2026-02-09 17:13:09 | INFO     | ============================================================
+2026-02-09 17:13:10 | INFO     | Balance: 6096.29 USDT | Equity: 7994.11 USDT | UPnL: -202.19
+2026-02-09 17:13:10 | INFO     | Open positions: 3
+2026-02-09 17:13:10 | INFO     | Days left: 15
+2026-02-09 17:13:15 | INFO     | Signal 2 - shutting down
+2026-02-09 18:27:02 | INFO     | Signal 15 - shutting down
+2026-02-09 18:27:02 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-09 18:27:45 | INFO     |   BTC (T1): WAIT (0%)
+  [V3.1.21] Hot-reload enabled
+
+  === Multi-Persona Analysis: BTC (Tier 1: STABLE) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (81%): Whale distribution: -1550 ETH net outflow | Binance 3: -1545 ETH
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (70%): BTC has experienced a slight to moderate price decline in the last 24 hours, breaking below some short-term support levels and currently trading under the $70,000 mark. It is noted to be in a falling trend channel in the short term.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 14.07, Asks: 8.00, Ratio: 1.76
+  [FLOW] Taker - Buy: 15.2555, Sell: 42.1432, Ratio: 0.36
+  [FLOW] Funding rate: -0.000076
+  [REGIME] BULLISH (score: 1, conf: 65%)
+  [REGIME] BTC 24h: -0.8% | F&G: 14 | Funding: 0.00001
+  [REGIME] OI Signal: NEUTRAL | Volatility: NORMAL | Alts: -0.6%
+  [REGIME]   > BTC weak: -0.8%
+  [REGIME]   > EXTREME FEAR (14): contrarian BUY
+  [FLOW] Taker ratio: 0.36 | Extreme sell: False | Heavy sell: True
+  [FLOW] SHORT (70%): Heavy taker selling: 0.36
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] NEUTRAL (40%): No clear technical signal. RSI: 62.0
+  [JUDGE] Deciding...
+  [JUDGE] V3.1.35: BULLISH regime - SHORT needs 85%
+  [JUDGE] V3.1.33: BEARISH regime, SHORT at 80%+ min
+  [JUDGE] Final: WAIT (0%)
+  [AI LOG OK] V3.1.9 Analysis - BTC (Tier 1)
+2026-02-09 18:27:56 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-09 18:28:29 | INFO     |   ETH (T1): WAIT (0%)
+
+  === Multi-Persona Analysis: ETH (Tier 1: STABLE) ===
+  [WHALE] Analyzing...
+  [WHALE] NEUTRAL (40%): Whale activity balanced: +86 ETH
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (60%): ETH price has declined approximately 3-4% in the last 24 hours, accompanied by 'panic selling' and increased trading volume, suggesting downward momentum with volume on red candles.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 195.78, Asks: 122.40, Ratio: 1.60
+  [FLOW] Taker - Buy: 102.9930, Sell: 136.6930, Ratio: 0.75
+  [FLOW] Funding rate: 0.000046
+  [FLOW] Taker ratio: 0.75 | Extreme sell: False | Heavy sell: False
+  [FLOW] SHORT (50%): Taker sell pressure: 0.75
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] LONG (50%): Price above SMAs (uptrend)
+  [JUDGE] Deciding...
+  [JUDGE] V3.1.35: BULLISH regime - SHORT needs 85%
+  [JUDGE] V3.1.33: BEARISH regime, SHORT at 80%+ min
+  [JUDGE] Final: WAIT (0%)
+  [AI LOG NET ERROR] V3.1.9 Analysis - ETH (Tier 1): Expecting value: line 1 column 1 (char 0)
+2026-02-09 18:28:32 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-09 18:28:59 | INFO     |   BNB (T1): WAIT (0%) [S:-65.1]
+
+  === Multi-Persona Analysis: BNB (Tier 1: STABLE) ===
+  [WHALE] Skipped (no whale data for BNB)
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (60%): BNB's price has generally shown a slight decrease or remained flat in the last 24 hours, hovering around the $620-$640 range. A previously identified critical support level of $652 appears to have been broken, with the price now testing lower support levels around $628. Technical analysis from a recent report also indicates a bearish MACD crossover and negative momentum, suggesting potential for continued downside.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 707.20, Asks: 589.30, Ratio: 1.20
+  [FLOW] Taker - Buy: 120.9000, Sell: 44.9000, Ratio: 2.69
+  [FLOW] Funding rate: -0.000018
+  [FLOW] Taker ratio: 2.69 | Extreme sell: False | Heavy sell: False
+  [FLOW] BEARISH regime: Reducing heavy buying signal
+  [FLOW] NEUTRAL (50%): Taker buying 2.69 but BEARISH (bounce?)
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -2.3%
+  [JUDGE] Deciding...
+  [JUDGE] V3.1.35: BULLISH regime - SHORT needs 85%
+  [JUDGE] V3.1.33: BEARISH regime, SHORT at 80%+ min
+  [JUDGE] Final: WAIT (0%)
+  [AI LOG OK] V3.1.9 Analysis - BNB (Tier 1)
+2026-02-09 18:29:02 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-09 18:29:29 | INFO     |   LTC (T1): SHORT (86%) [S:-68.4]
+2026-02-09 18:29:30 | INFO     | Telegram alert sent
+2026-02-09 18:29:30 | INFO     | [TELEGRAM] LTC SHORT alert sent
+2026-02-09 18:29:30 | INFO     |     -> Already SHORT
+
+  === Multi-Persona Analysis: LTC (Tier 1: STABLE) ===
+  [WHALE] Skipped (no whale data for LTC)
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] LONG (60%): Despite relatively flat price action, there is reported strong buy pressure and a higher volume of short liquidations, indicating underlying bullish momentum and buying interest.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 13284.20, Asks: 24925.40, Ratio: 0.53
+  [FLOW] Taker - Buy: 158.3000, Sell: 332.6000, Ratio: 0.48
+  [FLOW] Funding rate: -0.000003
+  [FLOW] Taker ratio: 0.48 | Extreme sell: False | Heavy sell: True
+  [FLOW] SHORT (85%): Heavy taker selling: 0.48; Ask depth confirms
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -2.5%
+  [JUDGE] Deciding...
+  [JUDGE] V3.1.35: BULLISH regime - SHORT needs 85%
+  [JUDGE] V3.1.33: BEARISH regime, SHORT at 80%+ min
+  [JUDGE] WARNING: F&G=14 (EXTREME FEAR) - bounce risk HIGH for shorts
+  [JUDGE] Final: SHORT (86%)
+  [JUDGE] TP: 3.75%, SL: 2.5%, Max Hold: 12h
+  [AI LOG OK] V3.1.9 Analysis - LTC (Tier 1)
+2026-02-09 18:29:33 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-09 18:30:01 | INFO     |   SOL (T2): WAIT (0%) [S:-68.0]
+
+  === Multi-Persona Analysis: SOL (Tier 2: MID) ===
+  [WHALE] Skipped (no whale data for SOL)
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (70%): Consolidation below $90, more long liquidations than short, and declining Open Interest indicating reduced capital exposure.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 19623.00, Asks: 15509.30, Ratio: 1.27
+  [FLOW] Taker - Buy: 383.9000, Sell: 254.0000, Ratio: 1.51
+  [FLOW] Funding rate: -0.000005
+  [REGIME] BULLISH (score: 0, conf: 50%)
+  [REGIME] BTC 24h: -1.0% | F&G: 14 | Funding: 0.00001
+  [REGIME] OI Signal: NEUTRAL | Volatility: NORMAL | Alts: -0.9%
+  [REGIME]   > BTC dropping: -1.0%
+  [REGIME]   > EXTREME FEAR (14): contrarian BUY
+  [FLOW] Taker ratio: 1.51 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (50%): Taker buy pressure: 1.51
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] NEUTRAL (40%): No clear technical signal. RSI: 52.1
+  [JUDGE] Deciding...
+  [JUDGE] V3.1.35: BULLISH regime - SHORT needs 85%
+  [JUDGE] V3.1.33: BEARISH regime, SHORT at 80%+ min
+  [JUDGE] Final: WAIT (0%)
+  [AI LOG OK] V3.1.9 Analysis - SOL (Tier 2)
+2026-02-09 18:30:04 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-09 18:30:22 | INFO     |   DOGE (T3): SHORT (90%)
+2026-02-09 18:30:23 | INFO     | Telegram alert sent
+2026-02-09 18:30:23 | INFO     | [TELEGRAM] DOGE SHORT alert sent
+
+  === Multi-Persona Analysis: DOGE (Tier 3: FAST) ===
+  [WHALE] Skipped (no whale data for DOGE)
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (80%): Significant long liquidations and consistent price decline over the last 24 hours.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 20963100.00, Asks: 22875300.00, Ratio: 0.92
+  [FLOW] Taker - Buy: 265000.0000, Sell: 689100.0000, Ratio: 0.38
+  [FLOW] Funding rate: 0.000015
+  [FLOW] Taker ratio: 0.38 | Extreme sell: False | Heavy sell: True
+  [FLOW] SHORT (70%): Heavy taker selling: 0.38
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -2.9%
+  [JUDGE] Deciding...
+  [JUDGE] V3.1.35: BULLISH regime - SHORT needs 85%
+  [JUDGE] V3.1.33: BEARISH regime, SHORT at 80%+ min
+  [JUDGE] WARNING: F&G=14 (EXTREME FEAR) - bounce risk HIGH for shorts
+  [JUDGE] Final: SHORT (90%)
+  [JUDGE] TP: 3.63%, SL: 2.42%, Max Hold: 4h
+  [AI LOG OK] V3.1.9 Analysis - DOGE (Tier 3)
+2026-02-09 18:30:26 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-09 18:30:50 | INFO     |   XRP (T3): WAIT (0%)
+
+  === Multi-Persona Analysis: XRP (Tier 3: FAST) ===
+  [WHALE] Skipped (no whale data for XRP)
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (75%): Predominance of long liquidations and volume indicators favoring sellers.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 491120.00, Asks: 633240.00, Ratio: 0.78
+  [FLOW] Taker - Buy: 19790.0000, Sell: 29570.0000, Ratio: 0.67
+  [FLOW] Funding rate: -0.000047
+  [FLOW] Taker ratio: 0.67 | Extreme sell: False | Heavy sell: False
+  [FLOW] SHORT (50%): Taker sell pressure: 0.67
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] NEUTRAL (40%): No clear technical signal. RSI: 61.2
+  [JUDGE] Deciding...
+  [JUDGE] V3.1.35: BULLISH regime - SHORT needs 85%
+  [JUDGE] V3.1.33: BEARISH regime, SHORT at 80%+ min
+  [JUDGE] Final: WAIT (0%)
+  [AI LOG OK] V3.1.9 Analysis - XRP (Tier 3)
+2026-02-09 18:30:53 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-09 18:31:00 | INFO     |   ADA (T3): WAIT (0%)
+
+  === Multi-Persona Analysis: ADA (Tier 3: FAST) ===
+  [WHALE] Skipped (no whale data for ADA)
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] Error: Expecting value: line 1 column 1 (char 0)
+  [SENTIMENT] NEUTRAL (30%): Sentiment analysis error: Expecting value: line 1 column 1 (char 0)
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 6332360.00, Asks: 8953280.00, Ratio: 0.71
+  [FLOW] Taker - Buy: 12220.0000, Sell: 12390.0000, Ratio: 0.99
+  [FLOW] Funding rate: 0.000065
+  [FLOW] Taker ratio: 0.99 | Extreme sell: False | Heavy sell: False
+  [FLOW] NEUTRAL (40%): Mixed flow signals
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -2.1%
+  [JUDGE] Deciding...
+  [JUDGE] V3.1.35: BULLISH regime - SHORT needs 85%
+  [JUDGE] V3.1.33: BEARISH regime, SHORT at 80%+ min
+  [JUDGE] Final: WAIT (0%)
+  [AI LOG OK] V3.1.9 Analysis - ADA (Tier 3)
+2026-02-09 18:31:03 | INFO     | 
+2026-02-09 18:31:03 | INFO     | EXECUTING DOGE SHORT (T3) - 90%
+  [LEVERAGE] Tier 3 (BULLISH): Using 8x
+  [ATR-SL] ATR: 2.02% | Dynamic SL: 2.42% | Final SL: 2.42% | TP: 3.63%
+  [LEVERAGE OK] cmt_dogeusdt set to 8x cross
+  [TRADE] SHORT cmt_dogeusdt: 61100 @ $0.0957
+  [TRADE] Tier 3 (FAST): TP $0.0923 (3.6%), SL $0.0980 (2.4%)
+  [AI LOG OK] V3.1.4 Trade: SHORT DOGEUSDT (order: 715807747060269925)
+2026-02-09 18:31:06 | INFO     | Trade executed: 715807747060269925
+2026-02-09 18:31:06 | INFO     |   TP: 3.6%, SL: 2.4%
+2026-02-09 18:31:07 | INFO     | 
+2026-02-09 18:31:07 | INFO     | Executed 1 trades this cycle
+2026-02-09 18:31:07 | INFO     | V3.1.9 Daemon shutdown
+2026-02-09 18:31:07 | INFO     | Stats: {
+  "started_at": "2026-02-09T17:13:09.579569+00:00",
+  "uptime_hours": 1.2995196675,
+  "signals_checked": 1,
+  "trades_opened": 1,
+  "trades_closed": 0,
+  "early_exits": 0,
+  "runners_triggered": 0,
+  "errors": 0
+}
+  [LOG] Saved: logs/v3_1_1_20260209_171309.json

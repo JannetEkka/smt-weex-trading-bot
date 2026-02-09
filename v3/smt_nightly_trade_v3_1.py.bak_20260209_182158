@@ -1481,19 +1481,22 @@ class FlowPersona:
                     signals.append(("SHORT", 0.3, "Ask depth confirms"))
                 # IGNORE bid depth when heavy selling
             elif extreme_buying:
-                # V3.1.36: Let extreme buying signal through regardless of regime
-                # Judge V3.1.35 already has regime-aware weights that discount counter-trend
-                # Double-discounting was killing all LONG signals in BEARISH
+                # V3.1.18: In BEARISH regime, extreme buying is likely SHORT COVERING
+                # Don't trust it as a reversal signal
                 if is_bearish:
-                    print(f"  [FLOW] BEARISH regime: Extreme buying {taker_ratio:.2f} (letting signal through)")
-                signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
+                    print(f"  [FLOW] BEARISH regime: Capping extreme buying signal (short covering likely)")
+                    signals.append(("NEUTRAL", 0.50, f"Taker buying {taker_ratio:.2f} but BEARISH regime (short cover)"))
+                else:
+                    signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
             elif heavy_buying:
-                # V3.1.36: Let heavy buying signal through regardless of regime
+                # V3.1.18: In BEARISH regime, cap heavy buying too
                 if is_bearish:
-                    print(f"  [FLOW] BEARISH regime: Heavy buying {taker_ratio:.2f} (letting signal through)")
-                signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
-                if depth["bid_strength"] > 1.3:
-                    signals.append(("LONG", 0.3, "Bid depth confirms"))
+                    print(f"  [FLOW] BEARISH regime: Reducing heavy buying signal")
+                    signals.append(("NEUTRAL", 0.40, f"Taker buying {taker_ratio:.2f} but BEARISH (bounce?)"))
+                else:
+                    signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
+                    if depth["bid_strength"] > 1.3:
+                        signals.append(("LONG", 0.3, "Bid depth confirms"))
             else:
                 # Normal range - use both taker and depth
                 if taker_ratio > 1.2:
@@ -1842,329 +1845,320 @@ class JudgePersona:
     
     def decide(self, persona_votes: List[Dict], pair: str, balance: float, 
                competition_status: Dict) -> Dict:
-        """V3.1.39: Gemini-Powered Judge - LLM makes contextual trading decisions.
+        """Make final trading decision with TIER-BASED TP/SL and MARKET TREND FILTER"""
         
-        Replaces weighted-sum approach with Gemini that sees:
-        - All persona votes + full reasoning
-        - Market regime, F&G, funding rates
-        - Active positions and PnL
-        - Competition status
-        
-        Returns single best decision (LONG, SHORT, or WAIT).
-        """
-        import time as time_module
-        
+        # Get tier config for this pair
         tier_config = get_tier_config_for_pair(pair)
         tier = get_tier_for_pair(pair)
-        regime = get_enhanced_market_regime()
         
-        # Build persona summary with FULL reasoning
-        persona_summary = []
-        for vote in persona_votes:
-            persona_summary.append(
-                f"- {vote['persona']}: {vote['signal']} ({vote['confidence']:.0%}) - {vote.get('reasoning', 'N/A')[:200]}"
-            )
-        personas_text = "\n".join(persona_summary)
-        
-        # Get active positions for this symbol
-        symbol = TRADING_PAIRS.get(pair, {}).get("symbol", f"cmt_{pair.lower()}usdt")
-        try:
-            positions = get_open_positions()
-            pair_positions = [p for p in positions if p.get("symbol") == symbol]
-            all_positions = [
-                f"  {p.get('symbol','?').replace('cmt_','').upper()}: {p.get('side')} entry=${float(p.get('entry_price',0)):.2f} PnL=${float(p.get('unrealized_pnl',0)):.2f} size={p.get('size')}"
-                for p in positions
-            ]
-        except:
-            pair_positions = []
-            all_positions = []
-        
-        has_long = any(p.get("side","").upper() == "LONG" for p in pair_positions)
-        has_short = any(p.get("side","").upper() == "SHORT" for p in pair_positions)
-        
-        positions_text = "\n".join(all_positions) if all_positions else "  None"
-        
-        pair_pos_text = "None"
-        if pair_positions:
-            parts = []
-            for p in pair_positions:
-                parts.append(f"{p.get('side')} entry=${float(p.get('entry_price',0)):.4f} PnL=${float(p.get('unrealized_pnl',0)):.2f}")
-            pair_pos_text = "; ".join(parts)
-        
-        # Competition context
-        days_left = competition_status.get("days_left", 15)
-        pnl = competition_status.get("pnl", 0)
-        pnl_pct = competition_status.get("pnl_pct", 0)
-        
-        # Build the prompt
-        prompt = f"""You are the AI Judge for a crypto futures trading bot in a live competition (real money).
-Your job: analyze all signals and decide the SINGLE BEST action for {pair} right now.
-
-=== MARKET REGIME ===
-Regime: {regime.get('regime', 'NEUTRAL')}
-BTC 24h change: {regime.get('change_24h', 0):+.1f}%
-BTC 4h change: {regime.get('change_4h', 0):+.1f}%
-Fear & Greed Index: {regime.get('fear_greed', 50)}
-Funding rate (BTC): {regime.get('btc_funding', 0):.6f}
-
-=== PERSONA VOTES FOR {pair} (Tier {tier}: {tier_config['name']}) ===
-{personas_text}
-
-=== CURRENT POSITIONS ON {pair} ===
-{pair_pos_text}
-
-=== ALL OPEN POSITIONS ===
-{positions_text}
-
-=== COMPETITION STATUS ===
-Days remaining: {days_left}
-PnL: ${pnl:.0f} ({pnl_pct:+.1f}%)
-Available balance: ${balance:.0f}
-
-=== RULES ===
-1. You MUST pick exactly ONE: LONG, SHORT, or WAIT.
-2. If we already have BOTH a LONG and SHORT on this pair, pick which one to KEEP and return WAIT (no new position needed).
-3. If we already have a LONG open and signal is LONG, return WAIT (already positioned).
-4. If we already have a SHORT open and signal is SHORT, return WAIT (already positioned). 
-5. If we have a losing position and a strong opposite signal, you CAN recommend the opposite direction (hedge).
-6. In EXTREME FEAR (F&G < 20), shorting after a major crash is dangerous - bounces are violent. Favor LONG or WAIT.
-7. Negative funding rate = shorts are paying longs = bullish signal.
-8. Consider the tier: T1 (BTC/ETH/BNB/LTC) = slow movers, T2 (SOL) = medium, T3 (DOGE/XRP/ADA) = fast/volatile.
-9. We need to MAKE MONEY. We are losing. Be decisive but smart. No trade is better than a bad trade.
-10. For TP/SL: wider SL (3-5%) in this volatile market. TP should be 1.5-2x the SL. Max hold: T1=48h, T2=12h, T3=4h.
-
-Respond with JSON ONLY (no markdown, no backticks):
-{{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "tp_pct": number, "sl_pct": number, "reasoning": "2-3 sentences explaining your decision"}}"""
-
-        try:
-            _rate_limit_gemini()
-            
-            from google import genai
-            from google.genai.types import GenerateContentConfig
-            
-            client = genai.Client()
-            
-            config = GenerateContentConfig(
-                temperature=0.1,
-            )
-            
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=config
-            )
-            
-            clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
-            data = json.loads(clean_text)
-            
-            decision = data.get("decision", "WAIT").upper()
-            confidence = min(0.95, max(0.0, float(data.get("confidence", 0))))
-            reasoning = data.get("reasoning", "Gemini Judge decision")
-            tp_pct = float(data.get("tp_pct", tier_config["tp_pct"]))
-            sl_pct = float(data.get("sl_pct", tier_config["sl_pct"]))
-            
-            # Clamp TP/SL to reasonable ranges
-            tp_pct = max(1.5, min(10.0, tp_pct))
-            sl_pct = max(1.5, min(6.0, sl_pct))
-            
-            print(f"  [JUDGE] V3.1.39 Gemini: {decision} ({confidence:.0%})")
-            print(f"  [JUDGE] Reasoning: {reasoning[:150]}")
-            
-            if decision == "WAIT":
-                return self._wait_decision(f"Gemini Judge: {reasoning}", persona_votes, 
-                    [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
-            
-            if decision not in ("LONG", "SHORT"):
-                return self._wait_decision(f"Gemini returned invalid decision: {decision}", persona_votes,
-                    [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
-            
-            # Safety: block if already have same direction
-            if decision == "LONG" and has_long:
-                return self._wait_decision(f"Gemini says LONG but already have LONG on {pair}", persona_votes,
-                    [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
-            if decision == "SHORT" and has_short:
-                return self._wait_decision(f"Gemini says SHORT but already have SHORT on {pair}", persona_votes,
-                    [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
-            
-            # Minimum confidence floor
-            if confidence < 0.65:
-                return self._wait_decision(f"Gemini confidence too low: {confidence:.0%}", persona_votes,
-                    [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
-            
-            # Position sizing
-            base_size = balance * 0.15
-            if confidence > 0.85:
-                position_usdt = base_size * 1.3
-            elif confidence > 0.75:
-                position_usdt = base_size * 1.15
-            else:
-                position_usdt = base_size * 1.0
-            
-            # Balance protection
-            if balance < 1000:
-                position_usdt *= 0.5
-                print(f"  [JUDGE] CRITICAL BALANCE: size halved")
-            elif balance < 2000:
-                position_usdt *= 0.7
-                print(f"  [JUDGE] LOW BALANCE: size at 70%")
-            
-            # Volatility adjustment from regime
-            position_usdt *= regime.get("size_multiplier", 1.0)
-            
-            position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
-            position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
-            
-            max_hold = tier_config["max_hold_hours"]
-            
-            vote_summary = [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes]
-            
-            # V3.1.39b: Upload AI decision log to WEEX for compliance
-            try:
-                upload_ai_log_to_weex(
-                    stage=f"V3.1.39 Gemini Judge Decision: {pair} (Tier {tier})",
-                    input_data={
-                        "pair": pair,
-                        "tier": tier,
-                        "tier_name": tier_config["name"],
-                        "balance": balance,
-                        "regime": regime.get("regime", "NEUTRAL"),
-                        "fear_greed": regime.get("fear_greed", 50),
-                        "btc_24h_change": regime.get("change_24h", 0),
-                        "btc_4h_change": regime.get("change_4h", 0),
-                        "btc_funding": regime.get("btc_funding", 0),
-                        "existing_long": has_long,
-                        "existing_short": has_short,
-                        "days_left": days_left,
-                        "competition_pnl": pnl,
-                        "persona_votes": [
-                            {"persona": v["persona"], "signal": v["signal"], "confidence": v["confidence"], 
-                             "reasoning": v.get("reasoning", "")[:150]}
-                            for v in persona_votes
-                        ],
-                    },
-                    output_data={
-                        "decision": decision,
-                        "confidence": confidence,
-                        "tp_pct": tp_pct,
-                        "sl_pct": sl_pct,
-                        "max_hold_hours": max_hold,
-                        "position_usdt": round(position_usdt, 2),
-                        "ai_model": "gemini-2.5-flash",
-                        "judge_version": "V3.1.39",
-                    },
-                    explanation=f"Gemini AI Judge Decision for {pair}: {decision} at {confidence:.0%} confidence. {reasoning} Market: {regime.get('regime','NEUTRAL')} regime, F&G={regime.get('fear_greed',50)}, BTC {regime.get('change_24h',0):+.1f}% 24h. TP={tp_pct}% SL={sl_pct}%. Persona votes: {', '.join(vote_summary)}"
-                )
-            except Exception as log_err:
-                print(f"  [JUDGE] AI log upload error: {log_err}")
-            
-            return {
-                "decision": decision,
-                "confidence": confidence,
-                "recommended_position_usdt": position_usdt,
-                "take_profit_percent": tp_pct,
-                "stop_loss_percent": sl_pct,
-                "hold_time_hours": max_hold,
-                "tier": tier,
-                "tier_name": tier_config["name"],
-                "reasoning": f"Gemini Judge V3.1.39: {reasoning}. Votes: {', '.join(vote_summary)}",
-                "persona_votes": persona_votes,
-                "vote_breakdown": {
-                    "long_score": 0,
-                    "short_score": 0,
-                    "neutral_score": 0,
-                },
-            }
-            
-        except json.JSONDecodeError as e:
-            print(f"  [JUDGE] Gemini JSON parse error: {e}")
-            print(f"  [JUDGE] Raw response: {response.text[:200] if response else 'None'}")
-            return self._fallback_decide(persona_votes, pair, balance, competition_status, tier, tier_config, regime)
-        except Exception as e:
-            print(f"  [JUDGE] Gemini Judge error: {e}")
-            return self._fallback_decide(persona_votes, pair, balance, competition_status, tier, tier_config, regime)
-    
-    def _fallback_decide(self, persona_votes, pair, balance, competition_status, tier, tier_config, regime):
-        """Fallback to simple weighted-sum if Gemini fails"""
-        print(f"  [JUDGE] Falling back to weighted-sum logic")
-        
+        # Calculate weighted votes
         long_score = 0
         short_score = 0
+        neutral_score = 0
+        
         vote_summary = []
         
+        # V3.1.7: Count raw votes for agreement check
+        long_votes = 0
+        short_votes = 0
+        
+        # V3.1.11: Get regime FIRST for dynamic weight adjustment
+        regime = get_enhanced_market_regime()
+        
+        # V3.1.16: More sensitive bearish detection
+        # Even slight negative = "weak bearish" which favors SHORT signals
+        is_bearish = regime["regime"] == "BEARISH" or regime.get("btc_24h", 0) < -0.3
+        is_weak_bearish = regime.get("btc_24h", 0) < 0 and not is_bearish  # Between -0.3% and 0%
+        is_bullish = regime["regime"] == "BULLISH" or regime.get("btc_24h", 0) > 1.0
+        
         for vote in persona_votes:
-            weight = 1.0
-            if vote["persona"] == "FLOW":
-                weight = 2.5
-            elif vote["persona"] == "TECHNICAL":
-                weight = 1.5
-            elif vote["persona"] == "SENTIMENT":
-                weight = 1.0
-            elif vote["persona"] == "WHALE":
-                weight = 1.5
+            persona = vote["persona"]
+            signal = vote["signal"]
+            confidence = vote["confidence"]
             
-            if vote["signal"] == "LONG":
-                long_score += vote["confidence"] * weight
-            elif vote["signal"] == "SHORT":
-                short_score += vote["confidence"] * weight
+            # V3.1.18: SIGNAL-AWARE WEIGHTING
+            # In bearish markets, SENTIMENT SHORT signals are particularly valuable
+            # because they identify structural breaks (support failures)
+            if is_bearish:
+                weights = {
+                    "WHALE": 0.5,      # V3.1.15: Whales accumulating = catching falling knife
+                    "SENTIMENT": 2.0 if signal == "SHORT" else 0.8,  # V3.1.18: Trust SHORT sentiment, ignore LONG
+                    "FLOW": 2.5,       # V3.1.15: TRUST actual order flow/selling pressure
+                    "TECHNICAL": 2.0   # V3.1.15: TRUST RSI/momentum in trends
+                }
+            elif is_weak_bearish:
+                # V3.1.16: Slight negative = still favor SHORT signals
+                weights = {
+                    "WHALE": 1.0,      # V3.1.35: Whale accumulation can signal bottoms
+                    "SENTIMENT": 1.0 if signal == "SHORT" else 0.8,  # V3.1.35: Reduced - sentiment lags
+                    "FLOW": 2.5,       # V3.1.35: FLOW IS KING - catches reversals first
+                    "TECHNICAL": 1.5   # Trust technicals
+                }
+            elif is_bullish:
+                # V3.1.35: FLOW LEADS in BULLISH - it's real-time, sentiment is old news
+                weights = {
+                    "WHALE": 2.0,      # Whales important but not dominant
+                    "SENTIMENT": 0.8 if signal == "SHORT" else 1.5,  # V3.1.35: Nerf SHORT sentiment (backward-looking)
+                    "FLOW": 2.5,       # V3.1.35: FLOW IS KING - real-time orderbook/taker data
+                    "TECHNICAL": 1.2   # Technicals lag in fast moves
+                }
+            else:  # NEUTRAL
+                # V3.1.35: Balanced but Flow still leads
+                weights = {
+                    "WHALE": 1.5,
+                    "SENTIMENT": 1.0,  # V3.1.35: Reduced - backward-looking
+                    "FLOW": 2.0,       # V3.1.35: Real-time data leads
+                    "TECHNICAL": 1.5
+                }
             
-            vote_summary.append(f"{vote['persona']}={vote['signal']}({vote['confidence']:.0%})")
+            weight = weights.get(persona, 1.0)
+            
+            weighted_conf = confidence * weight
+            
+            if signal == "LONG":
+                long_score += weighted_conf
+                long_votes += 1
+            elif signal == "SHORT":
+                short_score += weighted_conf
+                short_votes += 1
+            else:
+                neutral_score += weighted_conf
+            
+            vote_summary.append(f"{persona}={signal}({confidence:.0%})x{weight:.1f}")
         
-        total = long_score + short_score
+        total = long_score + short_score + neutral_score
+        
         if total == 0:
-            return self._wait_decision("Fallback: no votes", persona_votes, vote_summary)
+            return self._wait_decision("No valid persona votes", persona_votes, vote_summary)
         
-        if long_score > short_score * 1.2 and (long_score / total) > 0.55:
+        long_pct = long_score / total
+        short_pct = short_score / total
+        
+        # V3.1.16: LOWERED THRESHOLDS - previous settings blocked all trades
+        num_votes = len(persona_votes)
+        threshold = 0.35 if num_votes <= 3 else 0.38  # LOWERED from 0.40/0.45
+        ratio_req = 1.1 if num_votes <= 3 else 1.15   # LOWERED from 1.2/1.25
+        
+        if long_pct > threshold and long_score > short_score * ratio_req:
             decision = "LONG"
-            confidence = min(0.85, long_score / total)
-        elif short_score > long_score * 1.2 and (short_score / total) > 0.55:
+            confidence = min(0.90, long_pct)
+            agreeing_votes = long_votes
+            opposing_votes = short_votes
+        elif short_pct > threshold and short_score > long_score * ratio_req:
             decision = "SHORT"
-            confidence = min(0.85, short_score / total)
+            confidence = min(0.90, short_pct)
+            agreeing_votes = short_votes
+            opposing_votes = long_votes
         else:
-            return self._wait_decision(f"Fallback: no consensus L={long_score:.1f} S={short_score:.1f}", persona_votes, vote_summary)
+            return self._wait_decision(f"No consensus: LONG={long_pct:.0%}, SHORT={short_pct:.0%}", persona_votes, vote_summary)
         
-        if confidence < 0.70:
-            return self._wait_decision(f"Fallback: confidence too low {confidence:.0%}", persona_votes, vote_summary)
+        # V3.1.35d: Relaxed T3 - allow if Flow is extreme even with opposition
+        if tier == 3:
+            flow_v = next((v for v in persona_votes if v.get("persona") == "FLOW"), {})
+            flow_is_extreme = flow_v.get("confidence", 0) >= 0.85 and flow_v.get("signal") == decision
+            if opposing_votes >= 2 and agreeing_votes < 2 and not flow_is_extreme:
+                return self._wait_decision(f"Tier 3 blocked: {opposing_votes} personas oppose {decision}", persona_votes, vote_summary)
         
-        position_usdt = balance * 0.15
+        # V3.1.20 PREDATOR: Asymmetric confidence thresholds
+        # LONGs need higher confidence, SHORTs can lean into gravity
+        min_confidence = MIN_CONFIDENCE_TO_TRADE  # 70% base
+        
+        if decision == "LONG":
+            # V3.1.35b: Require 2 personas for LONG, but 1 is OK if whale skipped AND Flow is extreme
+            whale_voted = any(v.get("persona") == "WHALE" and v.get("signal") != "SKIP" for v in persona_votes)
+            flow_vote = next((v for v in persona_votes if v.get("persona") == "FLOW"), {})
+            flow_extreme = flow_vote.get("confidence", 0) >= 0.85
+            
+            if long_votes < 2 and not (long_votes >= 1 and not whale_voted and flow_extreme):
+                return self._wait_decision(f"BLOCKED: LONG needs 2+ personas (only {long_votes})", persona_votes, vote_summary)
+            
+            if regime["regime"] == "BULLISH":
+                min_confidence = 0.60  # V3.1.35: BULLISH = go with trend
+                print(f"  [JUDGE] V3.1.35: BULLISH regime - LONG needs 60%")
+            elif regime["regime"] == "NEUTRAL":
+                min_confidence = 0.80  # V3.1.35: NEUTRAL needs more conviction
+                print(f"  [JUDGE] V3.1.35: NEUTRAL regime - LONG needs 80%")
+            else:  # BEARISH
+                min_confidence = 0.85  # V3.1.35: Counter-trend, high conviction only
+                print(f"  [JUDGE] V3.1.35: BEARISH regime - LONG needs 85%")
+        
+        # V3.1.35: Symmetric SHORT thresholds
+        if decision == "SHORT":
+            if regime["regime"] == "BEARISH":
+                min_confidence = max(min_confidence, 0.60)  # With trend
+                print(f"  [JUDGE] V3.1.35: BEARISH regime - SHORT needs 60%")
+            elif regime["regime"] == "NEUTRAL":
+                min_confidence = max(min_confidence, 0.80)
+                print(f"  [JUDGE] V3.1.35: NEUTRAL regime - SHORT needs 80%")
+            else:  # BULLISH
+                min_confidence = max(min_confidence, 0.85)  # Counter-trend
+                print(f"  [JUDGE] V3.1.35: BULLISH regime - SHORT needs 85%")
+        
+        if tier == 3:
+            min_confidence = max(min_confidence, 0.65)  # Tier 3 floor
+        
+        # V3.1.16: LEAN INTO THE TREND (only for SHORTs)
+        if (is_bearish or is_weak_bearish) and decision == "SHORT":
+            min_confidence = 0.50  # Lower threshold - market wants to go down
+            print(f"  [JUDGE] V3.1.33: BEARISH regime, SHORT at 80%+ min")
+        
+        if confidence < min_confidence:
+            return self._wait_decision(f"Confidence too low: {confidence:.0%} (Tier {tier} needs {min_confidence:.0%})", persona_votes, vote_summary)
+        
+        # V3.1.35c: Removed absolute regime blocks - V3.1.33/35 confidence thresholds handle this
+        # BULLISH SHORT needs 85%, BEARISH LONG needs 85% (set above)
+        # This allows high-conviction counter-trend trades
+        
+        # V3.1.21: RSI OVERBOUGHT FILTER (symmetric with oversold SHORT filter)
+        rsi_value = 50
+        for vote in persona_votes:
+            if vote.get("persona") == "TECHNICAL":
+                # Extract RSI from reasoning
+                reasoning = vote.get("reasoning", "")
+                if "RSI" in reasoning:
+                    import re
+                    match = re.search(r'RSI[:\s]+(\d+\.?\d*)', reasoning)
+                    if match:
+                        rsi_value = float(match.group(1))
+                break
+        
+        if decision == "LONG" and rsi_value > 75:
+            return self._wait_decision(f"BLOCKED: RSI {rsi_value:.0f} > 75 (overbought) - no LONGs", persona_votes, vote_summary)
+        
+        # V3.1.33: SELECTIVE TRADING - counter-trend needs 85%
+        if decision == "LONG":
+            # 1. V3.1.33: In BEARISH, LONG is counter-trend - need 85%+
+            if regime["regime"] == "BEARISH" and confidence < 0.85:
+                return self._wait_decision(f"BLOCKED: LONG in BEARISH needs 85%+ (have {confidence:.0%})", persona_votes, vote_summary)
+            
+            # 2. V3.1.33: In NEUTRAL, need 80%+
+            if regime["regime"] == "NEUTRAL" and confidence < 0.80:
+                return self._wait_decision(f"BLOCKED: LONG in NEUTRAL needs 80%+ (have {confidence:.0%})", persona_votes, vote_summary)
+            
+            # 3. V3.1.20: WHALE VETO (keep - whales know best)
+            # If WHALE persona voted SHORT, don't go LONG regardless of other signals
+            whale_vote = next((v for v in persona_votes if v.get("persona") == "WHALE"), {})
+            if whale_vote.get("signal") == "SHORT":
+                whale_conf = whale_vote.get("confidence", 0)
+                return self._wait_decision(f"BLOCKED: WHALE VETO - Whales voting SHORT ({whale_conf:.0%}), refusing LONG", persona_votes, vote_summary)
+            
+            # 4-6. V3.1.33: Removed - confidence threshold handles risk
+            # 85% in BEARISH, 80% in NEUTRAL is enough filtering
+            pass
+        
+        # V3.1.33: SHORT in BULLISH is counter-trend - need 85%
+        if decision == "SHORT":
+            if regime["regime"] == "BULLISH" and confidence < 0.85:
+                return self._wait_decision(f"BLOCKED: SHORT in BULLISH needs 85%+ (have {confidence:.0%})", persona_votes, vote_summary)
+            
+            # V3.1.34: Don't short the bottom - extreme fear + near 24h low = bounce zone
+            fg = regime.get("fear_greed", 50)
+            if fg < 20:
+                print(f"  [JUDGE] WARNING: F&G={fg} (EXTREME FEAR) - bounce risk HIGH for shorts")
+        
+        # V3.1.21: ABSORPTION - Cap extreme selling in BULLISH (symmetric with buying cap in BEARISH)
+        if decision == "SHORT" and regime["regime"] == "BULLISH":
+            # Check for whale absorption
+            whale_vote = next((v for v in persona_votes if v.get("persona") == "WHALE"), {})
+            flow_vote = next((v for v in persona_votes if v.get("persona") == "FLOW"), {})
+            absorption = detect_whale_absorption(whale_vote, flow_vote, regime)
+            
+            if absorption.get("type") == "BULLISH_ABSORPTION":
+                print(f"  [JUDGE] WARNING: {absorption.get('reason', 'Whale absorption detected')}")
+                # V3.1.35d: Warn only, don't block
+        
+        # V3.1.15: Only block SHORTs in STRONG bullish (>2% up)
+        # In bearish/neutral, allow SHORTs to profit from downtrend
+        if decision == "SHORT" and regime["regime"] == "BULLISH" and regime.get("btc_24h", 0) > 2.0:
+            print(f"  [JUDGE] WARNING: SHORT in STRONG BULLISH regime - high risk")
+            # V3.1.35d: Don't block, just warn. 85% threshold handles this.
+        
+        # V3.1.16: VOLATILITY-BASED POSITION SIZING
+        # In high volatility, reduce position size to survive whipsaws
+        volatility_multiplier = regime.get("size_multiplier", 1.0)
+        volatility_regime = regime.get("volatility", "NORMAL")
+        
+        # V3.1.19: LOW BALANCE PROTECTION
+        # If balance is low, reduce position sizes to extend runway
+        LOW_BALANCE_THRESHOLD = 2000.0  # V3.1.34: SURVIVAL - protect remaining capital
+        CRITICAL_BALANCE_THRESHOLD = 1000.0  # V3.1.34: SURVIVAL - stop trading if equity < $8k
+        
+        if balance < CRITICAL_BALANCE_THRESHOLD:
+            balance_multiplier = 0.5  # Half size when critical
+            print(f"  [JUDGE] CRITICAL BALANCE (${balance:.0f}): Position size reduced to 50%")
+        elif balance < LOW_BALANCE_THRESHOLD:
+            balance_multiplier = 0.7  # 70% size when low
+            print(f"  [JUDGE] LOW BALANCE (${balance:.0f}): Position size reduced to 70%")
+        else:
+            balance_multiplier = 1.0
+        
+        # V3.1.21: Support proximity boost for LONGs (symmetric with resistance for SHORTs)
+        symbol = TRADING_PAIRS.get(pair, {}).get("symbol", f"cmt_{pair.lower()}usdt")
+        support = get_support_proximity(symbol)
+        resistance = get_resistance_proximity(symbol)
+        
+        # V3.1.9: Increased position sizing (was 7%)
+        base_size = balance * 0.15
+        
+        if confidence > 0.80:
+            position_usdt = base_size * 1.3  # 19.5%
+        elif confidence > 0.70:
+            position_usdt = base_size * 1.15  # 17.25%
+        elif confidence > 0.60:
+            position_usdt = base_size * 1.0  # 15%
+        else:
+            position_usdt = base_size * 0.85  # 12.75%
+        
+        # V3.1.16: Apply volatility adjustment
+        position_usdt = position_usdt * volatility_multiplier
+        
+        # V3.1.19: Apply balance protection multiplier
+        position_usdt = position_usdt * balance_multiplier
+        
+        if volatility_multiplier < 1.0:
+            print(f"  [JUDGE] Volatility adjustment: {volatility_regime} -> size x{volatility_multiplier:.1f}")
+        
+        position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT * balance_multiplier)
+        position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
+        
+        # V3.1.32: ATR-aware TP/SL (dynamic, not fixed)
+        try:
+            atr_data = get_btc_atr()
+            atr_pct = atr_data.get("atr_pct", 0)
+            if atr_pct > 0:
+                dynamic_sl = round(atr_pct * 1.2, 2)
+                sl_pct = max(dynamic_sl, tier_config["sl_pct"])
+                sl_pct = min(sl_pct, 4.0)
+                tp_pct = round(sl_pct * 1.5, 2)
+            else:
+                tp_pct = tier_config["tp_pct"]
+                sl_pct = tier_config["sl_pct"]
+        except:
+            tp_pct = tier_config["tp_pct"]
+            sl_pct = tier_config["sl_pct"]
+        max_hold = tier_config["max_hold_hours"]
         
         return {
             "decision": decision,
             "confidence": confidence,
             "recommended_position_usdt": position_usdt,
-            "take_profit_percent": tier_config["tp_pct"],
-            "stop_loss_percent": tier_config["sl_pct"],
-            "hold_time_hours": tier_config["max_hold_hours"],
+            "take_profit_percent": tp_pct,
+            "stop_loss_percent": sl_pct,
+            "hold_time_hours": max_hold,
             "tier": tier,
             "tier_name": tier_config["name"],
-            "reasoning": f"FALLBACK Judge: {decision} @ {confidence:.0%}. Votes: {', '.join(vote_summary)}",
+            "reasoning": f"Judge: {decision} @ {confidence:.0%}. Tier {tier} ({tier_config['name']}): TP {tp_pct}%, SL {sl_pct}%, Hold {max_hold}h. Votes: {', '.join(vote_summary)}",
             "persona_votes": persona_votes,
-            "vote_breakdown": {"long_score": round(long_score, 2), "short_score": round(short_score, 2), "neutral_score": 0},
+            "vote_breakdown": {
+                "long_score": round(long_score, 2),
+                "short_score": round(short_score, 2),
+                "neutral_score": round(neutral_score, 2),
+            },
         }
-
+    
     def _wait_decision(self, reason: str, persona_votes: List[Dict] = None, vote_summary: List[str] = None) -> Dict:
         """Return WAIT decision with full vote details for logging"""
         votes_str = ', '.join(vote_summary) if vote_summary else "No votes"
-        
-        # V3.1.39b: Log WAIT decisions to WEEX too (shows AI is analyzing even when not trading)
-        try:
-            upload_ai_log_to_weex(
-                stage="V3.1.39 Gemini Judge: WAIT",
-                input_data={
-                    "persona_votes": [
-                        {"persona": v["persona"], "signal": v["signal"], "confidence": v["confidence"]}
-                        for v in (persona_votes or [])
-                    ],
-                },
-                output_data={
-                    "decision": "WAIT",
-                    "confidence": 0.0,
-                    "judge_version": "V3.1.39",
-                },
-                explanation=f"AI Judge decided WAIT: {reason}. {votes_str}"
-            )
-        except:
-            pass
-        
         return {
             "decision": "WAIT",
             "confidence": 0.0,
