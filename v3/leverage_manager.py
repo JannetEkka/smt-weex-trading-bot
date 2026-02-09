@@ -1,25 +1,31 @@
 """
-Smart Leverage Manager V2 - Ultra-safe for finals
-5-6x leverage, 15%+ liquidation buffer
+Smart Leverage Manager V3 - Competition-tuned
+10-12x leverage with SL safety net (1.5% SL triggers well before liquidation)
+Liquidation distance at 10x = ~9%, at 12x = ~7.5% -- SL at 1.5% gives 6%+ buffer
 """
 
 class LeverageManager:
     def __init__(self):
-        self.MIN_LEVERAGE = 5
-        self.MAX_LEVERAGE = 6
-        self.MAX_POSITION_PCT = 0.18
-        self.MIN_LIQUIDATION_DISTANCE = 15
+        self.MIN_LEVERAGE = 8
+        self.MAX_LEVERAGE = 12
+        self.MAX_POSITION_PCT = 0.20  # 20% of balance per position
+        self.MIN_LIQUIDATION_DISTANCE = 6  # 6% min buffer above SL
 
     def calculate_safe_leverage(self, pair_tier: int, volatility: float = 2.0, regime: str = "NEUTRAL") -> int:
         tier_leverage = {
-            1: 6,   # BTC, ETH, BNB, LTC
-            2: 5,   # SOL
-            3: 5    # DOGE, XRP, ADA
+            1: 12,  # BTC, ETH - lowest vol, tightest spreads
+            2: 10,  # SOL - mid vol
+            3: 10   # DOGE, XRP, ADA - higher vol but SL protects
         }
-        base = tier_leverage.get(pair_tier, 5)
+        base = tier_leverage.get(pair_tier, 10)
 
-        if volatility > 3.0:
+        # Reduce in high volatility
+        if volatility > 4.0:
+            base -= 2
+        elif volatility > 3.0:
             base -= 1
+
+        # Reduce in uncertain regime
         if regime == "NEUTRAL":
             base -= 1
 
@@ -34,6 +40,7 @@ class LeverageManager:
         else:
             liq_price = entry_price * (1 + liq_pct / 100)
             distance_pct = ((liq_price - current_price) / current_price) * 100
+
         return {
             "liquidation_price": liq_price,
             "distance_pct": distance_pct,

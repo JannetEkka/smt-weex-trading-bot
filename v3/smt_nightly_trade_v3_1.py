@@ -2402,13 +2402,15 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
     position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
     
-    # V3.1.30: Dynamic leverage from LeverageManager
+    # V3.1.31: Dynamic leverage with regime awareness
     try:
         from leverage_manager import get_safe_leverage
-        safe_leverage = get_safe_leverage(tier)
-        print(f"  [LEVERAGE] Tier {tier}: Using {safe_leverage}x (was {MAX_LEVERAGE}x)")
+        regime_data = REGIME_CACHE.get("regime", 300)
+        current_regime = regime_data.get("regime", "NEUTRAL") if regime_data else "NEUTRAL"
+        safe_leverage = get_safe_leverage(tier, regime=current_regime)
+        print(f"  [LEVERAGE] Tier {tier} ({current_regime}): Using {safe_leverage}x")
     except Exception as e:
-        safe_leverage = 6  # Safe fallback
+        safe_leverage = 10  # Competition fallback
         print(f"  [LEVERAGE] Fallback to {safe_leverage}x: {e}")
     notional_usdt = position_usdt * safe_leverage
     raw_size = notional_usdt / current_price
