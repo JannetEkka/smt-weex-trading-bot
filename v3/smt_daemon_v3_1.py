@@ -312,7 +312,7 @@ def check_trading_signals():
             if tracker.active_trades.get(symbol, {}).get('runner_triggered', False):
                 risk_free_count += 1
         
-        BASE_SLOTS = 3  # V3.1.22 CAPITAL PROTECTION
+        BASE_SLOTS = 5  # V3.1.31: Competition mode - more exposure
         MAX_BONUS_SLOTS = 2  # Can earn up to 2 extra slots from risk-free positions
         bonus_slots = min(risk_free_count, MAX_BONUS_SLOTS)
         effective_max_positions = BASE_SLOTS + bonus_slots

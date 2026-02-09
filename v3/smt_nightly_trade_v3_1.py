@@ -809,7 +809,7 @@ FLOOR_BALANCE = 950.0  # Protect principal - stop trading below this
 
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 3  # V3.1.22 CAPITAL PROTECTION  # V3.1.16: Reduced for focused positions
+MAX_OPEN_POSITIONS = 5  # V3.1.31: Competition mode - 5 positions with 10-12x leverage
 MAX_SINGLE_POSITION_PCT = 0.20  # V3.1.9: 20% per trade max (was 8%)
 MIN_SINGLE_POSITION_PCT = 0.10  # V3.1.9: 10% minimum (was 3%)
 MIN_CONFIDENCE_TO_TRADE = 0.75  # V3.1.22 CAPITAL PROTECTION  # V3.1.20 PREDATOR MODE: Higher conviction trades only
