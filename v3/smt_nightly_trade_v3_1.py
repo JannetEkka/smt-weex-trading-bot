@@ -2248,9 +2248,20 @@ def get_competition_status(balance: float) -> Dict:
 
 def set_leverage(symbol: str, leverage: int) -> Dict:
     endpoint = "/capi/v2/account/leverage"
-    body = json.dumps({"symbol": symbol, "leverage": leverage})
+    lev_str = str(leverage)
+    body = json.dumps({
+        "symbol": symbol,
+        "marginMode": 1,
+        "longLeverage": lev_str,
+        "shortLeverage": lev_str
+    })
     r = requests.post(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("POST", endpoint, body), data=body, timeout=15)
-    return r.json()
+    result = r.json()
+    if result.get("code") != "200":
+        print(f"  [LEVERAGE WARNING] set_leverage failed: {result}")
+    else:
+        print(f"  [LEVERAGE OK] {symbol} set to {leverage}x cross")
+    return result
 
 
 def place_order(symbol: str, side: str, size: float, tp_price: float = None, sl_price: float = None) -> Dict:
