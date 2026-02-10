@@ -684,9 +684,9 @@ Reasoning:
                 
                 # Add to opportunities if tradeable
                 if can_trade_this and signal in ("LONG", "SHORT"):
-                    if False:  # V4.0: Cooldowns disabled - AI makes fresh decisions
+                    if on_cooldown and confidence < COOLDOWN_OVERRIDE_CONFIDENCE:
                         logger.info(f"    -> Skip (cooldown)")
-                    elif True:  # V4.0: AI decides confidence, not hardcoded 65%
+                    elif confidence >= MIN_CONFIDENCE_TO_TRADE:
                         if on_cooldown:
                             logger.info(f"    -> COOLDOWN OVERRIDE")
                         trade_opportunities.append({
