@@ -2057,23 +2057,23 @@ Available balance: ${balance:.0f}
 3. If we already have a LONG open and signal is LONG, return WAIT (already positioned).
 4. If we already have a SHORT open and signal is SHORT, return WAIT.
 5. If we have a losing position and a strong opposite signal (85%+), you CAN recommend the opposite direction (hedge).
-6. In EXTREME FEAR (F&G < 20), shorting is dangerous - violent bounces are common. Favor LONG or WAIT. LONGs during extreme fear can produce massive wins (5-8%) when the bounce materializes. Trust the TP targets.
-6b. CAPITULATION RULE (F&G < 15): Market is in panic. Do NOT default to WAIT. If FLOW persona is BULLISH (taker buying), this is absorption - go LONG with 80%+ confidence. If FLOW is NEUTRAL and TECHNICAL shows RSI < 30, this is a mean reversion setup - go LONG at 75%+ confidence. Only WAIT if ALL personas are BEARISH. Extreme Fear + Flow Buying = Best entries of the cycle. These are the setups that produce $200-400 wins.
+6. In EXTREME FEAR (F&G < 20), shorting is dangerous - violent bounces are common. Favor LONG or WAIT. But also: LONGs in extreme fear are FRAGILE. The bounce may die fast. Set tighter TP (2-3%) and be ready to exit quickly.
+6b. CAPITULATION RULE (F&G < 15): Market is in panic. Do NOT default to WAIT. If FLOW persona is BULLISH (taker buying), this is absorption - go LONG with 80%+ confidence and tight 2% TP. If FLOW is NEUTRAL and TECHNICAL shows RSI < 30, this is a mean reversion setup - go LONG at 75%+ confidence. Only WAIT if ALL personas are BEARISH. Extreme Fear + Flow Buying = Best entries of the cycle.
 7. Negative funding rate = shorts paying longs = bullish. Positive funding + LONG = you pay every 8h, factor this into hold time.
 8. Tier awareness: T1 (BTC/ETH/BNB/LTC) = slow, 15x leverage. T2 (SOL) = medium, 12x. T3 (DOGE/XRP/ADA) = fast, 10x.
 9. DIRECTIONAL LIMIT: Max 6 positions in the same direction. We have 8 slots. Do NOT self-impose a lower limit.
 10. CORRELATED PAIRS: If 4+ correlated LONGs open (BTC/ETH/SOL/DOGE/XRP), require 85%+ to add another.
 11. TIME OF DAY: 00-06 UTC Asian session. Require 80%+ confidence (not 85%).
 12. POST-REGIME SHIFT: If regime just changed, still trade if confidence >= 80%. Speed matters.
-13. For TP/SL: SL 2-2.5%. TP 6-8% (set by tier config, NOT by you). Max hold: T1=72h, T2=48h, T3=24h. Let winners RUN to full TP. We need $200-400 wins to recover. TP/SL are handled by tier config -- focus your decision on DIRECTION only.
+13. For TP/SL: SL 2-2.5%. TP should be 3-4x SL (6-8%). Max hold: T1=48h, T2=24h, T3=12h. Let winners RUN to full TP. Do NOT suggest tight TP like 1.5-2%. We need BIG wins.
 14. RECOVERY MODE: We are DOWN from starting balance. We CANNOT afford to WAIT on good setups. If 2+ personas agree on direction with 70%+ average confidence, TAKE THE TRADE. Playing safe = guaranteed last place.
-15. SWAP MENTALITY: If we are full on slots, STILL say LONG or SHORT if the signal is strong (70%+). The daemon handles slot management. NEVER return WAIT just because slots are full. Your job is SIGNAL QUALITY, not position management.
+15. SWAP MENTALITY: If we are full on slots but this signal is 80%+ conviction, say LONG or SHORT anyway. The daemon will handle swapping out the weakest position. Do NOT return WAIT just because slots are full.
 16. WHALE DATA QUALITY: For BTC/ETH, WHALE uses on-chain Etherscan data (most reliable - actual wallet flows). For other pairs (SOL/DOGE/XRP/ADA/BNB/LTC), WHALE uses Cryptoracle community sentiment (social signals from Twitter/Telegram/Discord). Etherscan > Cryptoracle in reliability. If WHALE and FLOW disagree on altcoins, trust FLOW (order book data > social data).
 17. SMART MONEY DIVERGENCE: If WHALE shows bullish but FLOW shows extreme selling, this is BULLISH ABSORPTION (whales/community buying the dip) - high conviction LONG. If WHALE shows bearish but FLOW shows buying, this is DISTRIBUTION INTO STRENGTH (smart money selling into FOMO) - caution on LONGs.
 18. SENTIMENT MOMENTUM: If WHALE reports sentiment momentum z-score > 1.5, community is overheated (contrarian SHORT risk). If z-score < -1.5, community panic (contrarian LONG opportunity with F&G < 20). Combine with FLOW for highest conviction.
 
 Respond with JSON ONLY (no markdown, no backticks):
-{{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences explaining your decision"}}"""
+{{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "tp_pct": number, "sl_pct": number, "reasoning": "2-3 sentences explaining your decision"}}"""
 
         try:
             _rate_limit_gemini()
