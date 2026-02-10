@@ -232,6 +232,7 @@ try:
         get_price, get_balance, get_open_positions,
         get_account_equity,  # V3.1.19: For proper equity calculation
         upload_ai_log_to_weex,
+        _rate_limit_gemini,
         
         # Position management
         check_position_status, cancel_all_orders_for_symbol,
@@ -703,6 +704,11 @@ Reasoning:
             
             trades_executed = 0
             
+            # V3.1.41: Count directional exposure BEFORE executing
+            long_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "LONG")
+            short_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "SHORT")
+            MAX_SAME_DIRECTION = 4  # Never more than 4 LONGs or 4 SHORTs
+            
             for opportunity in trade_opportunities:
                 confidence = opportunity["decision"]["confidence"]
                 
@@ -715,6 +721,15 @@ Reasoning:
                     else:
                         logger.info(f"Max positions reached, skipping remaining opportunities")
                         break
+                
+                # V3.1.41: DIRECTIONAL LIMIT CHECK
+                sig_check = opportunity["decision"]["decision"]
+                if sig_check == "LONG" and long_count >= MAX_SAME_DIRECTION:
+                    logger.warning(f"DIRECTIONAL LIMIT: {long_count} LONGs already open, skipping {opportunity['pair']} LONG")
+                    continue
+                if sig_check == "SHORT" and short_count >= MAX_SAME_DIRECTION:
+                    logger.warning(f"DIRECTIONAL LIMIT: {short_count} SHORTs already open, skipping {opportunity['pair']} SHORT")
+                    continue
                 
                 tier = opportunity["tier"]
                 tier_config = get_tier_config(tier)
@@ -794,9 +809,13 @@ Reasoning:
                         logger.info(f"Trade executed: {trade_result.get('order_id')}")
                         logger.info(f"  TP: {trade_result.get('tp_pct'):.1f}%, SL: {trade_result.get('sl_pct'):.1f}%")
                         
+                        trade_result["confidence"] = confidence  # V3.1.41: Store for profit guard
                         tracker.add_trade(opportunity["pair_info"]["symbol"], trade_result)
                         state.trades_opened += 1
                         ai_log["trades"].append(trade_result)
+                        # V3.1.41: Update directional count
+                        if signal == "LONG": long_count += 1
+                        elif signal == "SHORT": short_count += 1
                         trades_executed += 1
                         
                         # Update available balance for next trade
@@ -997,27 +1016,58 @@ def monitor_positions():
                     peak_pnl_pct = pnl_pct
                     tracker.save_state()
                 
-                logger.info(f"  [MONITOR] {symbol} T{tier}: {pnl_pct:+.2f}% (peak: {peak_pnl_pct:.2f}%)")
-                # V3.1.22 TIER-AWARE PROFIT GUARD
-                # Tier 3 (DOGE, XRP, ADA): Tighter - they reverse fast
-                # Tier 1/2 (BTC, ETH, SOL): More room to breathe
+                # V3.1.41: Get entry confidence for adaptive guards
+                entry_confidence = trade.get("confidence", 0.75)
+                confidence_multiplier = 1.3 if entry_confidence >= 0.85 else 1.0  # High-conf trades get 30% wider guards
+                
+                logger.info(f"  [MONITOR] {symbol} T{tier}: {pnl_pct:+.2f}% (peak: {peak_pnl_pct:.2f}%) conf={entry_confidence:.0%}")
+                # V3.1.41 PROGRESSIVE PROFIT GUARD - learned from commit history
+                # Old thresholds (2.5-3.5% peak) NEVER triggered. Positions peak at 0.5-1.5% and fade.
+                # New: Multi-tier progressive system that actually captures profits.
+                
+                # TIER 1: Move SL to breakeven at +0.8%, guard at peak-50% above +1.2%
+                # TIER 2: Move SL to breakeven at +0.6%, guard at peak-50% above +1.0%
+                # TIER 3: Move SL to breakeven at +0.5%, guard at peak-50% above +0.8%
+                
+                fade_pct = peak_pnl_pct - pnl_pct  # How much we gave back
+                
                 if tier == 3:
-                    # Tier 3: Exit if peak >= 2.5% and drops to 1.0% (V3.1.31 loosened for competition)
-                    if peak_pnl_pct >= 2.5 and pnl_pct < 1.0:
+                    # Tier 3 (DOGE, XRP, ADA): They reverse FAST - tight guards
+                    if peak_pnl_pct >= 0.8 * confidence_multiplier and pnl_pct < peak_pnl_pct * (0.40 * confidence_multiplier):
                         should_exit = True
-                        exit_reason = f"T3_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
+                        exit_reason = f"T3_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%, gave back 60%+)"
+                        state.early_exits += 1
+                    elif peak_pnl_pct >= 0.5 * confidence_multiplier and pnl_pct <= 0.05:
+                        should_exit = True
+                        exit_reason = f"T3_breakeven_guard (peak: +{peak_pnl_pct:.1f}%, faded to breakeven)"
                         state.early_exits += 1
                 elif tier == 2:
-                    # Tier 2: Exit if peak >= 3.0% and drops to 1.5% (V3.1.31 loosened for competition)
-                    if peak_pnl_pct >= 3.0 and pnl_pct < 1.5:
+                    # Tier 2 (SOL): Medium volatility
+                    if peak_pnl_pct >= 1.0 * confidence_multiplier and pnl_pct < peak_pnl_pct * (0.45 * confidence_multiplier):
                         should_exit = True
-                        exit_reason = f"T2_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
+                        exit_reason = f"T2_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%, gave back 55%+)"
+                        state.early_exits += 1
+                    elif peak_pnl_pct >= 0.6 * confidence_multiplier and pnl_pct <= 0.05:
+                        should_exit = True
+                        exit_reason = f"T2_breakeven_guard (peak: +{peak_pnl_pct:.1f}%, faded to breakeven)"
                         state.early_exits += 1
                 else:
-                    # Tier 1: Exit if peak >= 3.5% and drops to 2.0% (V3.1.31 loosened for competition)
-                    if peak_pnl_pct >= 3.5 and pnl_pct < 2.0:
+                    # Tier 1 (BTC, ETH, BNB, LTC): Slower movers but still guard
+                    if peak_pnl_pct >= 1.2 * confidence_multiplier and pnl_pct < peak_pnl_pct * (0.50 * confidence_multiplier):
                         should_exit = True
-                        exit_reason = f"T1_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
+                        exit_reason = f"T1_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%, gave back 50%+)"
+                        state.early_exits += 1
+                    elif peak_pnl_pct >= 0.8 * confidence_multiplier and pnl_pct <= 0.05:
+                        should_exit = True
+                        exit_reason = f"T1_breakeven_guard (peak: +{peak_pnl_pct:.1f}%, faded to breakeven)"
+                        state.early_exits += 1
+                
+                # V3.1.41: TIME-BASED TIGHTENING
+                # After 2h in profit that peaked > 0.5%, if now giving back > 60% of peak, exit
+                if not should_exit and hours_open >= 2.0 and peak_pnl_pct >= 0.5:
+                    if pnl_pct < peak_pnl_pct * 0.35:
+                        should_exit = True
+                        exit_reason = f"time_fade_guard ({hours_open:.1f}h, peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
                         state.early_exits += 1
                 
 
@@ -1087,6 +1137,283 @@ def monitor_positions():
 # ============================================================
 # QUICK CLEANUP + SIGNAL TRIGGER
 # ============================================================
+
+
+# ============================================================
+# V3.1.40: GEMINI PORTFOLIO MANAGER
+# ============================================================
+
+_last_portfolio_review = 0
+PORTFOLIO_REVIEW_INTERVAL = 300  # Every 5 minutes
+
+def gemini_portfolio_review():
+    """V3.1.40: Gemini reviews ALL positions and decides what to close.
+    
+    Replaces hardcoded exit logic with LLM that sees:
+    - All positions + PnL + hold time
+    - Market regime, F&G, funding
+    - Competition status
+    - Frees slots for better opportunities
+    """
+    global _last_portfolio_review
+    
+    now = time.time()
+    if now - _last_portfolio_review < PORTFOLIO_REVIEW_INTERVAL:
+        return
+    _last_portfolio_review = now
+    
+    try:
+        positions = get_open_positions()
+        if not positions:
+            return
+        
+        account_info = get_account_equity()
+        balance = account_info["available"]
+        equity = account_info["equity"]
+        
+        from smt_nightly_trade_v3_1 import get_enhanced_market_regime, upload_ai_log_to_weex
+        regime = get_enhanced_market_regime()
+        
+        # Build position details
+        pos_details = []
+        for p in positions:
+            sym = p.get("symbol", "?").replace("cmt_", "").upper()
+            side = p.get("side", "?")
+            entry = float(p.get("entry_price", 0))
+            pnl = float(p.get("unrealized_pnl", 0))
+            size = float(p.get("size", 0))
+            margin = float(p.get("margin", 0))
+            
+            # Get hold time from tracker
+            hours_open = 0
+            trade = tracker.get_active_trade(p.get("symbol", ""))
+            if trade and trade.get("opened_at"):
+                try:
+                    opened_at = datetime.fromisoformat(trade["opened_at"].replace("Z", "+00:00"))
+                    hours_open = (datetime.now(timezone.utc) - opened_at).total_seconds() / 3600
+                except:
+                    pass
+            
+            tier = get_tier_for_symbol(p.get("symbol", ""))
+            pnl_pct = 0
+            if entry > 0 and size > 0:
+                if side == "LONG":
+                    current = entry * (1 + pnl / (margin if margin > 0 else 1))
+                    pnl_pct = ((current - entry) / entry) * 100 if entry > 0 else 0
+                else:
+                    pnl_pct = (pnl / (margin if margin > 0 else 1)) * 100
+            
+            pos_details.append(
+                f"- {sym} {side}: PnL=${pnl:.2f} ({pnl_pct:+.1f}%), entry=${entry:.4f}, margin=${margin:.1f}, held={hours_open:.1f}h, tier={tier}"
+            )
+        
+        positions_text = "\n".join(pos_details)
+        
+        # Competition status
+        now_utc = datetime.now(timezone.utc)
+        days_left = (COMPETITION_END - now_utc).days
+        total_pnl = equity - STARTING_BALANCE
+        
+        # V3.1.41: Build peak data for portfolio manager
+        peak_data = []
+        for p in positions:
+            sym = p.get("symbol", "")
+            trade = tracker.get_active_trade(sym)
+            peak = trade.get("peak_pnl_pct", 0) if trade else 0
+            peak_data.append(f"  peak={peak:+.1f}%")
+        
+        # Enhance positions_text with peak data
+        enhanced_pos = []
+        for i, detail in enumerate(pos_details):
+            pk = peak_data[i] if i < len(peak_data) else ""
+            enhanced_pos.append(f"{detail},{pk}")
+        positions_text_enhanced = chr(10).join(enhanced_pos)
+        
+        # Count directional concentration
+        long_count = sum(1 for p in positions if p.get("side","").upper() == "LONG")
+        short_count = sum(1 for p in positions if p.get("side","").upper() == "SHORT")
+        long_margin = sum(float(p.get("margin",0)) for p in positions if p.get("side","").upper() == "LONG")
+        short_margin = sum(float(p.get("margin",0)) for p in positions if p.get("side","").upper() == "SHORT")
+        
+        prompt = f"""You are the AI Portfolio Manager for a crypto futures trading bot in a LIVE competition with REAL money.
+You have learned from 40+ iterations of rules. Apply ALL of these rules strictly.
+
+=== PORTFOLIO (ALL OPEN POSITIONS) ===
+{positions_text_enhanced}
+
+Directional exposure: {long_count} LONGs (${long_margin:.0f} margin) | {short_count} SHORTs (${short_margin:.0f} margin)
+Total positions: {len(positions)}
+Available balance: ${balance:.0f}
+Equity: ${equity:.0f} (started: ${STARTING_BALANCE:.0f}, PnL: ${total_pnl:.0f})
+
+=== MARKET ===
+Regime: {regime.get('regime', 'NEUTRAL')}
+BTC 24h: {regime.get('change_24h', 0):+.1f}%
+BTC 4h: {regime.get('change_4h', 0):+.1f}%
+Fear & Greed: {regime.get('fear_greed', 50)}
+Funding rate: {regime.get('avg_funding', 0):.6f}
+Days left in competition: {days_left}
+
+=== MANDATORY RULES (from 40+ iterations of battle-tested experience) ===
+
+RULE 1 - DIRECTIONAL CONCENTRATION LIMIT:
+Max 4 positions in the same direction. If 5+ LONGs or 5+ SHORTs, close the WEAKEST ones
+(lowest PnL% or most faded from peak) until we have max 4. All-same-direction = cascade
+liquidation risk in cross margin.
+
+RULE 2 - FADING MOMENTUM (CRITICAL - our #1 profit leak):
+If a position peaked above +0.5% but current PnL has dropped to less than 40% of peak,
+it is FADING. Close it to lock remaining profit before it goes to zero.
+Example: peaked +1.2%, now +0.3% = gave back 75% of gains = CLOSE.
+Example: peaked +0.8%, now +0.5% = gave back 37% = KEEP (still holding well).
+
+RULE 3 - BREAKEVEN FADE:
+If a position peaked above +0.5% but has faded back to ~0% or negative, CLOSE immediately.
+This was profitable and you let it die. Take the lesson, free the slot.
+
+RULE 4 - F&G CONTRADICTION CHECK:
+If F&G < 20 (extreme fear) but regime says BULLISH, this is likely a dead cat bounce.
+Be extra cautious with LONGs. Close any LONG that has peaked and is fading, even if
+still slightly green. The bounce is fragile. Do NOT hold 5+ LONGs in extreme fear.
+If F&G > 80 (extreme greed) and all positions are LONG, close the weakest 1-2.
+
+RULE 5 - CORRELATED PAIR LIMIT:
+BTC, ETH, SOL, DOGE all move together. If BTC LONG is open, max 2 more altcoin LONGs
+in the same direction. Close the weakest correlated altcoin positions.
+
+RULE 6 - TIME-BASED PROFIT TIGHTENING:
+After 2+ hours held, if position peaked > 0.5% but current < 35% of peak, close it.
+The move has exhausted. After 4+ hours held, if still under +0.3%, close it.
+
+RULE 7 - WEEKEND/LOW LIQUIDITY (check if Saturday or Sunday):
+On weekends, max 3 positions. Thinner books = more manipulation. Close extras.
+
+RULE 8 - FUNDING COST AWARENESS:
+If funding rate is positive and we are LONG, we PAY every 8h. If position is barely
+profitable (+0.1-0.3%) and funding eats the profit, close it.
+If funding rate is negative and we are SHORT, same logic.
+
+RULE 9 - SLOT EFFICIENCY:
+Each slot costs opportunity. A position using $700 margin earning $5 is 0.7% return.
+If that slot could be used for a fresh regime-aligned trade, close the stale one.
+Prioritize closing positions that have been flat (< +/-0.3%) for > 1 hour.
+
+RULE 10 - NEVER KEEP A POSITION JUST BECAUSE IT WAS RECENTLY OPENED:
+"Just opened < 1h" is NOT a valid reason to keep a position that is already losing
+and contradicts the above rules. If it opened into the wrong direction or F&G
+contradicts the regime, close it regardless of age.
+
+=== YOUR JOB ===
+Apply ALL 10 rules above. For each position, check every rule. Be aggressive about
+locking profits -- our biggest problem is positions that peak at +1% and then fade
+to 0% or negative. Better to close at +0.3% than ride to -1%.
+
+Respond with JSON ONLY (no markdown, no backticks):
+{{"closes": [{{"symbol": "DOGEUSDT", "side": "SHORT", "reason": "Rule X: brief reason"}}, ...], "keep_reasons": "brief summary of why others are kept, referencing rule numbers"}}
+
+If nothing should be closed, return:
+{{"closes": [], "keep_reasons": "brief summary referencing which rules were checked"}}"""
+
+        _rate_limit_gemini()
+        
+        from google import genai
+        from google.genai.types import GenerateContentConfig
+        
+        client = genai.Client()
+        config = GenerateContentConfig(temperature=0.1)
+        
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=config
+        )
+        
+        clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+        data = json.loads(clean_text)
+        
+        closes = data.get("closes", [])
+        keep_reasons = data.get("keep_reasons", "")
+        
+        if not closes:
+            logger.info(f"[PORTFOLIO] Gemini: Keep all. {keep_reasons[:100]}")
+            return
+        
+        logger.info(f"[PORTFOLIO] Gemini wants to close {len(closes)} position(s)")
+        
+        for close_req in closes:
+            close_symbol_raw = close_req.get("symbol", "").upper().replace("USDT", "")
+            close_side = close_req.get("side", "").upper()
+            close_reason = close_req.get("reason", "AI decision")
+            
+            # Find matching position
+            for p in positions:
+                sym = p.get("symbol", "")
+                sym_clean = sym.replace("cmt_", "").replace("usdt", "").upper()
+                p_side = p.get("side", "").upper()
+                
+                if sym_clean == close_symbol_raw and p_side == close_side:
+                    size = float(p.get("size", 0))
+                    pnl = float(p.get("unrealized_pnl", 0))
+                    entry = float(p.get("entry_price", 0))
+                    
+                    if size <= 0:
+                        continue
+                    
+                    logger.warning(f"[PORTFOLIO] Closing {sym_clean} {close_side}: {close_reason}")
+                    
+                    close_result = close_position_manually(sym, close_side, size)
+                    order_id = close_result.get("order_id")
+                    
+                    if order_id:
+                        logger.info(f"[PORTFOLIO] Closed {sym_clean} {close_side}: order {order_id}")
+                        
+                        # Upload AI log
+                        upload_ai_log_to_weex(
+                            stage=f"V3.1.40 Portfolio Manager: Close {close_side} {sym_clean}",
+                            input_data={
+                                "symbol": sym,
+                                "side": close_side,
+                                "size": size,
+                                "entry_price": entry,
+                                "unrealized_pnl": pnl,
+                                "regime": regime.get("regime", "NEUTRAL"),
+                                "fear_greed": regime.get("fear_greed", 50),
+                                "total_positions": len(positions),
+                                "equity": equity,
+                            },
+                            output_data={
+                                "action": "PORTFOLIO_CLOSE",
+                                "order_id": order_id,
+                                "reason": close_reason,
+                                "ai_model": "gemini-2.5-flash",
+                            },
+                            explanation=f"AI Portfolio Manager closed {close_side} {sym_clean}: {close_reason}. Equity: ${equity:.0f}, F&G: {regime.get('fear_greed',50)}, Regime: {regime.get('regime','NEUTRAL')}. Freeing slot for better opportunities."
+                        )
+                        
+                        # Update tracker
+                        try:
+                            tracker.close_trade(sym, {
+                                "reason": f"portfolio_manager_{close_reason[:30]}",
+                                "pnl": pnl,
+                            })
+                        except:
+                            pass
+                        
+                        state.trades_closed += 1
+                    else:
+                        logger.warning(f"[PORTFOLIO] Close failed for {sym_clean}: {close_result}")
+                    
+                    time.sleep(1)
+                    break
+        
+        logger.info(f"[PORTFOLIO] Review complete. Keep reasons: {keep_reasons[:100]}")
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"[PORTFOLIO] Gemini JSON error: {e}")
+    except Exception as e:
+        logger.error(f"[PORTFOLIO] Error: {e}")
+        logger.error(traceback.format_exc())
+
 
 def quick_cleanup_check():
     """Quick check for closed positions"""
@@ -1575,6 +1902,7 @@ def run_daemon():
             if now - last_position >= POSITION_MONITOR_INTERVAL:
                 monitor_positions()
                 regime_aware_exit_check()  # V3.1.9: Check for regime-fighting positions
+                gemini_portfolio_review()  # V3.1.40: Gemini reviews portfolio, closes bad positions
                 last_position = now
             
             if now - last_cleanup >= CLEANUP_CHECK_INTERVAL:

@@ -810,8 +810,8 @@ FLOOR_BALANCE = 950.0  # Protect principal - stop trading below this
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
 MAX_OPEN_POSITIONS = 8  # V3.1.35d: Never blocked - all pairs can trade  # V3.1.31: Competition mode - 5 positions with 10-12x leverage
-MAX_SINGLE_POSITION_PCT = 0.12  # V3.1.34: SURVIVAL - smaller positions  # V3.1.9: 20% per trade max (was 8%)
-MIN_SINGLE_POSITION_PCT = 0.06  # V3.1.34: SURVIVAL - smaller minimum  # V3.1.9: 10% minimum (was 3%)
+MAX_SINGLE_POSITION_PCT = 0.18  # V3.1.41: Recovery - bigger positions with profit guards  # V3.1.9: 20% per trade max (was 8%)
+MIN_SINGLE_POSITION_PCT = 0.10  # V3.1.41: Recovery - 10% minimum  # V3.1.9: 10% minimum (was 3%)
 MIN_CONFIDENCE_TO_TRADE = 0.80  # V3.1.33: Selective - only high conviction trades  # V3.1.22 CAPITAL PROTECTION  # V3.1.20 PREDATOR MODE: Higher conviction trades only
 
 # ============================================================
@@ -1921,17 +1921,22 @@ Days remaining: {days_left}
 PnL: ${pnl:.0f} ({pnl_pct:+.1f}%)
 Available balance: ${balance:.0f}
 
-=== RULES ===
+=== RULES (V3.1.41 - learned from 40+ iterations) ===
 1. You MUST pick exactly ONE: LONG, SHORT, or WAIT.
-2. If we already have BOTH a LONG and SHORT on this pair, pick which one to KEEP and return WAIT (no new position needed).
+2. If we already have BOTH a LONG and SHORT on this pair, return WAIT.
 3. If we already have a LONG open and signal is LONG, return WAIT (already positioned).
-4. If we already have a SHORT open and signal is SHORT, return WAIT (already positioned). 
-5. If we have a losing position and a strong opposite signal, you CAN recommend the opposite direction (hedge).
-6. In EXTREME FEAR (F&G < 20), shorting after a major crash is dangerous - bounces are violent. Favor LONG or WAIT.
-7. Negative funding rate = shorts are paying longs = bullish signal.
-8. Consider the tier: T1 (BTC/ETH/BNB/LTC) = slow movers, T2 (SOL) = medium, T3 (DOGE/XRP/ADA) = fast/volatile.
-9. We need to MAKE MONEY. We are losing. Be decisive but smart. No trade is better than a bad trade.
-10. For TP/SL: wider SL (3-5%) in this volatile market. TP should be 1.5-2x the SL. Max hold: T1=48h, T2=12h, T3=4h.
+4. If we already have a SHORT open and signal is SHORT, return WAIT.
+5. If we have a losing position and a strong opposite signal (85%+), you CAN recommend the opposite direction (hedge).
+6. In EXTREME FEAR (F&G < 20), shorting is dangerous - violent bounces are common. Favor LONG or WAIT. But also: LONGs in extreme fear are FRAGILE. The bounce may die fast. Set tighter TP (2-3%) and be ready to exit quickly.
+7. Negative funding rate = shorts paying longs = bullish. Positive funding + LONG = you pay every 8h, factor this into hold time.
+8. Tier awareness: T1 (BTC/ETH/BNB/LTC) = slow, 15x leverage. T2 (SOL) = medium, 12x. T3 (DOGE/XRP/ADA) = fast, 10x.
+9. DIRECTIONAL LIMIT: Count all open positions. Max 4 in the same direction. If already 4+ LONGs open, do NOT add another LONG. Return WAIT.
+10. CORRELATED PAIRS: BTC/ETH/SOL/DOGE move together. If 3+ altcoin LONGs already open, do NOT add another correlated LONG.
+11. TIME OF DAY: 00-06 UTC is Asian session (low volume, fakeouts). Require 85%+ confidence for new positions during this window.
+12. POST-REGIME SHIFT: If regime just changed in the last 30 minutes, WAIT. First 30 min after shift are choppy.
+13. For TP/SL: wider SL (3-5%) with higher leverage. TP should be 1.5-2x SL. Max hold: T1=12h, T2=8h, T3=4h. SHORTER holds because our profit guards will lock gains before TP.
+14. We have PROGRESSIVE PROFIT GUARDS that close positions when profits fade. So aim for QUALITY entries, not quantity. Better to WAIT for a 85%+ setup than open a 70% trade that gets closed by profit guard at +0.3%.
+15. We need to RECOVER from losses. Be aggressive on HIGH CONVICTION (85%+) setups only. Skip marginal trades.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "tp_pct": number, "sl_pct": number, "reasoning": "2-3 sentences explaining your decision"}}"""
@@ -1957,11 +1962,14 @@ Respond with JSON ONLY (no markdown, no backticks):
             clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
             data = json.loads(clean_text)
             
-            decision = data.get("decision", "WAIT").upper()
-            confidence = min(0.95, max(0.0, float(data.get("confidence", 0))))
-            reasoning = data.get("reasoning", "Gemini Judge decision")
-            tp_pct = float(data.get("tp_pct", tier_config["tp_pct"]))
-            sl_pct = float(data.get("sl_pct", tier_config["sl_pct"]))
+            decision = data.get("decision", "WAIT").upper() if data.get("decision") else "WAIT"
+            raw_conf = data.get("confidence")
+            confidence = min(0.95, max(0.0, float(raw_conf))) if raw_conf is not None else 0.0
+            reasoning = data.get("reasoning") or "Gemini Judge decision"
+            raw_tp = data.get("tp_pct")
+            tp_pct = float(raw_tp) if raw_tp is not None else tier_config["tp_pct"]
+            raw_sl = data.get("sl_pct")
+            sl_pct = float(raw_sl) if raw_sl is not None else tier_config["sl_pct"]
             
             # Clamp TP/SL to reasonable ranges
             tp_pct = max(1.5, min(10.0, tp_pct))

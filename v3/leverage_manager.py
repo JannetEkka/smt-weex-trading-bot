@@ -6,16 +6,16 @@ Liquidation distance at 10x = ~9%, at 12x = ~7.5% -- SL at 1.5% gives 6%+ buffer
 
 class LeverageManager:
     def __init__(self):
-        self.MIN_LEVERAGE = 5  # V3.1.34: SURVIVAL
-        self.MAX_LEVERAGE = 8  # V3.1.34: SURVIVAL
+        self.MIN_LEVERAGE = 10  # V3.1.41: Recovery mode
+        self.MAX_LEVERAGE = 15  # V3.1.41: Recovery mode (prelims used 20x)
         self.MAX_POSITION_PCT = 0.20  # 20% of balance per position
         self.MIN_LIQUIDATION_DISTANCE = 6  # 6% min buffer above SL
 
     def calculate_safe_leverage(self, pair_tier: int, volatility: float = 2.0, regime: str = "NEUTRAL") -> int:
         tier_leverage = {
-            1: 12,  # BTC, ETH - lowest vol, tightest spreads
-            2: 10,  # SOL - mid vol
-            3: 10   # DOGE, XRP, ADA - higher vol but SL protects
+            1: 15,  # BTC, ETH, BNB, LTC - prelims proved 20x safe with SL
+            2: 12,  # SOL - mid vol
+            3: 10   # DOGE, XRP, ADA - higher vol, keep conservative
         }
         base = tier_leverage.get(pair_tier, 10)
 
