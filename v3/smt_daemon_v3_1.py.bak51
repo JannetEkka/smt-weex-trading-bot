@@ -826,40 +826,18 @@ def check_trading_signals():
                     logger.warning(f"DIRECTIONAL LIMIT: {short_count} SHORTs already open, skipping {opportunity['pair']} SHORT")
                     continue
                 
-                # V3.1.51: SESSION-AWARE TRADING with confidence adjustments
+                # V3.1.42: ASIAN SESSION FILTER (00-06 UTC) with EXTREME FEAR override
                 import datetime as _dt_module
                 utc_hour = _dt_module.datetime.now(_dt_module.timezone.utc).hour
                 opp_confidence = opportunity["decision"]["confidence"]
+                # V3.1.42: Pull fear_greed from decision dict (added in Judge return)
                 opp_fear_greed = opportunity["decision"].get("fear_greed", 50)
                 is_extreme_fear = opp_fear_greed < 20
-                
-                # Session classification and confidence threshold
-                if 13 <= utc_hour < 16:
-                    session_name = "US_OPEN"
-                    session_min_conf = 0.70  # Best liquidity, lower bar
-                elif 0 <= utc_hour < 3:
-                    session_name = "ASIA_OPEN"
-                    session_min_conf = 0.75  # Good liquidity
-                elif 6 <= utc_hour < 9:
-                    session_name = "DEAD_HOURS"
-                    session_min_conf = 0.82  # Low liquidity, higher bar
-                elif 0 <= utc_hour < 6:
-                    session_name = "ASIA"
-                    session_min_conf = 0.78
-                else:
-                    session_name = "ACTIVE"
-                    session_min_conf = 0.70  # Normal hours
-                
-                # Extreme fear overrides session filter
-                if is_extreme_fear:
-                    session_min_conf = min(session_min_conf, 0.70)
-                    logger.info(f"EXTREME FEAR OVERRIDE: F&G={opp_fear_greed}, session floor -> 70% for {opportunity['pair']}")
-                
-                if opp_confidence < session_min_conf:
-                    logger.warning(f"SESSION FILTER [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} < {session_min_conf:.0%}, skipping {opportunity['pair']}")
+                if 0 <= utc_hour < 6 and opp_confidence < 0.85 and not is_extreme_fear:
+                    logger.warning(f"ASIAN SESSION FILTER: {utc_hour}:00 UTC, confidence {opp_confidence:.0%} < 85%, F&G={opp_fear_greed}, skipping {opportunity['pair']}")
                     continue
-                else:
-                    logger.info(f"SESSION [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} >= {session_min_conf:.0%}, proceeding {opportunity['pair']}")
+                elif 0 <= utc_hour < 6 and is_extreme_fear:
+                    logger.info(f"EXTREME FEAR OVERRIDE: F&G={opp_fear_greed} < 20, bypassing Asian filter for {opportunity['pair']} ({opp_confidence:.0%})")
                 
                 tier = opportunity["tier"]
                 tier_config = get_tier_config(tier)
@@ -941,16 +919,6 @@ def check_trading_signals():
                         logger.info(f"  TP: {trade_result.get('tp_pct'):.1f}%, SL: {trade_result.get('sl_pct'):.1f}%")
                         
                         trade_result["confidence"] = confidence  # V3.1.41: Store for profit guard
-                        # V3.1.51: Store whale confidence for Smart Hold protection
-                        whale_conf = 0.0
-                        whale_dir = "NEUTRAL"
-                        for pv in opportunity.get("decision", {}).get("persona_votes", []):
-                            if pv.get("persona") == "WHALE":
-                                whale_conf = pv.get("confidence", 0.0)
-                                whale_dir = pv.get("signal", "NEUTRAL")
-                                break
-                        trade_result["whale_confidence"] = whale_conf
-                        trade_result["whale_direction"] = whale_dir
                         tracker.add_trade(opportunity["pair_info"]["symbol"], trade_result)
                         state.trades_opened += 1
                         ai_log["trades"].append(trade_result)
@@ -1340,9 +1308,7 @@ def gemini_portfolio_review():
             sym = p.get("symbol", "")
             trade = tracker.get_active_trade(sym)
             peak = trade.get("peak_pnl_pct", 0) if trade else 0
-            whale_c = trade.get("whale_confidence", 0) if trade else 0
-            whale_d = trade.get("whale_direction", "?") if trade else "?"
-            peak_data.append(f"  peak={peak:+.1f}%, whale={whale_d}@{whale_c:.0%}")
+            peak_data.append(f"  peak={peak:+.1f}%")
         
         # Enhance positions_text with peak data
         enhanced_pos = []
@@ -1452,12 +1418,6 @@ The ONLY acceptable closes are:
 (b) 8+ positions in same direction creating liquidation cascade risk
 (c) Winning positions that hit max_hold_hours (take the profit)
 NEVER close: positions under 6 hours old, positions losing less than -3%, positions during F&G < 20.
-
-RULE 11 - WHALE HOLD PROTECTION (V3.1.51 "Smart Holds"):
-If a position shows whale confidence >= 70% in the SAME direction as the position (e.g. whale=LONG@82% on a LONG),
-do NOT close it. Smart money (on-chain whale flows + community sentiment) agrees with this trade.
-Let it run to full TP. Only exception: if it has exceeded max_hold_hours AND is losing more than -3%.
-Whale-backed positions historically produce the biggest wins. Protect them.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"closes": [{{"symbol": "DOGEUSDT", "side": "SHORT", "reason": "Rule X: brief reason"}}, ...], "keep_reasons": "brief summary of why others are kept, referencing rule numbers"}}

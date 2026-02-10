@@ -2584,57 +2584,28 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     
     order_type = "1" if signal == "LONG" else "2"
     
-    # V3.1.51: ATR-based dynamic SL + REGIME-SCALED TP
-    # SL: ATR-driven (volatility-aware). TP: Tier config scaled by Fear & Greed.
-    # F&G < 15 (capitulation): TP * 1.5 (bounces are violent, 12% on T1)
-    # F&G < 30 (fear): TP * 1.25 (wider TP, fear entries are strong)
-    # F&G > 60 (greed): TP * 0.65 (take profits faster in greed)
-    # F&G > 80 (extreme greed): TP * 0.50 (aggressive profit taking)
+    # V3.1.32: ATR-based dynamic SL - stops outside normal volatility noise
     try:
         atr_data = get_btc_atr()
         atr_pct = atr_data.get("atr_pct", 0)
         if atr_pct > 0:
+            # SL = 1.2x ATR (just outside one 4h candle range), floored by tier config
             dynamic_sl = round(atr_pct * 1.2, 2)
             tier_floor_sl = tier_config["sl_pct"]
             sl_pct_raw = max(dynamic_sl, tier_floor_sl)
+            # Cap SL at 4% to prevent huge losses
             sl_pct_raw = min(sl_pct_raw, 4.0)
+            # TP = 1.5x SL for positive expectancy
+            tp_pct_raw = tier_config["tp_pct"]  # V3.1.50: Use tier TP, not 1.5x SL
+            print(f"  [ATR-SL] ATR: {atr_pct:.2f}% | Dynamic SL: {dynamic_sl:.2f}% | Final SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}%")
         else:
             sl_pct_raw = tier_config["sl_pct"]
+            tp_pct_raw = tier_config["tp_pct"]
+            print(f"  [ATR-SL] No ATR data, using tier defaults: SL {sl_pct_raw}% TP {tp_pct_raw}%")
     except Exception as e:
         sl_pct_raw = tier_config["sl_pct"]
-        print(f"  [ATR-SL] Error ({e}), using tier SL: {sl_pct_raw}%")
-    
-    # V3.1.51: Regime-scaled TP
-    try:
-        fg_data = get_fear_greed_index()
-        fg_val = fg_data.get("value", 50)
-    except:
-        fg_val = 50
-    
-    base_tp = tier_config["tp_pct"]
-    if fg_val < 15:
-        tp_multiplier = 1.5
-        tp_label = "CAPITULATION"
-    elif fg_val < 30:
-        tp_multiplier = 1.25
-        tp_label = "FEAR"
-    elif fg_val > 80:
-        tp_multiplier = 0.50
-        tp_label = "EXTREME_GREED"
-    elif fg_val > 60:
-        tp_multiplier = 0.65
-        tp_label = "GREED"
-    else:
-        tp_multiplier = 1.0
-        tp_label = "NORMAL"
-    
-    tp_pct_raw = round(base_tp * tp_multiplier, 2)
-    # Floor: TP must be at least 2x SL for positive expectancy
-    tp_pct_raw = max(tp_pct_raw, sl_pct_raw * 2.0)
-    # Cap: TP max 15% (avoid unrealistic targets)
-    tp_pct_raw = min(tp_pct_raw, 15.0)
-    
-    print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% ({tp_label}, F&G={fg_val}, base={base_tp}%, mult={tp_multiplier}x)")
+        tp_pct_raw = tier_config["tp_pct"]
+        print(f"  [ATR-SL] Error ({e}), using tier defaults: SL {sl_pct_raw}% TP {tp_pct_raw}%")
     
     tp_pct = tp_pct_raw / 100
     sl_pct = sl_pct_raw / 100
@@ -2717,26 +2688,26 @@ COOLDOWN_HOURS = {
 # Only for Tier 1 and Tier 2 - Tier 3 is scalp only
 
 RUNNER_CONFIG = {
-    1: {  # BTC, ETH, BNB, LTC - trigger at 50% of 8% TP = 4%
-        "enabled": True,   # V3.1.51: Re-enabled with staggered TP
-        "trigger_pct": 4.0,  # 50% of T1 TP (8%)
-        "close_pct": 40,     # Close 40%, let 60% ride to full TP
-        "move_sl_to_entry": True,  # Move SL to breakeven on remaining
-        "remove_tp": False,  # Keep TP order for remaining size
-    },
-    2: {  # SOL - trigger at 50% of 7% TP = 3.5%
-        "enabled": True,   # V3.1.51: Re-enabled
-        "trigger_pct": 3.5,
-        "close_pct": 40,
+    1: {  # BTC, ETH, BNB, LTC
+        "enabled": False,  # V3.1.20 PREDATOR MODE: No partial closes, let winners run to full TP
+        "trigger_pct": 2.0,
+        "close_pct": 50,
         "move_sl_to_entry": True,
-        "remove_tp": False,
+        "remove_tp": True,
     },
-    3: {  # DOGE, XRP, ADA - trigger at 50% of 6% TP = 3%
-        "enabled": True,   # V3.1.51: Re-enabled
-        "trigger_pct": 3.0,
-        "close_pct": 40,
+    2: {  # SOL
+        "enabled": False,  # V3.1.20 PREDATOR MODE
+        "trigger_pct": 1.5,
+        "close_pct": 50,
         "move_sl_to_entry": True,
-        "remove_tp": False,
+        "remove_tp": True,
+    },
+    3: {  # DOGE, XRP, ADA
+        "enabled": False,  # V3.1.20 PREDATOR MODE
+        "trigger_pct": 1.5,
+        "close_pct": 50,
+        "move_sl_to_entry": True,
+        "remove_tp": True,
     },
 }
 
@@ -2784,9 +2755,6 @@ class TradeTracker:
             "position_usdt": trade_data.get("position_usdt"),
             "tier": trade_data.get("tier"),
             "max_hold_hours": trade_data.get("max_hold_hours"),
-            "confidence": trade_data.get("confidence", 0.0),
-            "whale_confidence": trade_data.get("whale_confidence", 0.0),
-            "whale_direction": trade_data.get("whale_direction", "NEUTRAL"),
         }
         self.save_state()
     
