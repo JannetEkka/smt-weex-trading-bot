@@ -881,12 +881,12 @@ TIER_CONFIG = {
 TRADING_PAIRS = {
     "BTC": {"symbol": "cmt_btcusdt", "tier": 1, "has_whale_data": True},
     "ETH": {"symbol": "cmt_ethusdt", "tier": 1, "has_whale_data": True},
-    "BNB": {"symbol": "cmt_bnbusdt", "tier": 1, "has_whale_data": True},
-    "LTC": {"symbol": "cmt_ltcusdt", "tier": 1, "has_whale_data": True},
-    "SOL": {"symbol": "cmt_solusdt", "tier": 2, "has_whale_data": True},
-    "DOGE": {"symbol": "cmt_dogeusdt", "tier": 3, "has_whale_data": True},
-    "XRP": {"symbol": "cmt_xrpusdt", "tier": 3, "has_whale_data": True},
-    "ADA": {"symbol": "cmt_adausdt", "tier": 3, "has_whale_data": True},
+    "BNB": {"symbol": "cmt_bnbusdt", "tier": 1, "has_whale_data": False},
+    "LTC": {"symbol": "cmt_ltcusdt", "tier": 1, "has_whale_data": False},
+    "SOL": {"symbol": "cmt_solusdt", "tier": 2, "has_whale_data": False},
+    "DOGE": {"symbol": "cmt_dogeusdt", "tier": 3, "has_whale_data": False},
+    "XRP": {"symbol": "cmt_xrpusdt", "tier": 3, "has_whale_data": False},
+    "ADA": {"symbol": "cmt_adausdt", "tier": 3, "has_whale_data": False},
 }
 
 # Pipeline Version
@@ -1125,15 +1125,8 @@ TOP_WHALES = [
 
 class WhalePersona:
     """
-    V3.1.45: Enhanced whale intelligence with Cryptoracle integration.
-    
-    BTC/ETH: Etherscan on-chain whale flow (primary) + Cryptoracle community sentiment (secondary)
-    ALL OTHERS: Cryptoracle community sentiment analysis (no more "Skipped")
-    
-    Cryptoracle provides:
-      - CO-A-02-03: Net sentiment direction (positive - negative ratio)
-      - CO-S-01-01: Sentiment momentum Z-score (deviation from norm)
-      - CO-S-01-05: Sentiment vs price dislocation (mean-reversion signal)
+    Analyzes on-chain whale behavior for ETH/BTC signals.
+    Tracks large wallet movements via Etherscan API.
     """
     
     def __init__(self):
@@ -1141,51 +1134,26 @@ class WhalePersona:
         self.weight = 2.0
         self.cache = {}
         self.cache_ttl = 300  # 5 minutes
-        self._cryptoracle_data = None
-        self._cryptoracle_fetched_at = 0
-    
-    def _get_cryptoracle_data(self) -> dict:
-        """Fetch Cryptoracle data for all tokens (cached 10min)."""
-        import time as _time
-        now = _time.time()
-        if self._cryptoracle_data and (now - self._cryptoracle_fetched_at) < 600:
-            return self._cryptoracle_data
-        
-        try:
-            from cryptoracle_client import get_all_trading_pair_sentiment
-            data = get_all_trading_pair_sentiment()
-            if data:
-                self._cryptoracle_data = data
-                self._cryptoracle_fetched_at = now
-                return data
-        except ImportError:
-            print("  [WHALE] cryptoracle_client not found - using Etherscan only")
-        except Exception as e:
-            print(f"  [WHALE] Cryptoracle fetch error: {e}")
-        
-        return self._cryptoracle_data or {}
     
     def analyze(self, pair: str, pair_info: Dict) -> Dict:
-        """Analyze whale/smart money activity for trading signal."""
+        """Analyze whale activity for trading signal"""
         
-        # Fetch Cryptoracle data for all pairs (one API call, cached)
-        cr_data = self._get_cryptoracle_data()
-        cr_signal = cr_data.get(pair.upper()) if cr_data else None
+        if pair not in ("ETH", "BTC"):
+            return {
+                "persona": self.name,
+                "signal": "NEUTRAL",
+                "confidence": 0.0,
+                "reasoning": f"No whale data for {pair}",
+            }
         
-        if pair in ("ETH", "BTC"):
-            return self._analyze_with_etherscan(pair, pair_info, cr_signal)
-        else:
-            return self._analyze_with_cryptoracle(pair, pair_info, cr_signal)
-    
-    def _analyze_with_etherscan(self, pair: str, pair_info: Dict, cr_signal: dict) -> Dict:
-        """BTC/ETH: Etherscan whale flow (primary) + Cryptoracle (secondary)."""
         try:
+            # Analyze top whales
             total_inflow = 0
             total_outflow = 0
             whale_signals = []
             whales_analyzed = 0
             
-            for whale in TOP_WHALES[:5]:
+            for whale in TOP_WHALES[:5]:  # Check top 5 whales
                 try:
                     flow = self._analyze_whale_flow(whale["address"], whale["label"])
                     if flow:
@@ -1193,19 +1161,17 @@ class WhalePersona:
                         total_inflow += flow["inflow"]
                         total_outflow += flow["outflow"]
                         
-                        if flow["net"] > 100:
+                        if flow["net"] > 100:  # Significant inflow (>100 ETH)
                             whale_signals.append(f"{whale['label']}: +{flow['net']:.0f} ETH")
-                        elif flow["net"] < -100:
+                        elif flow["net"] < -100:  # Significant outflow
                             whale_signals.append(f"{whale['label']}: {flow['net']:.0f} ETH")
                     
-                    time.sleep(0.25)
+                    time.sleep(0.25)  # Rate limit Etherscan
                 except Exception as e:
                     print(f"  [WHALE] Error analyzing {whale['label']}: {e}")
                     continue
             
             if whales_analyzed == 0:
-                if cr_signal:
-                    return self._cryptoracle_to_vote(pair, cr_signal, "Etherscan unavailable, using Cryptoracle")
                 return {
                     "persona": self.name,
                     "signal": "NEUTRAL",
@@ -1215,19 +1181,20 @@ class WhalePersona:
             
             net_flow = total_inflow - total_outflow
             
-            if net_flow > 500:
+            # Determine signal based on net flow
+            if net_flow > 500:  # Strong accumulation (>500 ETH net inflow)
                 signal = "LONG"
                 confidence = min(0.85, 0.5 + (net_flow / 5000))
                 reasoning = f"Whale accumulation: +{net_flow:.0f} ETH net inflow"
-            elif net_flow < -500:
+            elif net_flow < -500:  # Strong distribution (>500 ETH net outflow)
                 signal = "SHORT"
                 confidence = min(0.85, 0.5 + (abs(net_flow) / 5000))
                 reasoning = f"Whale distribution: {net_flow:.0f} ETH net outflow"
-            elif net_flow > 100:
+            elif net_flow > 100:  # Mild accumulation
                 signal = "LONG"
                 confidence = 0.55
                 reasoning = f"Mild whale accumulation: +{net_flow:.0f} ETH"
-            elif net_flow < -100:
+            elif net_flow < -100:  # Mild distribution
                 signal = "SHORT"
                 confidence = 0.55
                 reasoning = f"Mild whale distribution: {net_flow:.0f} ETH"
@@ -1239,21 +1206,6 @@ class WhalePersona:
             if whale_signals:
                 reasoning += f" | {'; '.join(whale_signals[:3])}"
             
-            # V3.1.45: Cryptoracle boost/veto for BTC/ETH
-            if cr_signal:
-                cr_dir = cr_signal.get("signal", "NEUTRAL")
-                cr_conf = cr_signal.get("confidence", 0.4)
-                cr_net = cr_signal.get("net_sentiment", 0.5)
-                cr_mom = cr_signal.get("sentiment_momentum", 0.0)
-                
-                if signal == cr_dir and cr_dir != "NEUTRAL":
-                    boost = min(0.10, (cr_conf - 0.5) * 0.2)
-                    confidence = min(0.85, confidence + boost)
-                    reasoning += f" [CR confirms: sent={cr_net:.2f}, mom={cr_mom:.2f}]"
-                elif signal != "NEUTRAL" and cr_dir != "NEUTRAL" and signal != cr_dir:
-                    reasoning += f" [CR DIVERGES: community={cr_dir} sent={cr_net:.2f}]"
-                    confidence = max(0.40, confidence - 0.05)
-            
             return {
                 "persona": self.name,
                 "signal": signal,
@@ -1264,13 +1216,10 @@ class WhalePersona:
                     "inflow": total_inflow,
                     "outflow": total_outflow,
                     "whales_analyzed": whales_analyzed,
-                    "cryptoracle": cr_signal,
                 },
             }
             
         except Exception as e:
-            if cr_signal:
-                return self._cryptoracle_to_vote(pair, cr_signal, f"Etherscan error ({e}), using Cryptoracle")
             return {
                 "persona": self.name,
                 "signal": "NEUTRAL",
@@ -1278,71 +1227,6 @@ class WhalePersona:
                 "reasoning": f"Whale analysis error: {str(e)}",
             }
     
-    def _analyze_with_cryptoracle(self, pair: str, pair_info: Dict, cr_signal: dict) -> Dict:
-        """Non-BTC/ETH pairs: Cryptoracle community sentiment as primary signal."""
-        if not cr_signal:
-            print(f"  [WHALE] No data for {pair} (Cryptoracle unavailable)")
-            return {
-                "persona": self.name,
-                "signal": "NEUTRAL",
-                "confidence": 0.0,
-                "reasoning": f"No whale data for {pair}",
-            }
-        
-        return self._cryptoracle_to_vote(pair, cr_signal, "")
-    
-    def _cryptoracle_to_vote(self, pair: str, cr: dict, prefix: str) -> Dict:
-        """Convert Cryptoracle signal to a whale persona vote."""
-        signal = cr.get("signal", "NEUTRAL")
-        confidence = cr.get("confidence", 0.40)
-        net_sent = cr.get("net_sentiment", 0.5)
-        momentum = cr.get("sentiment_momentum", 0.0)
-        price_gap = cr.get("sentiment_price_gap", 0.0)
-        trend = cr.get("trend_1h", "FLAT")
-        
-        parts = []
-        if prefix:
-            parts.append(prefix)
-        
-        if net_sent > 0.65:
-            parts.append(f"Strong bullish community sentiment ({net_sent:.2f})")
-        elif net_sent > 0.55:
-            parts.append(f"Mild bullish sentiment ({net_sent:.2f})")
-        elif net_sent < 0.35:
-            parts.append(f"Strong bearish community sentiment ({net_sent:.2f})")
-        elif net_sent < 0.45:
-            parts.append(f"Mild bearish sentiment ({net_sent:.2f})")
-        else:
-            parts.append(f"Neutral community sentiment ({net_sent:.2f})")
-        
-        if abs(momentum) > 1.0:
-            direction = "bullish" if momentum > 0 else "bearish"
-            parts.append(f"Sentiment momentum {direction} (z={momentum:.2f})")
-        
-        if abs(price_gap) > 2.0:
-            gap_dir = "ahead of" if price_gap > 0 else "behind"
-            parts.append(f"Sentiment {gap_dir} price (gap={price_gap:.2f})")
-        
-        if trend != "FLAT":
-            parts.append(f"Trend: {trend}")
-        
-        reasoning = "; ".join(parts)
-        
-        return {
-            "persona": self.name,
-            "signal": signal,
-            "confidence": confidence,
-            "reasoning": reasoning,
-            "data": {
-                "source": "cryptoracle",
-                "net_sentiment": net_sent,
-                "sentiment_momentum": momentum,
-                "sentiment_price_gap": price_gap,
-                "trend": trend,
-                "cryptoracle": cr,
-            },
-        }
-
     def _analyze_whale_flow(self, address: str, label: str) -> Optional[Dict]:
         """Fetch recent transactions for a whale and calculate flow"""
         
@@ -2051,7 +1935,7 @@ Days remaining: {days_left}
 PnL: ${pnl:.0f} ({pnl_pct:+.1f}%)
 Available balance: ${balance:.0f}
 
-=== RULES (V3.1.45 - learned from 45+ iterations) ===
+=== RULES (V3.1.41 - learned from 40+ iterations) ===
 1. You MUST pick exactly ONE: LONG, SHORT, or WAIT.
 2. If we already have BOTH a LONG and SHORT on this pair, return WAIT.
 3. If we already have a LONG open and signal is LONG, return WAIT (already positioned).
@@ -2066,11 +1950,8 @@ Available balance: ${balance:.0f}
 11. TIME OF DAY: 00-06 UTC Asian session. Require 80%+ confidence (not 85%).
 12. POST-REGIME SHIFT: If regime just changed, still trade if confidence >= 80%. Speed matters.
 13. For TP/SL: SL 2-2.5%. TP should be 2-3x SL (4-6%). Max hold: T1=48h, T2=24h, T3=12h. Let winners RUN.
-14. RECOVERY MODE: We are DOWN from starting balance. We CANNOT afford to WAIT on good setups. If 2+ personas agree on direction with 70%+ average confidence, TAKE THE TRADE. Playing safe = guaranteed last place.
+14. RECOVERY MODE: We are DOWN 30%+ from starting balance. We CANNOT afford to WAIT on good setups. If 2+ personas agree on direction with 70%+ average confidence, TAKE THE TRADE. Playing safe = guaranteed last place.
 15. SWAP MENTALITY: If we are full on slots but this signal is 80%+ conviction, say LONG or SHORT anyway. The daemon will handle swapping out the weakest position. Do NOT return WAIT just because slots are full.
-16. WHALE DATA QUALITY: For BTC/ETH, WHALE uses on-chain Etherscan data (most reliable - actual wallet flows). For other pairs (SOL/DOGE/XRP/ADA/BNB/LTC), WHALE uses Cryptoracle community sentiment (social signals from Twitter/Telegram/Discord). Etherscan > Cryptoracle in reliability. If WHALE and FLOW disagree on altcoins, trust FLOW (order book data > social data).
-17. SMART MONEY DIVERGENCE: If WHALE shows bullish but FLOW shows extreme selling, this is BULLISH ABSORPTION (whales/community buying the dip) - high conviction LONG. If WHALE shows bearish but FLOW shows buying, this is DISTRIBUTION INTO STRENGTH (smart money selling into FOMO) - caution on LONGs.
-18. SENTIMENT MOMENTUM: If WHALE reports sentiment momentum z-score > 1.5, community is overheated (contrarian SHORT risk). If z-score < -1.5, community panic (contrarian LONG opportunity with F&G < 20). Combine with FLOW for highest conviction.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "tp_pct": number, "sl_pct": number, "reasoning": "2-3 sentences explaining your decision"}}"""
@@ -2343,11 +2224,14 @@ class MultiPersonaAnalyzer:
         
         votes = []
         
-        # 1. Whale Persona (V3.1.45: ALL pairs via Cryptoracle, BTC/ETH also use Etherscan)
-        print(f"  [WHALE] Analyzing...")
-        whale_vote = self.whale.analyze(pair, pair_info)
-        votes.append(whale_vote)
-        print(f"  [WHALE] {whale_vote['signal']} ({whale_vote['confidence']:.0%}): {whale_vote['reasoning']}")
+        # 1. Whale Persona (ONLY for ETH/BTC)
+        if pair in ("ETH", "BTC"):
+            print(f"  [WHALE] Analyzing...")
+            whale_vote = self.whale.analyze(pair, pair_info)
+            votes.append(whale_vote)
+            print(f"  [WHALE] {whale_vote['signal']} ({whale_vote['confidence']:.0%}): {whale_vote['reasoning']}")
+        else:
+            print(f"  [WHALE] Skipped (no whale data for {pair})")
         
         # 2. Sentiment Persona
         print(f"  [SENTIMENT] Analyzing...")

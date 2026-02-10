@@ -456,7 +456,7 @@ def check_trading_signals():
             _fg_check = get_fear_greed_index()
             _fg_value = _fg_check.get("value", 50)
             if _fg_value < 15:
-                HEDGE_CONFIDENCE_THRESHOLD = 0.95  # V3.1.45: Allow hedges at 95%+ even in capitulation
+                HEDGE_CONFIDENCE_THRESHOLD = 1.0  # Impossible to meet = no hedges
                 logger.info(f"CAPITULATION: F&G={_fg_value} < 15, hedging DISABLED (pick a side)")
         except:
             pass
@@ -1379,11 +1379,11 @@ Days left in competition: {days_left}
 === MANDATORY RULES (from 40+ iterations of battle-tested experience) ===
 
 RULE 1 - DIRECTIONAL CONCENTRATION LIMIT:
-Max 5 positions in the same direction normally. If 6+ LONGs or 6+ SHORTs, close the WEAKEST ones
-(lowest PnL% or most faded from peak) until we have max 5. All-same-direction = cascade
+Max 4 positions in the same direction normally. If 5+ LONGs or 5+ SHORTs, close the WEAKEST ones
+(lowest PnL% or most faded from peak) until we have max 4. All-same-direction = cascade
 liquidation risk in cross margin.
-EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move ALL alts together,
-so being long across the board IS the correct play. Only enforce max 5 if F&G >= 15.
+EXCEPTION: If F&G < 15 (Capitulation), allow up to 5 LONGs. Violent bounces move ALL alts together,
+so being long across the board IS the correct play. Only enforce max 4 if F&G >= 15.
 
 RULE 2 - FADING MOMENTUM (CRITICAL - our #1 profit leak):
 If a position peaked above +0.5% but current PnL has dropped to less than 40% of peak,
@@ -1401,7 +1401,7 @@ HOWEVER: extreme fear is ALSO when contrarian LONGs make the most money (violent
 So do NOT close LONGs just because F&G is low. Only close LONGs in extreme fear IF:
   a) Position has peaked above +0.5% and faded below 30% of peak (Rule 2, but with 30% not 40% threshold), OR
   b) Position has been held > 4h (not 2h) and is flat or negative, OR
-  c) There are 8+ LONGs open (only during extreme over-concentration)
+  c) There are 6+ LONGs open (raised from 5 during Capitulation)
 Do NOT close a recently opened LONG (< 2h) that was entered during Extreme Fear (F&G < 20).
 These are CAPITULATION REVERSAL entries - they need time to develop. The first 1-2 hours
 are often choppy before the real bounce kicks in.
@@ -1410,9 +1410,9 @@ If F&G > 80 (extreme greed) and all positions are LONG, close the weakest 1-2.
 RULE 5 - CORRELATED PAIR LIMIT:
 BTC, ETH, SOL, DOGE all move together. If BTC LONG is open, max 2 more altcoin LONGs
 in the same direction normally. Close the weakest correlated altcoin positions.
-EXCEPTION: If F&G < 15 (Capitulation), allow up to 6 correlated altcoin LONGs alongside BTC.
+EXCEPTION: If F&G < 15 (Capitulation), allow up to 4 correlated altcoin LONGs alongside BTC.
 During capitulation bounces, correlation is your FRIEND - everything bounces together.
-Only enforce the strict 3-altcoin limit when F&G >= 15.
+Only enforce the strict 2-altcoin limit when F&G >= 15.
 
 RULE 6 - TIME-BASED PROFIT TIGHTENING:
 After 2+ hours held, if position peaked > 0.5% but current < 35% of peak, close it.
