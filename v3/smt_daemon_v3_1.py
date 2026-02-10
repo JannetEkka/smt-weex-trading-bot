@@ -199,16 +199,17 @@ def setup_logging():
     file_handler.setLevel(LOG_LEVEL)
     file_handler.setFormatter(formatter)
     
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(LOG_LEVEL)
-    console_handler.setFormatter(formatter)
     
     logger = logging.getLogger()
     logger.setLevel(LOG_LEVEL)
     logger.handlers = []
     logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
     
+    # V3.1.51: Redirect stdout/stderr to log file so print() from nightly goes here too
+    import sys as _sys
+    _sys.stdout = open(log_file, "a")
+    _sys.stderr = open(log_file, "a")
+
     return logger
 
 logger = setup_logging()
