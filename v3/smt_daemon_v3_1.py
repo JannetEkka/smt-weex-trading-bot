@@ -1134,54 +1134,24 @@ def monitor_positions():
                 confidence_multiplier = 1.3 if entry_confidence >= 0.85 else 1.0  # High-conf trades get 30% wider guards
                 
                 logger.info(f"  [MONITOR] {symbol} T{tier}: {pnl_pct:+.2f}% (peak: {peak_pnl_pct:.2f}%) conf={entry_confidence:.0%}")
-                # V3.1.41 PROGRESSIVE PROFIT GUARD - learned from commit history
-                # Old thresholds (2.5-3.5% peak) NEVER triggered. Positions peak at 0.5-1.5% and fade.
-                # New: Multi-tier progressive system that actually captures profits.
+                # V3.1.46: PROFIT GUARDS DISABLED - Recovery mode
+                # Problem: Guards close at +0.5-1.3% (capturing $5-30) but losses hit $50-299
+                # Solution: Let TP orders do their job. Need +5-8% wins to recover.
+                # Guards were cutting winners before they could become big wins.
+                # V3.1.46: ALL PROFIT GUARDS DISABLED - Recovery mode
+                # We need wins of $100-300, not $15-50. Let TP orders handle exits.
+                # fade_pct = peak_pnl_pct - pnl_pct
+                # if tier == 3: T3_profit_guard ... DISABLED
+                # elif tier == 2: T2_profit_guard ... DISABLED
+                # else: T1_profit_guard ... DISABLED
                 
-                # TIER 1: Move SL to breakeven at +0.8%, guard at peak-50% above +1.2%
-                # TIER 2: Move SL to breakeven at +0.6%, guard at peak-50% above +1.0%
-                # TIER 3: Move SL to breakeven at +0.5%, guard at peak-50% above +0.8%
-                
-                fade_pct = peak_pnl_pct - pnl_pct  # How much we gave back
-                
-                if tier == 3:
-                    # Tier 3 (DOGE, XRP, ADA): They reverse FAST - tight guards
-                    if peak_pnl_pct >= 0.8 * confidence_multiplier and pnl_pct < peak_pnl_pct * (0.40 * confidence_multiplier):
-                        should_exit = True
-                        exit_reason = f"T3_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%, gave back 60%+)"
-                        state.early_exits += 1
-                    elif peak_pnl_pct >= 0.5 * confidence_multiplier and pnl_pct <= 0.05:
-                        should_exit = True
-                        exit_reason = f"T3_breakeven_guard (peak: +{peak_pnl_pct:.1f}%, faded to breakeven)"
-                        state.early_exits += 1
-                elif tier == 2:
-                    # Tier 2 (SOL): Medium volatility
-                    if peak_pnl_pct >= 1.0 * confidence_multiplier and pnl_pct < peak_pnl_pct * (0.45 * confidence_multiplier):
-                        should_exit = True
-                        exit_reason = f"T2_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%, gave back 55%+)"
-                        state.early_exits += 1
-                    elif peak_pnl_pct >= 0.6 * confidence_multiplier and pnl_pct <= 0.05:
-                        should_exit = True
-                        exit_reason = f"T2_breakeven_guard (peak: +{peak_pnl_pct:.1f}%, faded to breakeven)"
-                        state.early_exits += 1
-                else:
-                    # Tier 1 (BTC, ETH, BNB, LTC): Slower movers but still guard
-                    if peak_pnl_pct >= 1.2 * confidence_multiplier and pnl_pct < peak_pnl_pct * (0.50 * confidence_multiplier):
-                        should_exit = True
-                        exit_reason = f"T1_profit_guard (peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%, gave back 50%+)"
-                        state.early_exits += 1
-                    elif peak_pnl_pct >= 0.8 * confidence_multiplier and pnl_pct <= 0.05:
-                        should_exit = True
-                        exit_reason = f"T1_breakeven_guard (peak: +{peak_pnl_pct:.1f}%, faded to breakeven)"
-                        state.early_exits += 1
-                
-                # V3.1.41: TIME-BASED TIGHTENING
-                # After 2h in profit that peaked > 0.5%, if now giving back > 60% of peak, exit
-                if not should_exit and hours_open >= 2.0 and peak_pnl_pct >= 0.5:
-                    if pnl_pct < peak_pnl_pct * 0.35:
-                        should_exit = True
-                        exit_reason = f"time_fade_guard ({hours_open:.1f}h, peak: +{peak_pnl_pct:.1f}%, now: {pnl_pct:.1f}%)"
-                        state.early_exits += 1
+                # V3.1.46: TIME-BASED TIGHTENING DISABLED - Let winners run
+                # Was closing positions that peaked at 0.5-1% after 2h. These need time to hit 5%+ TP.
+                # if not should_exit and hours_open >= 2.0 and peak_pnl_pct >= 0.5:
+                #     if pnl_pct < peak_pnl_pct * 0.35:
+                #         should_exit = True
+                #         exit_reason = f"time_fade_guard ..."
+                pass  # V3.1.46: Disabled
                 
 
                 # 1. Max hold time exceeded (tier-specific)
@@ -1385,27 +1355,24 @@ liquidation risk in cross margin.
 EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move ALL alts together,
 so being long across the board IS the correct play. Only enforce max 5 if F&G >= 15.
 
-RULE 2 - FADING MOMENTUM (CRITICAL - our #1 profit leak):
-If a position peaked above +0.5% but current PnL has dropped to less than 40% of peak,
-it is FADING. Close it to lock remaining profit before it goes to zero.
-Example: peaked +1.2%, now +0.3% = gave back 75% of gains = CLOSE.
-Example: peaked +0.8%, now +0.5% = gave back 37% = KEEP (still holding well).
+RULE 2 - LET WINNERS RUN (V3.1.46 RECOVERY MODE):
+Do NOT close winning positions just because they faded from peak. Our TP orders are at 5-8%.
+Closing at +0.5% when TP is at +6% means we capture $15 instead of $180.
+Only close a WINNING position if it has been held past max_hold_hours.
+Our biggest problem is NOT fading profits -- it is that our biggest win ($55) is
+5x smaller than our biggest loss ($299). We need $100-300 wins to recover.
 
-RULE 3 - BREAKEVEN FADE:
-If a position peaked above +0.5% but has faded back to ~0% or negative, CLOSE immediately.
-This was profitable and you let it die. Take the lesson, free the slot.
+RULE 3 - BREAKEVEN PATIENCE (V3.1.46 RECOVERY MODE):
+If a position has faded to breakeven, DO NOT CLOSE. The SL order is our safety net.
+Crypto is volatile - a position at 0% can rally to +5% in the next hour.
+Only the SL should close losing/breakeven positions. Do NOT close manually.
 
-RULE 4 - F&G CONTRADICTION CHECK:
-If F&G < 20 (extreme fear) but regime says BULLISH, the bounce may be fragile.
-HOWEVER: extreme fear is ALSO when contrarian LONGs make the most money (violent bounces).
-So do NOT close LONGs just because F&G is low. Only close LONGs in extreme fear IF:
-  a) Position has peaked above +0.5% and faded below 30% of peak (Rule 2, but with 30% not 40% threshold), OR
-  b) Position has been held > 4h (not 2h) and is flat or negative, OR
-  c) There are 8+ LONGs open (only during extreme over-concentration)
-Do NOT close a recently opened LONG (< 2h) that was entered during Extreme Fear (F&G < 20).
-These are CAPITULATION REVERSAL entries - they need time to develop. The first 1-2 hours
-are often choppy before the real bounce kicks in.
-If F&G > 80 (extreme greed) and all positions are LONG, close the weakest 1-2.
+RULE 4 - F&G CONTRADICTION CHECK (V3.1.47 RECOVERY):
+If F&G < 20 (extreme fear), DO NOT CLOSE ANY POSITIONS unless they hit their SL order on WEEX.
+Extreme fear creates the best entries. Every position we close at a loss during extreme fear
+has historically bounced back within hours. Our SL orders are on the exchange - trust them.
+The ONLY exception: If F&G > 80 (extreme greed) and all positions are LONG, close the weakest 1.
+During extreme fear: NO closes. Period. Let SL handle risk.
 
 RULE 5 - CORRELATED PAIR LIMIT:
 BTC, ETH, SOL, DOGE all move together. If BTC LONG is open, max 2 more altcoin LONGs
@@ -1414,9 +1381,10 @@ EXCEPTION: If F&G < 15 (Capitulation), allow up to 6 correlated altcoin LONGs al
 During capitulation bounces, correlation is your FRIEND - everything bounces together.
 Only enforce the strict 3-altcoin limit when F&G >= 15.
 
-RULE 6 - TIME-BASED PROFIT TIGHTENING:
-After 2+ hours held, if position peaked > 0.5% but current < 35% of peak, close it.
-The move has exhausted. After 4+ hours held, if still under +0.3%, close it.
+RULE 6 - TIME-BASED PATIENCE (V3.1.46 RECOVERY MODE):
+Do NOT close positions just because they have been open 2-4 hours.
+Our TP targets are 5-8%. These moves take TIME to develop (4-12 hours for alts, 12-48h for BTC).
+Only close if: max_hold_hours exceeded AND position is negative. Positive positions get extra time.
 
 RULE 7 - WEEKEND/LOW LIQUIDITY (check if Saturday or Sunday):
 On weekends, max 3 positions. Thinner books = more manipulation. Close extras.
@@ -1426,10 +1394,11 @@ If funding rate is positive and we are LONG, we PAY every 8h. If position is bar
 profitable (+0.1-0.3%) and funding eats the profit, close it.
 If funding rate is negative and we are SHORT, same logic.
 
-RULE 9 - SLOT EFFICIENCY:
-Each slot costs opportunity. A position using $700 margin earning $5 is 0.7% return.
-If that slot could be used for a fresh regime-aligned trade, close the stale one.
-Prioritize closing positions that have been flat (< +/-0.3%) for > 1 hour.
+RULE 9 - SLOT PATIENCE (V3.1.47 RECOVERY):
+Do NOT close positions to free slots. Our SL orders protect against catastrophic loss.
+A position at -0.3% after 1 hour can be at +3% after 4 hours. Crypto is volatile.
+The ONLY reason to free a slot is if we have 8 positions AND a 90%+ conviction signal waiting.
+Never close a position just because it is flat or slightly negative.
 
 RULE 10 - GRACE PERIOD FOR HIGH-CONVICTION ENTRIES:
 Positions opened < 30 minutes ago with confidence >= 85% get a GRACE PERIOD.
@@ -1442,9 +1411,17 @@ Only close Extreme Fear entries within the first 2h if they breach -2% (hard sto
 Positions outside grace period (> 30min normal, > 2h extreme fear) have no protection.
 
 === YOUR JOB ===
-Apply ALL 10 rules above. For each position, check every rule. Be aggressive about
-locking profits -- our biggest problem is positions that peak at +1% and then fade
-to 0% or negative. Better to close at +0.3% than ride to -1%.
+Apply ALL 10 rules above. For each position, check every rule. Be PATIENT with winners.
+Our biggest problem is NOT fading profits -- it is that we close winners too early.
+Our biggest win is $55 but biggest loss is $299. We need $100+ wins to recover.
+CRITICAL V3.1.47 RULE: Do NOT close ANY position at a loss. We have SL orders on WEEX.
+Every time the PM closes a losing position, we lock in a loss AND pay fees AND lose the bounce.
+Our data shows: -$267 lost in 8 hours from PM closing losers that would have recovered.
+The ONLY acceptable closes are:
+(a) Position past max_hold_hours AND losing more than -3% = stale loser, SL probably broken
+(b) 8+ positions in same direction creating liquidation cascade risk
+(c) Winning positions that hit max_hold_hours (take the profit)
+NEVER close: positions under 6 hours old, positions losing less than -3%, positions during F&G < 20.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"closes": [{{"symbol": "DOGEUSDT", "side": "SHORT", "reason": "Rule X: brief reason"}}, ...], "keep_reasons": "brief summary of why others are kept, referencing rule numbers"}}
@@ -1855,8 +1832,8 @@ def regime_aware_exit_check():
             pnl = float(pos.get('unrealized_pnl', 0))
             margin = float(pos.get("margin", 500))
             # V3.1.30: Percentage-based exit thresholds
-            regime_fight_threshold = -(margin * 0.02)   # -2% of margin
-            hard_stop_threshold = -(margin * 0.05)      # -5% of margin
+            regime_fight_threshold = -(margin * 0.15)   # V3.1.47: Raised to 15% - trust SL
+            hard_stop_threshold = -(margin * 0.25)      # V3.1.47: Raised to 25% - let SL on WEEX handle it
             spike_threshold = -(margin * 0.015)          # -1.5% of margin
             size = float(pos['size'])
             

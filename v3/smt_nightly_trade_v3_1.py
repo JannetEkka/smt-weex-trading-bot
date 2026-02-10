@@ -850,7 +850,7 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
 TIER_CONFIG = {
     1: {  # BTC, ETH, BNB, LTC - Stable, slow movers
         "name": "STABLE",
-        "tp_pct": 6.0,           # V3.1.42: Recovery - let winners run to 6%
+        "tp_pct": 8.0,           # V3.1.46: Recovery - need big wins to catch up
         "sl_pct": 2.5,           # Keep tight SL
         "max_hold_hours": 48,    # V3.1.42: Recovery - hold winners up to 2 days
         "early_exit_hours": 6,   # V3.1.42: Give more time
@@ -859,7 +859,7 @@ TIER_CONFIG = {
     },
     2: {  # SOL - Mid volatility
         "name": "MID",
-        "tp_pct": 5.0,           # V3.1.42: Recovery - 5% TP
+        "tp_pct": 7.0,           # V3.1.46: Recovery - need big wins
         "sl_pct": 2.0,
         "max_hold_hours": 24,    # V3.1.42: Recovery - hold up to 1 day
         "early_exit_hours": 4,
@@ -868,7 +868,7 @@ TIER_CONFIG = {
     },
     3: {  # DOGE, XRP, ADA - Fast movers
         "name": "FAST",
-        "tp_pct": 4.0,           # V3.1.42: Recovery - 4% TP
+        "tp_pct": 6.0,           # V3.1.46: Recovery - need big wins
         "sl_pct": 2.0,
         "max_hold_hours": 12,    # V3.1.42: Recovery - hold up to 12h
         "early_exit_hours": 3,
@@ -2065,7 +2065,7 @@ Available balance: ${balance:.0f}
 10. CORRELATED PAIRS: If 4+ correlated LONGs open (BTC/ETH/SOL/DOGE/XRP), require 85%+ to add another.
 11. TIME OF DAY: 00-06 UTC Asian session. Require 80%+ confidence (not 85%).
 12. POST-REGIME SHIFT: If regime just changed, still trade if confidence >= 80%. Speed matters.
-13. For TP/SL: SL 2-2.5%. TP should be 2-3x SL (4-6%). Max hold: T1=48h, T2=24h, T3=12h. Let winners RUN.
+13. For TP/SL: SL 2-2.5%. TP should be 3-4x SL (6-8%). Max hold: T1=48h, T2=24h, T3=12h. Let winners RUN to full TP. Do NOT suggest tight TP like 1.5-2%. We need BIG wins.
 14. RECOVERY MODE: We are DOWN from starting balance. We CANNOT afford to WAIT on good setups. If 2+ personas agree on direction with 70%+ average confidence, TAKE THE TRADE. Playing safe = guaranteed last place.
 15. SWAP MENTALITY: If we are full on slots but this signal is 80%+ conviction, say LONG or SHORT anyway. The daemon will handle swapping out the weakest position. Do NOT return WAIT just because slots are full.
 16. WHALE DATA QUALITY: For BTC/ETH, WHALE uses on-chain Etherscan data (most reliable - actual wallet flows). For other pairs (SOL/DOGE/XRP/ADA/BNB/LTC), WHALE uses Cryptoracle community sentiment (social signals from Twitter/Telegram/Discord). Etherscan > Cryptoracle in reliability. If WHALE and FLOW disagree on altcoins, trust FLOW (order book data > social data).
