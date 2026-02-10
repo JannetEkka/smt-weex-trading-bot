@@ -731,6 +731,14 @@ Reasoning:
                     logger.warning(f"DIRECTIONAL LIMIT: {short_count} SHORTs already open, skipping {opportunity['pair']} SHORT")
                     continue
                 
+                # V3.1.41: ASIAN SESSION FILTER (00-06 UTC) - hard code, don't trust LLM
+                import datetime as _dt_module
+                utc_hour = _dt_module.datetime.now(_dt_module.timezone.utc).hour
+                opp_confidence = opportunity["decision"]["confidence"]
+                if 0 <= utc_hour < 6 and opp_confidence < 0.85:
+                    logger.warning(f"ASIAN SESSION FILTER: {utc_hour}:00 UTC, confidence {opp_confidence:.0%} < 85%, skipping {opportunity['pair']}")
+                    continue
+                
                 tier = opportunity["tier"]
                 tier_config = get_tier_config(tier)
                 trade_type = opportunity["trade_type"]
@@ -1272,9 +1280,13 @@ If a position peaked above +0.5% but has faded back to ~0% or negative, CLOSE im
 This was profitable and you let it die. Take the lesson, free the slot.
 
 RULE 4 - F&G CONTRADICTION CHECK:
-If F&G < 20 (extreme fear) but regime says BULLISH, this is likely a dead cat bounce.
-Be extra cautious with LONGs. Close any LONG that has peaked and is fading, even if
-still slightly green. The bounce is fragile. Do NOT hold 5+ LONGs in extreme fear.
+If F&G < 20 (extreme fear) but regime says BULLISH, the bounce may be fragile.
+HOWEVER: extreme fear is ALSO when contrarian LONGs make the most money (violent bounces).
+So do NOT close LONGs just because F&G is low. Only close LONGs in extreme fear IF:
+  a) Position has peaked and is FADING (Rule 2 applies), OR
+  b) Position has been held > 2h and is flat or negative, OR
+  c) There are 5+ LONGs open (concentration risk)
+Do NOT close a recently opened LONG (< 30min) that was entered with high conviction.
 If F&G > 80 (extreme greed) and all positions are LONG, close the weakest 1-2.
 
 RULE 5 - CORRELATED PAIR LIMIT:
@@ -1298,10 +1310,11 @@ Each slot costs opportunity. A position using $700 margin earning $5 is 0.7% ret
 If that slot could be used for a fresh regime-aligned trade, close the stale one.
 Prioritize closing positions that have been flat (< +/-0.3%) for > 1 hour.
 
-RULE 10 - NEVER KEEP A POSITION JUST BECAUSE IT WAS RECENTLY OPENED:
-"Just opened < 1h" is NOT a valid reason to keep a position that is already losing
-and contradicts the above rules. If it opened into the wrong direction or F&G
-contradicts the regime, close it regardless of age.
+RULE 10 - GRACE PERIOD FOR HIGH-CONVICTION ENTRIES:
+Positions opened < 30 minutes ago with confidence >= 85% get a GRACE PERIOD.
+Do NOT close them unless they are losing more than -1%. Give the trade time to work.
+Positions opened < 30 min with < 85% confidence OR positions older than 30 min
+have no protection -- apply all other rules normally.
 
 === YOUR JOB ===
 Apply ALL 10 rules above. For each position, check every rule. Be aggressive about
