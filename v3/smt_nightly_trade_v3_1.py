@@ -848,11 +848,10 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     return delay + jitter
 
 TIER_CONFIG = {
-    "Tier 1": {"leverage": 10, "stop_loss": 0.025, "take_profit": 0.12, "trailing_stop": 0.015, "time_limit": 5760},
-    "Tier 2": {"leverage": 8, "stop_loss": 0.03, "take_profit": 0.15, "trailing_stop": 0.02, "time_limit": 4320},
-    "Tier 3": {"leverage": 6, "stop_loss": 0.04, "take_profit": 0.18, "trailing_stop": 0.025, "time_limit": 2880},
+    1: {"name": "Blue Chip", "leverage": 10, "stop_loss": 0.025, "take_profit": 0.12, "trailing_stop": 0.015, "time_limit": 5760, "tp_pct": 12.0, "sl_pct": 2.5, "max_hold_hours": 96},
+    2: {"name": "Mid Cap", "leverage": 8, "stop_loss": 0.03, "take_profit": 0.15, "trailing_stop": 0.02, "time_limit": 4320, "tp_pct": 15.0, "sl_pct": 3.0, "max_hold_hours": 72},
+    3: {"name": "Small Cap", "leverage": 6, "stop_loss": 0.04, "take_profit": 0.18, "trailing_stop": 0.025, "time_limit": 2880, "tp_pct": 18.0, "sl_pct": 4.0, "max_hold_hours": 48},
 }
-
 # Trading Pairs with correct tiers
 TRADING_PAIRS = {
     "BTC": {"symbol": "cmt_btcusdt", "tier": 1, "has_whale_data": True},
@@ -912,8 +911,10 @@ def get_tier_for_pair(pair_name: str) -> int:
 
 def get_tier_config(tier: int) -> Dict:
     """Get tier configuration"""
+    if isinstance(tier, str):
+        tier = int(tier.replace("Tier ", ""))
     return TIER_CONFIG.get(tier, TIER_CONFIG[2])
-
+    """Get tier configuration"""
 
 def get_tier_config_for_symbol(symbol: str) -> Dict:
     """Get tier config for a symbol"""
@@ -2301,7 +2302,7 @@ Respond with JSON ONLY (no markdown, no backticks):
             "confidence": 0.0,
             "reasoning": f"{reason}. Votes: {votes_str}",
             "persona_votes": persona_votes or [],
-            "whale_bias": whale_bias,
+            "whale_bias": 0.0,
 
             "vote_summary": vote_summary or [],
         }
