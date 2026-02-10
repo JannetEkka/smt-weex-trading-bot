@@ -731,18 +731,13 @@ Reasoning:
                     logger.warning(f"DIRECTIONAL LIMIT: {short_count} SHORTs already open, skipping {opportunity['pair']} SHORT")
                     continue
                 
-                # V3.1.42: ASIAN SESSION FILTER (00-06 UTC) with EXTREME FEAR override
+                # V3.1.41: ASIAN SESSION FILTER (00-06 UTC) - hard code, don't trust LLM
                 import datetime as _dt_module
                 utc_hour = _dt_module.datetime.now(_dt_module.timezone.utc).hour
                 opp_confidence = opportunity["decision"]["confidence"]
-                # V3.1.42: Pull fear_greed from decision dict (added in Judge return)
-                opp_fear_greed = opportunity["decision"].get("fear_greed", 50)
-                is_extreme_fear = opp_fear_greed < 20
-                if 0 <= utc_hour < 6 and opp_confidence < 0.85 and not is_extreme_fear:
-                    logger.warning(f"ASIAN SESSION FILTER: {utc_hour}:00 UTC, confidence {opp_confidence:.0%} < 85%, F&G={opp_fear_greed}, skipping {opportunity['pair']}")
+                if 0 <= utc_hour < 6 and opp_confidence < 0.85:
+                    logger.warning(f"ASIAN SESSION FILTER: {utc_hour}:00 UTC, confidence {opp_confidence:.0%} < 85%, skipping {opportunity['pair']}")
                     continue
-                elif 0 <= utc_hour < 6 and is_extreme_fear:
-                    logger.info(f"EXTREME FEAR OVERRIDE: F&G={opp_fear_greed} < 20, bypassing Asian filter for {opportunity['pair']} ({opp_confidence:.0%})")
                 
                 tier = opportunity["tier"]
                 tier_config = get_tier_config(tier)

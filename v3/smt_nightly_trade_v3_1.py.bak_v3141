@@ -1928,7 +1928,6 @@ Available balance: ${balance:.0f}
 4. If we already have a SHORT open and signal is SHORT, return WAIT.
 5. If we have a losing position and a strong opposite signal (85%+), you CAN recommend the opposite direction (hedge).
 6. In EXTREME FEAR (F&G < 20), shorting is dangerous - violent bounces are common. Favor LONG or WAIT. But also: LONGs in extreme fear are FRAGILE. The bounce may die fast. Set tighter TP (2-3%) and be ready to exit quickly.
-6b. CAPITULATION RULE (F&G < 15): Market is in panic. Do NOT default to WAIT. If FLOW persona is BULLISH (taker buying), this is absorption - go LONG with 80%+ confidence and tight 2% TP. If FLOW is NEUTRAL and TECHNICAL shows RSI < 30, this is a mean reversion setup - go LONG at 75%+ confidence. Only WAIT if ALL personas are BEARISH. Extreme Fear + Flow Buying = Best entries of the cycle.
 7. Negative funding rate = shorts paying longs = bullish. Positive funding + LONG = you pay every 8h, factor this into hold time.
 8. Tier awareness: T1 (BTC/ETH/BNB/LTC) = slow, 15x leverage. T2 (SOL) = medium, 12x. T3 (DOGE/XRP/ADA) = fast, 10x.
 9. DIRECTIONAL LIMIT: Count all open positions. Max 4 in the same direction. If already 4+ LONGs open, do NOT add another LONG. Return WAIT.
@@ -2075,15 +2074,13 @@ Respond with JSON ONLY (no markdown, no backticks):
                 "hold_time_hours": max_hold,
                 "tier": tier,
                 "tier_name": tier_config["name"],
-                "reasoning": f"Gemini Judge V3.1.42: {reasoning}. Votes: {', '.join(vote_summary)}",
+                "reasoning": f"Gemini Judge V3.1.39: {reasoning}. Votes: {', '.join(vote_summary)}",
                 "persona_votes": persona_votes,
                 "vote_breakdown": {
                     "long_score": 0,
                     "short_score": 0,
                     "neutral_score": 0,
                 },
-                "fear_greed": regime.get("fear_greed", 50),
-                "regime": regime.get("regime", "NEUTRAL"),
             }
             
         except json.JSONDecodeError as e:
