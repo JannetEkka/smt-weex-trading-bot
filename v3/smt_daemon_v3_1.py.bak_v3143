@@ -449,18 +449,6 @@ def check_trading_signals():
         COOLDOWN_OVERRIDE_CONFIDENCE = 0.85
         HEDGE_CONFIDENCE_THRESHOLD = 0.80  # V3.1.37: Lowered from 90% to allow hedging
         
-        # V3.1.44: Disable hedging during Capitulation - pick a side, don't fight yourself
-        # Fetch F&G early so we can use it for hedge decisions
-        try:
-            from smt_nightly_trade_v3_1 import get_fear_greed_index
-            _fg_check = get_fear_greed_index()
-            _fg_value = _fg_check.get("value", 50)
-            if _fg_value < 15:
-                HEDGE_CONFIDENCE_THRESHOLD = 1.0  # Impossible to meet = no hedges
-                logger.info(f"CAPITULATION: F&G={_fg_value} < 15, hedging DISABLED (pick a side)")
-        except:
-            pass
-        
         # Build map: symbol -> {side: position}
         # This tracks BOTH long and short for each symbol
         position_map = {}
@@ -787,8 +775,7 @@ Reasoning:
                             opp_pnl = float(opp_pos.get("unrealized_pnl", 0))
                             
                             # Calculate 50% close size
-                            # V3.1.44 FIX: Import place_order + round_size_to_step
-                            from smt_nightly_trade_v3_1 import round_size_to_step, place_order
+                            from smt_nightly_trade_v3_1 import round_size_to_step
                             close_size = round_size_to_step(opp_size * 0.5, sym)
                             
                             if close_size > 0:
