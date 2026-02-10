@@ -1223,7 +1223,7 @@ def monitor_positions():
 # ============================================================
 
 _last_portfolio_review = 0
-PORTFOLIO_REVIEW_INTERVAL = 300  # Every 5 minutes
+PORTFOLIO_REVIEW_INTERVAL = 900  # Every 5 minutes
 
 def gemini_portfolio_review():
     """V3.1.40: Gemini reviews ALL positions and decides what to close.

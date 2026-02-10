@@ -848,9 +848,9 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     return delay + jitter
 
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 10, "stop_loss": 0.025, "take_profit": 0.12, "trailing_stop": 0.015, "time_limit": 5760, "tp_pct": 12.0, "sl_pct": 2.5, "max_hold_hours": 96},
-    2: {"name": "Mid Cap", "leverage": 8, "stop_loss": 0.03, "take_profit": 0.15, "trailing_stop": 0.02, "time_limit": 4320, "tp_pct": 15.0, "sl_pct": 3.0, "max_hold_hours": 72},
-    3: {"name": "Small Cap", "leverage": 6, "stop_loss": 0.04, "take_profit": 0.18, "trailing_stop": 0.025, "time_limit": 2880, "tp_pct": 18.0, "sl_pct": 4.0, "max_hold_hours": 48},
+    1: {"name": "Blue Chip", "leverage": 10, "stop_loss": 0.025, "take_profit": 0.12, "trailing_stop": 0.015, "time_limit": 5760, "tp_pct": 8.0, "sl_pct": 2.5, "max_hold_hours": 72, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
+    2: {"name": "Mid Cap", "leverage": 8, "stop_loss": 0.03, "take_profit": 0.15, "trailing_stop": 0.02, "time_limit": 4320, "tp_pct": 7.0, "sl_pct": 2.0, "max_hold_hours": 48, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
+    3: {"name": "Small Cap", "leverage": 6, "stop_loss": 0.04, "take_profit": 0.18, "trailing_stop": 0.025, "time_limit": 2880, "tp_pct": 6.0, "sl_pct": 2.0, "max_hold_hours": 24, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -3.0},
 }
 # Trading Pairs with correct tiers
 TRADING_PAIRS = {
@@ -2596,7 +2596,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
             # Cap SL at 4% to prevent huge losses
             sl_pct_raw = min(sl_pct_raw, 4.0)
             # TP = 1.5x SL for positive expectancy
-            tp_pct_raw = round(sl_pct_raw * 1.5, 2)
+            tp_pct_raw = tier_config["tp_pct"]  # V3.1.50: Use tier TP, not 1.5x SL
             print(f"  [ATR-SL] ATR: {atr_pct:.2f}% | Dynamic SL: {dynamic_sl:.2f}% | Final SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}%")
         else:
             sl_pct_raw = tier_config["sl_pct"]
