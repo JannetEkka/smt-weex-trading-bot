@@ -1,0 +1,22 @@
+*** smt_daemon_v3_1.py
+--- smt_daemon_v3_1.py
+***************
+*** 980,985 ****
+             should_close = False
+             reason = ""
++
++            # ===== SMART HOLD GUARD =====
++            try:
++                whale_bias = 0.0
++                trade = tracker.get_active_trade(symbol)
++                if trade:
++                    whale_bias = trade.get("whale_bias", 0.0)
++
++                # Winning trade + strong whale agreement → FORBID early exit
++                if pnl > 0 and whale_bias >= 0.75:
++                    logger.info(
++                        f"[SMART HOLD] {symbol_clean}: pnl=${pnl:.2f}, whale_bias={whale_bias:.0%} → holding winner"
++                    )
++                    continue
++            except Exception as e:
++                logger.warning(f"[SMART HOLD] guard error: {e}")

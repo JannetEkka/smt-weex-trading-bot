@@ -447,7 +447,7 @@ def check_trading_signals():
         
         # Confidence thresholds
         COOLDOWN_OVERRIDE_CONFIDENCE = 0.85
-        HEDGE_CONFIDENCE_THRESHOLD = 0.60  # V4.0: Lower threshold for more opportunities  # V3.1.37: Lowered from 90% to allow hedging
+        HEDGE_CONFIDENCE_THRESHOLD = 0.0  # Gemini decides hedging  # V4.0: Lower threshold for more opportunities  # V3.1.37: Lowered from 90% to allow hedging
         
         # V3.1.44: Disable hedging during Capitulation - pick a side, don't fight yourself
         # Fetch F&G early so we can use it for hedge decisions
@@ -456,7 +456,7 @@ def check_trading_signals():
             _fg_check = get_fear_greed_index()
             _fg_value = _fg_check.get("value", 50)
             if _fg_value < 15:
-                HEDGE_CONFIDENCE_THRESHOLD = 0.95  # V3.1.45: Allow hedges at 95%+ even in capitulation
+                HEDGE_CONFIDENCE_THRESHOLD = 0.0  # Gemini decides hedging  # V3.1.45: Allow hedges at 95%+ even in capitulation
                 logger.info(f"CAPITULATION: F&G={_fg_value} < 15, hedging DISABLED (pick a side)")
         except:
             pass
@@ -683,13 +683,9 @@ Reasoning:
 
                 
                 # Add to opportunities if tradeable
-                if can_trade_this and signal in ("LONG", "SHORT"):
-                    if on_cooldown and confidence < COOLDOWN_OVERRIDE_CONFIDENCE:
-                        logger.info(f"    -> Skip (cooldown)")
-                    elif confidence >= MIN_CONFIDENCE_TO_TRADE:
-                        if on_cooldown:
-                            logger.info(f"    -> COOLDOWN OVERRIDE")
-                        trade_opportunities.append({
+                # Gemini-controlled gating (local gate removed)
+                    # HARD GATES DISABLED — Gemini decides
+                    trade_opportunities.append({
                             "pair": pair,
                             "pair_info": pair_info,
                             "decision": decision,
@@ -719,12 +715,12 @@ Reasoning:
             # V3.1.41: Count directional exposure BEFORE executing
             long_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "LONG")
             short_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "SHORT")
-            MAX_SAME_DIRECTION = 6  # V3.1.42: Recovery - match Gemini Judge rule 9
+            MAX_SAME_DIRECTION = 99  # no local directional cap  # V3.1.42: Recovery - match Gemini Judge rule 9
             # V3.1.43: Allow 7 LONGs during Capitulation (F&G < 15)
             if trade_opportunities:
                 first_fg = trade_opportunities[0]["decision"].get("fear_greed", 50)
                 if first_fg < 15:
-                    MAX_SAME_DIRECTION = 7
+                    MAX_SAME_DIRECTION = 99  # no local directional cap
                     logger.info(f"CAPITULATION MODE: F&G={first_fg}, raising directional limit to 7")
             
             for opportunity in trade_opportunities:

@@ -1,0 +1,10 @@
+*** smt_nightly_trade_v3_1.py
+--- smt_nightly_trade_v3_1.py
+***************
+*** 1765,1770 ****
+     trade_result["confidence"] = confidence  # V3.1.41: Store for profit guard
++
++    # ===== STORE WHALE BIAS FOR SMART HOLDS =====
++    for v in decision.get("persona_votes", []):
++        if v.get("persona") == "WHALE":
++            trade_result["whale_bias"] = v.get("confidence", 0.0)

@@ -1,0 +1,23 @@
+*** smt_daemon_v3_1.py
+--- smt_daemon_v3_1.py
+***************
+*** 1234,1240 ****
+-                 if on_cooldown and confidence < COOLDOWN_OVERRIDE_CONFIDENCE:
+-                     logger.info(f"    -> Skip (cooldown)")
+-                 elif confidence >= MIN_CONFIDENCE_TO_TRADE:
+-                     if on_cooldown:
+-                         logger.info(f"    -> COOLDOWN OVERRIDE")
+-                     trade_opportunities.append({
++                 if True:  # cooldown + confidence gates disabled, Gemini decides
++                     trade_opportunities.append({
+                          "pair": pair,
+                          "pair_info": pair_info,
+                          "decision": decision,
+***************
+*** 1412,1413 ****
+-             MAX_SAME_DIRECTION = 6
++             MAX_SAME_DIRECTION = 99  # no local directional cap
+***************
+*** 1088,1089 ****
+-         HEDGE_CONFIDENCE_THRESHOLD = 0.60
++         HEDGE_CONFIDENCE_THRESHOLD = 0.0  # Gemini decides hedging

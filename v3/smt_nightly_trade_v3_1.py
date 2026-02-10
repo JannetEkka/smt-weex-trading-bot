@@ -849,7 +849,7 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
 
 TIER_CONFIG = {
     "Tier 1": {"leverage": 10, "stop_loss": 0.025, "take_profit": 0.12, "trailing_stop": 0.015, "time_limit": 5760},
-    "Tier 2": {"leverage": 8, "stop_loss": 0.03, "take_profit": 0.15, "trailing_stop": 0.02, "time_limit": 4320}
+    "Tier 2": {"leverage": 8, "stop_loss": 0.03, "take_profit": 0.15, "trailing_stop": 0.02, "time_limit": 4320},
     "Tier 3": {"leverage": 6, "stop_loss": 0.04, "take_profit": 0.18, "trailing_stop": 0.025, "time_limit": 2880},
 }
 
@@ -2135,6 +2135,17 @@ Respond with JSON ONLY (no markdown, no backticks):
             max_hold = tier_config["max_hold_hours"]
             
             vote_summary = [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes]
+
+            # ===== COMPUTE WHALE BIAS (for Smart Hold) =====
+            whale_bias = next(
+                (v.get("confidence", 0.0)
+                 for v in persona_votes
+                 if v.get("persona") == "WHALE"),
+                0.0
+            )
+
+
+
             
             # V3.1.39b: Upload AI decision log to WEEX for compliance
             try:
@@ -2290,6 +2301,8 @@ Respond with JSON ONLY (no markdown, no backticks):
             "confidence": 0.0,
             "reasoning": f"{reason}. Votes: {votes_str}",
             "persona_votes": persona_votes or [],
+            "whale_bias": whale_bias,
+
             "vote_summary": vote_summary or [],
         }
 
