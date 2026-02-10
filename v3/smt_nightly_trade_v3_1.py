@@ -848,33 +848,12 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     return delay + jitter
 
 TIER_CONFIG = {
-    1: {  # BTC, ETH, BNB, LTC - Stable, slow movers
-        "name": "STABLE",
-        "tp_pct": 8.0,           # V3.1.46: Recovery - need big wins to catch up
-        "sl_pct": 2.5,           # Keep tight SL
-        "max_hold_hours": 72,    # V3.1.48: 3 days - let winners grind to TP
-        "early_exit_hours": 999, # V3.1.48: DISABLED - trust WEEX SL
-        "early_exit_loss_pct": -99.0,  # V3.1.48: DISABLED
-        "force_exit_loss_pct": -10.0,  # V3.1.48: Safety net only (SL at -2.5% catches first)
-    },
-    2: {  # SOL - Mid volatility
-        "name": "MID",
-        "tp_pct": 7.0,           # V3.1.46: Recovery - need big wins
-        "sl_pct": 2.0,
-        "max_hold_hours": 48,    # V3.1.48: 2 days - SOL needs time
-        "early_exit_hours": 999, # V3.1.48: DISABLED - trust WEEX SL
-        "early_exit_loss_pct": -99.0,  # V3.1.48: DISABLED
-        "force_exit_loss_pct": -10.0,  # V3.1.48: Safety net only (SL at -2.0% catches first)
-    },
-    3: {  # DOGE, XRP, ADA - Fast movers
-        "name": "FAST",
-        "tp_pct": 6.0,           # V3.1.46: Recovery - need big wins
-        "sl_pct": 2.0,
-        "max_hold_hours": 24,    # V3.1.48: 1 day - doubled from 12h
-        "early_exit_hours": 999, # V3.1.48: DISABLED - trust WEEX SL
-        "early_exit_loss_pct": -99.0,  # V3.1.48: DISABLED
-        "force_exit_loss_pct": -3.0,
-    },
+    "Tier 1": {"leverage": 10, "stop_loss": 0.025, "take_profit": 0.12, "trailing_stop": 0.015, "time_limit": 5760},
+    "Tier 2": {"leverage": 8, "stop_loss": 0.03, "take_profit": 0.15, "trailing_stop": 0.02, "time_limit": 4320},
+    "Tier 3": {"leverage": 6, "stop_loss": 0.04, "take_profit": 0.18, "trailing_stop": 0.025, "time_limit": 2880}
+},
+    "Tier 2": {"leverage": 8, "stop_loss": 0.03, "take_profit": 0.15, "trailing_stop": 0.02, "time_limit": 4320},
+    "Tier 3": {"leverage": 6, "stop_loss": 0.04, "take_profit": 0.18, "trailing_stop": 0.025, "time_limit": 2880}
 }
 
 # Trading Pairs with correct tiers

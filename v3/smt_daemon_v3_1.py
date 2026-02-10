@@ -447,7 +447,7 @@ def check_trading_signals():
         
         # Confidence thresholds
         COOLDOWN_OVERRIDE_CONFIDENCE = 0.85
-        HEDGE_CONFIDENCE_THRESHOLD = 0.80  # V3.1.37: Lowered from 90% to allow hedging
+        HEDGE_CONFIDENCE_THRESHOLD = 0.60  # V4.0: Lower threshold for more opportunities  # V3.1.37: Lowered from 90% to allow hedging
         
         # V3.1.44: Disable hedging during Capitulation - pick a side, don't fight yourself
         # Fetch F&G early so we can use it for hedge decisions
@@ -684,9 +684,9 @@ Reasoning:
                 
                 # Add to opportunities if tradeable
                 if can_trade_this and signal in ("LONG", "SHORT"):
-                    if on_cooldown and confidence < COOLDOWN_OVERRIDE_CONFIDENCE:
+                    if False:  # V4.0: Cooldowns disabled - AI makes fresh decisions
                         logger.info(f"    -> Skip (cooldown)")
-                    elif confidence >= MIN_CONFIDENCE_TO_TRADE:
+                    elif True:  # V4.0: AI decides confidence, not hardcoded 65%
                         if on_cooldown:
                             logger.info(f"    -> COOLDOWN OVERRIDE")
                         trade_opportunities.append({
