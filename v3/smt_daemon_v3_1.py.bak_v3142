@@ -708,12 +708,6 @@ Reasoning:
             long_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "LONG")
             short_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "SHORT")
             MAX_SAME_DIRECTION = 4  # Never more than 4 LONGs or 4 SHORTs
-            # V3.1.43: Allow 5 LONGs during Capitulation (F&G < 15)
-            if trade_opportunities:
-                first_fg = trade_opportunities[0]["decision"].get("fear_greed", 50)
-                if first_fg < 15:
-                    MAX_SAME_DIRECTION = 5
-                    logger.info(f"CAPITULATION MODE: F&G={first_fg}, raising directional limit to 5")
             
             for opportunity in trade_opportunities:
                 confidence = opportunity["decision"]["confidence"]
@@ -1224,12 +1218,7 @@ def gemini_portfolio_review():
                     else:
                         pnl_pct = 0
                 else:
-                    # V3.1.43 FIX: SHORT also uses notional, not margin (margin = ROE, inflated by leverage)
-                    notional = entry * size
-                    if notional > 0:
-                        pnl_pct = (pnl / notional) * 100
-                    else:
-                        pnl_pct = (pnl / (margin if margin > 0 else 1)) * 100
+                    pnl_pct = (pnl / (margin if margin > 0 else 1)) * 100
             
             pos_details.append(
                 f"- {sym} {side}: PnL=${pnl:.2f} ({pnl_pct:+.1f}%), entry=${entry:.4f}, margin=${margin:.1f}, held={hours_open:.1f}h, tier={tier}"
@@ -1285,11 +1274,9 @@ Days left in competition: {days_left}
 === MANDATORY RULES (from 40+ iterations of battle-tested experience) ===
 
 RULE 1 - DIRECTIONAL CONCENTRATION LIMIT:
-Max 4 positions in the same direction normally. If 5+ LONGs or 5+ SHORTs, close the WEAKEST ones
+Max 4 positions in the same direction. If 5+ LONGs or 5+ SHORTs, close the WEAKEST ones
 (lowest PnL% or most faded from peak) until we have max 4. All-same-direction = cascade
 liquidation risk in cross margin.
-EXCEPTION: If F&G < 15 (Capitulation), allow up to 5 LONGs. Violent bounces move ALL alts together,
-so being long across the board IS the correct play. Only enforce max 4 if F&G >= 15.
 
 RULE 2 - FADING MOMENTUM (CRITICAL - our #1 profit leak):
 If a position peaked above +0.5% but current PnL has dropped to less than 40% of peak,
@@ -1305,20 +1292,15 @@ RULE 4 - F&G CONTRADICTION CHECK:
 If F&G < 20 (extreme fear) but regime says BULLISH, the bounce may be fragile.
 HOWEVER: extreme fear is ALSO when contrarian LONGs make the most money (violent bounces).
 So do NOT close LONGs just because F&G is low. Only close LONGs in extreme fear IF:
-  a) Position has peaked above +0.5% and faded below 30% of peak (Rule 2, but with 30% not 40% threshold), OR
-  b) Position has been held > 4h (not 2h) and is flat or negative, OR
-  c) There are 6+ LONGs open (raised from 5 during Capitulation)
-Do NOT close a recently opened LONG (< 2h) that was entered during Extreme Fear (F&G < 20).
-These are CAPITULATION REVERSAL entries - they need time to develop. The first 1-2 hours
-are often choppy before the real bounce kicks in.
+  a) Position has peaked and is FADING (Rule 2 applies), OR
+  b) Position has been held > 2h and is flat or negative, OR
+  c) There are 5+ LONGs open (concentration risk)
+Do NOT close a recently opened LONG (< 30min) that was entered with high conviction.
 If F&G > 80 (extreme greed) and all positions are LONG, close the weakest 1-2.
 
 RULE 5 - CORRELATED PAIR LIMIT:
 BTC, ETH, SOL, DOGE all move together. If BTC LONG is open, max 2 more altcoin LONGs
-in the same direction normally. Close the weakest correlated altcoin positions.
-EXCEPTION: If F&G < 15 (Capitulation), allow up to 4 correlated altcoin LONGs alongside BTC.
-During capitulation bounces, correlation is your FRIEND - everything bounces together.
-Only enforce the strict 2-altcoin limit when F&G >= 15.
+in the same direction. Close the weakest correlated altcoin positions.
 
 RULE 6 - TIME-BASED PROFIT TIGHTENING:
 After 2+ hours held, if position peaked > 0.5% but current < 35% of peak, close it.
@@ -1340,12 +1322,8 @@ Prioritize closing positions that have been flat (< +/-0.3%) for > 1 hour.
 RULE 10 - GRACE PERIOD FOR HIGH-CONVICTION ENTRIES:
 Positions opened < 30 minutes ago with confidence >= 85% get a GRACE PERIOD.
 Do NOT close them unless they are losing more than -1%. Give the trade time to work.
-EXTREME FEAR EXTENSION: If F&G < 20, the grace period extends to 120 MINUTES (2 hours)
-for ALL positions opened during this period, regardless of confidence level.
-Capitulation reversals are choppy - the first 1-2 hours often show red before the real
-bounce materializes. Closing a -0.3% position at 45 minutes kills the reversal play.
-Only close Extreme Fear entries within the first 2h if they breach -2% (hard stop).
-Positions outside grace period (> 30min normal, > 2h extreme fear) have no protection.
+Positions opened < 30 min with < 85% confidence OR positions older than 30 min
+have no protection -- apply all other rules normally.
 
 === YOUR JOB ===
 Apply ALL 10 rules above. For each position, check every rule. Be aggressive about
