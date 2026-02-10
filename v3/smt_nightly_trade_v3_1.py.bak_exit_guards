@@ -852,27 +852,27 @@ TIER_CONFIG = {
         "name": "STABLE",
         "tp_pct": 8.0,           # V3.1.46: Recovery - need big wins to catch up
         "sl_pct": 2.5,           # Keep tight SL
-        "max_hold_hours": 72,    # V3.1.48: 3 days - let winners grind to TP
-        "early_exit_hours": 999, # V3.1.48: DISABLED - trust WEEX SL
-        "early_exit_loss_pct": -99.0,  # V3.1.48: DISABLED
-        "force_exit_loss_pct": -10.0,  # V3.1.48: Safety net only (SL at -2.5% catches first)
+        "max_hold_hours": 48,    # V3.1.42: Recovery - hold winners up to 2 days
+        "early_exit_hours": 6,   # V3.1.42: Give more time
+        "early_exit_loss_pct": -2.0,
+        "force_exit_loss_pct": -3.5,
     },
     2: {  # SOL - Mid volatility
         "name": "MID",
         "tp_pct": 7.0,           # V3.1.46: Recovery - need big wins
         "sl_pct": 2.0,
-        "max_hold_hours": 48,    # V3.1.48: 2 days - SOL needs time
-        "early_exit_hours": 999, # V3.1.48: DISABLED - trust WEEX SL
-        "early_exit_loss_pct": -99.0,  # V3.1.48: DISABLED
-        "force_exit_loss_pct": -10.0,  # V3.1.48: Safety net only (SL at -2.0% catches first)
+        "max_hold_hours": 24,    # V3.1.42: Recovery - hold up to 1 day
+        "early_exit_hours": 4,
+        "early_exit_loss_pct": -1.8,
+        "force_exit_loss_pct": -3.0,
     },
     3: {  # DOGE, XRP, ADA - Fast movers
         "name": "FAST",
         "tp_pct": 6.0,           # V3.1.46: Recovery - need big wins
         "sl_pct": 2.0,
-        "max_hold_hours": 24,    # V3.1.48: 1 day - doubled from 12h
-        "early_exit_hours": 999, # V3.1.48: DISABLED - trust WEEX SL
-        "early_exit_loss_pct": -99.0,  # V3.1.48: DISABLED
+        "max_hold_hours": 12,    # V3.1.42: Recovery - hold up to 12h
+        "early_exit_hours": 3,
+        "early_exit_loss_pct": -1.8,
         "force_exit_loss_pct": -3.0,
     },
 }
