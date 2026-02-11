@@ -733,12 +733,12 @@ def check_trading_signals():
             # V3.1.41: Count directional exposure BEFORE executing
             long_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "LONG")
             short_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "SHORT")
-            MAX_SAME_DIRECTION = 99  # no local directional cap  # V3.1.42: Recovery - match Gemini Judge rule 9
+            MAX_SAME_DIRECTION = 5  # V3.1.55: was 99, caused all-LONG pileup  # V3.1.42: Recovery - match Gemini Judge rule 9
             # V3.1.43: Allow 7 LONGs during Capitulation (F&G < 15)
             if trade_opportunities:
                 first_fg = trade_opportunities[0]["decision"].get("fear_greed", 50)
                 if first_fg < 15:
-                    MAX_SAME_DIRECTION = 99  # no local directional cap
+                    MAX_SAME_DIRECTION = 5  # V3.1.55: was 99, caused all-LONG pileup
                     logger.info(f"CAPITULATION MODE: F&G={first_fg}, raising directional limit to 7")
             
             for opportunity in trade_opportunities:

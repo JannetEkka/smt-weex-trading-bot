@@ -1566,7 +1566,7 @@ class FlowPersona:
             # Shorting the literal bottom of the fear index = missing the god candle
             fg_data = get_fear_greed_index()
             fg_val = fg_data.get("value", 50)
-            capitulation_short_cap = fg_val < 10
+            capitulation_short_cap = fg_val < 5  # V3.1.55: was 10, too aggressive - only cap at extreme extremes
             
             if extreme_selling:
                 # V3.1.17: MASSIVE SELL PRESSURE - ignore depth entirely
@@ -2034,8 +2034,8 @@ Available balance: ${balance:.0f}
 3. If we already have a LONG open and signal is LONG, return WAIT (already positioned).
 4. If we already have a SHORT open and signal is SHORT, return WAIT.
 5. If we have a losing position and a strong opposite signal (85%+), you CAN recommend the opposite direction (hedge).
-6. In EXTREME FEAR (F&G < 20), shorting is dangerous - violent bounces are common. Favor LONG or WAIT. LONGs during extreme fear can produce massive wins (5-8%) when the bounce materializes. Trust the TP targets.
-6b. CAPITULATION RULE (F&G < 15): Market is in panic. Do NOT default to WAIT. If FLOW persona is BULLISH (taker buying), this is absorption - go LONG with 80%+ confidence. If FLOW is NEUTRAL and TECHNICAL shows RSI < 30, this is a mean reversion setup - go LONG at 75%+ confidence. Only WAIT if ALL personas are BEARISH. Extreme Fear + Flow Buying = Best entries of the cycle. These are the setups that produce $200-400 wins.
+6. In EXTREME FEAR (F&G < 20), be cautious with SHORTs near round-number support levels. But do NOT assume fear = buy. If FLOW + SENTIMENT + TECHNICAL all agree on SHORT, the sell-off is real -- SHORT is allowed. Fear can always get worse.
+6b. CAPITULATION RULE (F&G < 15): Contrarian LONGs are ONLY valid when FLOW confirms actual buying (taker ratio > 1.5). If FLOW is NEUTRAL or BEARISH, extreme fear does NOT mean buy -- it means the sell-off is continuing. If 3+ personas agree on SHORT with 65%+ average confidence, SHORT is allowed even at F&G < 15. Do not fight confirmed downtrends because fear is high. The best SHORT entries happen when everyone is too scared to short.
 7. Negative funding rate = shorts paying longs = bullish. Positive funding + LONG = you pay every 8h, factor this into hold time.
 8. Tier awareness: T1 (BTC/ETH/BNB/LTC) = slow, 15x leverage. T2 (SOL) = medium, 12x. T3 (DOGE/XRP/ADA) = fast, 10x.
 9. DIRECTIONAL LIMIT: Max 6 positions in the same direction. We have 8 slots. Do NOT self-impose a lower limit.
