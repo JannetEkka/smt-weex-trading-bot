@@ -745,7 +745,11 @@ def check_trading_signals():
                 confidence = opportunity["decision"]["confidence"]
                 
                 # Check if we still have slots
-                if trades_executed >= available_slots:
+                # V3.1.56: Opposite trades bypass slot check
+                trade_type_check = opportunity.get("trade_type", "none")
+                if trade_type_check == "opposite":
+                    logger.info(f"OPPOSITE TRADE: bypassing slot check for {opportunity['pair']}")
+                elif trades_executed >= available_slots:
                     # V3.1.26: High confidence override - can use extra slots
                     if confidence >= CONFIDENCE_OVERRIDE_THRESHOLD and confidence_slots_used < MAX_CONFIDENCE_SLOTS:
                         logger.info(f"CONFIDENCE OVERRIDE: {confidence:.0%} >= 85% - using conviction slot {confidence_slots_used + 1}/{MAX_CONFIDENCE_SLOTS}")
