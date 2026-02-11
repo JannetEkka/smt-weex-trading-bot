@@ -1121,10 +1121,6 @@ def monitor_positions():
                     })
                     state.trades_closed += 1
                     
-                    # V3.1.59: Clean PnL history for closed position
-                    if symbol in _pnl_history:
-                        del _pnl_history[symbol]
-                    
                     # V3.1.36: AI log for TP/SL closes
                     symbol_clean = symbol.replace("cmt_", "").upper()
                     hit_tp = actual_pnl > 0
@@ -1239,17 +1235,6 @@ def monitor_positions():
                 confidence_multiplier = 1.3 if entry_confidence >= 0.85 else 1.0  # High-conf trades get 30% wider guards
                 
                 logger.info(f"  [MONITOR] {symbol} T{tier}: {pnl_pct:+.2f}% (peak: {peak_pnl_pct:.2f}%) conf={entry_confidence:.0%}")
-                
-                # V3.1.59: Record PnL trajectory for Smart Monitor
-                if symbol not in _pnl_history:
-                    _pnl_history[symbol] = []
-                _pnl_history[symbol].append({
-                    "pnl_pct": round(pnl_pct, 3),
-                    "peak": round(peak_pnl_pct, 3),
-                    "ts": datetime.now(timezone.utc).strftime("%H:%M"),
-                })
-                if len(_pnl_history[symbol]) > _PNL_HISTORY_MAX:
-                    _pnl_history[symbol] = _pnl_history[symbol][-_PNL_HISTORY_MAX:]
                 # V3.1.46: PROFIT GUARDS DISABLED - Recovery mode
                 # Problem: Guards close at +0.5-1.3% (capturing $5-30) but losses hit $50-299
                 # Solution: Let TP orders do their job. Need +5-8% wins to recover.
@@ -1344,11 +1329,6 @@ def monitor_positions():
 
 _last_portfolio_review = 0
 PORTFOLIO_REVIEW_INTERVAL = 900  # Every 5 minutes
-
-# V3.1.59: PnL trajectory history for Smart Monitor
-# Stores last 10 readings per symbol: [{"pnl_pct": x, "peak": y, "ts": z}, ...]
-_pnl_history = {}
-_PNL_HISTORY_MAX = 10
 
 
 def cleanup_dust_positions():
@@ -1492,10 +1472,7 @@ def gemini_portfolio_review():
             peak = trade.get("peak_pnl_pct", 0) if trade else 0
             whale_c = trade.get("whale_confidence", 0) if trade else 0
             whale_d = trade.get("whale_direction", "?") if trade else "?"
-            # V3.1.59: Include PnL trajectory
-            trajectory = _pnl_history.get(p.get("symbol", ""), [])
-            traj_str = " -> ".join([f"{r['pnl_pct']:+.2f}%" for r in trajectory[-5:]]) if trajectory else "no history"
-            peak_data.append(f"  peak={peak:+.1f}%, whale={whale_d}@{whale_c:.0%}, traj=[{traj_str}]")
+            peak_data.append(f"  peak={peak:+.1f}%, whale={whale_d}@{whale_c:.0%}")
         
         # Enhance positions_text with peak data
         enhanced_pos = []
@@ -1509,53 +1486,6 @@ def gemini_portfolio_review():
         short_count = sum(1 for p in positions if p.get("side","").upper() == "SHORT")
         long_margin = sum(float(p.get("margin",0)) for p in positions if p.get("side","").upper() == "LONG")
         short_margin = sum(float(p.get("margin",0)) for p in positions if p.get("side","").upper() == "SHORT")
-        
-        # V3.1.59: Fetch Cryptoracle historical context for PM
-        cryptoracle_context = ""
-        try:
-            from cryptoracle_client import fetch_sentiment, fetch_prediction_market
-            cr_data = fetch_sentiment(["BTC", "ETH"], hours_back=4, time_type="1h")
-            pm_data = fetch_prediction_market(minutes_back=10)
-            
-            if cr_data:
-                cr_parts = []
-                for tok, vals in cr_data.items():
-                    net = vals.get("net_sentiment", 0.5)
-                    mom = vals.get("sentiment_momentum", 0)
-                    gap = vals.get("sentiment_price_gap", 0)
-                    trend = vals.get("trend_1h", "?")
-                    cr_parts.append(f"{tok}: sent={net:.2f}, mom={mom:.2f}, gap={gap:.2f}, trend={trend}")
-                cryptoracle_context += "Sentiment (1h): " + " | ".join(cr_parts)
-            
-            if pm_data:
-                pm_val = pm_data.get("pm_sentiment", 0)
-                pm_sig = pm_data.get("pm_signal", "?")
-                pm_str = pm_data.get("pm_strength", "?")
-                cryptoracle_context += f"\nPrediction Market (BTC): {pm_val:+.4f} ({pm_sig} {pm_str})"
-            
-            if not cryptoracle_context:
-                cryptoracle_context = "No data available"
-        except Exception as e:
-            cryptoracle_context = f"Unavailable: {e}"
-        
-        # V3.1.59: AI log for PM review start
-        upload_ai_log_to_weex(
-            stage=f"V3.1.59 Portfolio Review Start",
-            input_data={
-                "positions": len(positions),
-                "equity": round(equity, 2),
-                "balance": round(balance, 2),
-                "regime": regime.get("regime", "NEUTRAL"),
-                "fear_greed": regime.get("fear_greed", 50),
-                "cryptoracle": cryptoracle_context[:200],
-            },
-            output_data={
-                "action": "PM_REVIEW",
-                "long_count": long_count,
-                "short_count": short_count,
-            },
-            explanation=f"Portfolio Manager reviewing {len(positions)} positions. Equity: ${equity:.0f}. {cryptoracle_context[:150]}"
-        )
         
         prompt = f"""You are the AI Portfolio Manager for a crypto futures trading bot in a LIVE competition with REAL money.
 You have learned from 40+ iterations of rules. Apply ALL of these rules strictly.
@@ -1576,15 +1506,7 @@ Fear & Greed: {regime.get('fear_greed', 50)}
 Funding rate: {regime.get('avg_funding', 0):.6f}
 Days left in competition: {days_left}
 
-=== CRYPTORACLE INTELLIGENCE ===
-{cryptoracle_context}
-
-=== PNL TRAJECTORY PATTERNS ===
-Each position shows its last 5 PnL readings (newest last).
-Look for: fading from peak (consider tightening), accelerating (let run), flat (stale trade).
-If Cryptoracle sentiment supports the position direction, be more patient even if fading.
-
-=== MANDATORY RULES (V3.1.59 - 47+ iterations of battle-tested experience) ===
+=== MANDATORY RULES (V3.1.55 - 45+ iterations of battle-tested experience) ===
 
 RULE 1 - OPPOSITE SIDE RESOLUTION (HIGHEST PRIORITY):
 If the SAME symbol has BOTH a LONG and SHORT position open, IMMEDIATELY close the losing side.
@@ -1600,12 +1522,6 @@ RULE 3 - LET WINNERS RUN:
 Do NOT close winning positions just because they faded from peak. Our TP orders are at 5-8%.
 Closing at +0.5% when TP is at +6% means we capture $15 instead of $180.
 Only close a WINNING position if it has been held past max_hold_hours.
-
-RULE 3b - TRAJECTORY-BASED EXIT (V3.1.59):
-If a position's PnL trajectory shows 5+ readings of steady decline from a peak > 1.0%
-(e.g. +1.8% -> +1.5% -> +1.2% -> +0.9% -> +0.6%), the trade thesis may be invalidating.
-Consider closing to lock partial profit UNLESS Cryptoracle sentiment still supports the direction.
-If Cryptoracle momentum is positive for our direction, let it ride despite the fade.
 
 RULE 4 - F&G EXTREME FEAR (UPDATED V3.1.55):
 If F&G < 20 (extreme fear), be patient with positions BUT you CAN still close if:
@@ -1763,20 +1679,6 @@ If nothing should be closed, return:
                     break
         
         logger.info(f"[PORTFOLIO] Review complete. Keep reasons: {keep_reasons[:100]}")
-        
-        # V3.1.59: AI log for PM decision
-        upload_ai_log_to_weex(
-            stage=f"V3.1.59 Portfolio Review Decision",
-            input_data={
-                "positions_reviewed": len(positions),
-                "equity": round(equity, 2),
-            },
-            output_data={
-                "closes_requested": len(closes),
-                "keep_reasons": keep_reasons[:200] if keep_reasons else "none",
-            },
-            explanation=f"PM decided to close {len(closes)} position(s). {keep_reasons[:200]}"
-        )
         
     except json.JSONDecodeError as e:
         logger.error(f"[PORTFOLIO] Gemini JSON error: {e}")

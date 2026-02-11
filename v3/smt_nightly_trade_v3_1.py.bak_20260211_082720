@@ -2138,26 +2138,14 @@ Respond with JSON ONLY (no markdown, no backticks):
                 return self._wait_decision(f"Gemini confidence too low: {confidence:.0%}", persona_votes,
                     [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
             
-            # V3.1.59: Confidence-tiered position sizing with FLOW+WHALE alignment
-            flow_whale_aligned = False
-            flow_vote = next((v for v in persona_votes if v.get("persona") == "FLOW"), None)
-            whale_vote = next((v for v in persona_votes if v.get("persona") == "WHALE"), None)
-            if flow_vote and whale_vote:
-                if (flow_vote.get("signal") == decision == whale_vote.get("signal")
-                    and flow_vote.get("confidence", 0) >= 0.60
-                    and whale_vote.get("confidence", 0) >= 0.60):
-                    flow_whale_aligned = True
-
-            base_size = balance * 0.22  # V3.1.59: Slight bump from 20%
-            if confidence >= 0.90 and flow_whale_aligned:
-                position_usdt = base_size * 1.6  # 35% of balance - ultra conviction
-                print(f"  [SIZING] ULTRA: 90%+ conf + FLOW/WHALE aligned -> 35%")
-            elif confidence > 0.85:
-                position_usdt = base_size * 1.4  # 31% of balance
+            # Position sizing
+            base_size = balance * 0.20  # V3.1.42: Recovery - 20% base
+            if confidence > 0.85:
+                position_usdt = base_size * 1.5  # 30% of balance
             elif confidence > 0.75:
-                position_usdt = base_size * 1.2  # 26% of balance
+                position_usdt = base_size * 1.25  # 25% of balance
             else:
-                position_usdt = base_size * 1.0  # 22% of balance
+                position_usdt = base_size * 1.0  # 20% of balance
             
             # Balance protection - only at emergency levels
             if balance < 500:
@@ -2601,39 +2589,19 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
     position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
     
-    # V3.1.59: Confidence-tiered leverage
-    trade_confidence = decision.get("confidence", 0.75)
+    # V3.1.31: Dynamic leverage with regime awareness
     try:
         from leverage_manager import get_safe_leverage
         regime_data = REGIME_CACHE.get("regime", 300)
         current_regime = regime_data.get("regime", "NEUTRAL") if regime_data else "NEUTRAL"
-        safe_leverage = get_safe_leverage(tier, regime=current_regime, confidence=trade_confidence)
-        conf_bracket = "ULTRA" if trade_confidence >= 0.90 else "HIGH" if trade_confidence >= 0.80 else "NORMAL"
-        print(f"  [LEVERAGE] Tier {tier} ({current_regime}, {conf_bracket} {trade_confidence:.0%}): Using {safe_leverage}x")
+        safe_leverage = get_safe_leverage(tier, regime=current_regime)
+        print(f"  [LEVERAGE] Tier {tier} ({current_regime}): Using {safe_leverage}x")
     except Exception as e:
         safe_leverage = 10  # Competition fallback
         print(f"  [LEVERAGE] Fallback to {safe_leverage}x: {e}")
     notional_usdt = position_usdt * safe_leverage
     raw_size = notional_usdt / current_price
-
-    # V3.1.59: AI log for leverage/sizing decision
-    upload_ai_log_to_weex(
-        stage=f"V3.1.59 Leverage Decision: {signal} {symbol.replace('cmt_', '').upper()}",
-        input_data={
-            "tier": tier,
-            "confidence": trade_confidence,
-            "regime": current_regime if 'current_regime' in dir() else "UNKNOWN",
-            "balance": balance,
-            "position_usdt_margin": round(position_usdt, 2),
-        },
-        output_data={
-            "leverage": safe_leverage,
-            "notional_usdt": round(notional_usdt, 2),
-            "conf_bracket": conf_bracket if 'conf_bracket' in dir() else "UNKNOWN",
-        },
-        explanation=f"V3.1.59 Confidence-tiered leverage: {safe_leverage}x for Tier {tier} at {trade_confidence:.0%} confidence. Margin: ${position_usdt:.0f}, Notional: ${notional_usdt:.0f}."
-    )
-
+    
     if raw_size <= 0:
         return {"executed": False, "reason": f"Invalid size: {raw_size}"}
     

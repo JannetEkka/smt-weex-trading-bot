@@ -1,23 +1,52 @@
 """
-Smart Leverage Manager V3 - Competition-tuned
-10-12x leverage with SL safety net (1.5% SL triggers well before liquidation)
-Liquidation distance at 10x = ~9%, at 12x = ~7.5% -- SL at 1.5% gives 6%+ buffer
+Smart Leverage Manager V3.1.59 - Confidence-Tiered
+Leverage scales with signal confidence, NOT just tier.
+High confidence (90%+) gets more leverage. Low confidence stays conservative.
+Safety: SL always triggers well before liquidation distance.
+
+Liquidation distances:
+  18x = ~5.0% (SL at 2.5% = 2.5% buffer)
+  15x = ~6.0% (SL at 2.5% = 3.5% buffer)
+  12x = ~7.5% (SL at 2.0% = 5.5% buffer)
+  10x = ~9.0% (SL at 2.0% = 7.0% buffer)
 """
+
+# V3.1.59: Confidence-tiered leverage matrix
+# Key: (tier, confidence_bracket) -> leverage
+# Confidence brackets: "ultra" (90%+), "high" (80-89%), "normal" (<80%)
+LEVERAGE_MATRIX = {
+    (1, "ultra"):  18,  # T1 Blue Chip, 90%+ confidence
+    (1, "high"):   15,  # T1 Blue Chip, 80-89%
+    (1, "normal"): 12,  # T1 Blue Chip, <80%
+    (2, "ultra"):  15,  # T2 Mid Cap, 90%+
+    (2, "high"):   12,  # T2 Mid Cap, 80-89%
+    (2, "normal"): 10,  # T2 Mid Cap, <80%
+    (3, "ultra"):  12,  # T3 Small Cap, 90%+
+    (3, "high"):   10,  # T3 Small Cap, 80-89%
+    (3, "normal"):  8,  # T3 Small Cap, <80%
+}
+
 
 class LeverageManager:
     def __init__(self):
-        self.MIN_LEVERAGE = 10  # V3.1.41: Recovery mode
-        self.MAX_LEVERAGE = 15  # V3.1.41: Recovery mode (prelims used 20x)
-        self.MAX_POSITION_PCT = 0.20  # 20% of balance per position
-        self.MIN_LIQUIDATION_DISTANCE = 6  # 6% min buffer above SL
+        self.MIN_LEVERAGE = 8
+        self.MAX_LEVERAGE = 18  # V3.1.59: Up from 15, but only for ultra-conf
+        self.MAX_POSITION_PCT = 0.35  # V3.1.59: Up from 0.20
+        self.MIN_LIQUIDATION_DISTANCE = 4  # 4% min buffer above SL
 
-    def calculate_safe_leverage(self, pair_tier: int, volatility: float = 2.0, regime: str = "NEUTRAL") -> int:
-        tier_leverage = {
-            1: 15,  # BTC, ETH, BNB, LTC - prelims proved 20x safe with SL
-            2: 12,  # SOL - mid vol
-            3: 10   # DOGE, XRP, ADA - higher vol, keep conservative
-        }
-        base = tier_leverage.get(pair_tier, 10)
+    def calculate_safe_leverage(self, pair_tier: int, volatility: float = 2.0,
+                                 regime: str = "NEUTRAL", confidence: float = 0.75) -> int:
+        """V3.1.59: Confidence-tiered leverage selection."""
+
+        # Determine confidence bracket
+        if confidence >= 0.90:
+            bracket = "ultra"
+        elif confidence >= 0.80:
+            bracket = "high"
+        else:
+            bracket = "normal"
+
+        base = LEVERAGE_MATRIX.get((pair_tier, bracket), 10)
 
         # Reduce in high volatility
         if volatility > 4.0:
@@ -25,8 +54,8 @@ class LeverageManager:
         elif volatility > 3.0:
             base -= 1
 
-        # Reduce in uncertain regime
-        if regime == "NEUTRAL":
+        # Reduce in uncertain regime (only for non-ultra)
+        if regime == "NEUTRAL" and bracket != "ultra":
             base -= 1
 
         return max(self.MIN_LEVERAGE, min(base, self.MAX_LEVERAGE))
@@ -47,8 +76,11 @@ class LeverageManager:
             "safe": distance_pct > self.MIN_LIQUIDATION_DISTANCE
         }
 
+
 # Singleton
 _manager = LeverageManager()
 
-def get_safe_leverage(tier: int, volatility: float = 2.0, regime: str = "NEUTRAL") -> int:
-    return _manager.calculate_safe_leverage(tier, volatility, regime)
+
+def get_safe_leverage(tier: int, volatility: float = 2.0, regime: str = "NEUTRAL",
+                      confidence: float = 0.75) -> int:
+    return _manager.calculate_safe_leverage(tier, volatility, regime, confidence)
