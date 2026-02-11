@@ -1129,7 +1129,7 @@ class WhalePersona:
             return self._cryptoracle_data
         
         try:
-            from cryptoracle_client import get_all_trading_pair_sentiment
+            from cryptoracle_client import get_all_trading_pair_sentiment, fetch_prediction_market
             data = get_all_trading_pair_sentiment()
             if data:
                 self._cryptoracle_data = data
@@ -1231,6 +1231,27 @@ class WhalePersona:
                     reasoning += f" [CR DIVERGES: community={cr_dir} sent={cr_net:.2f}]"
                     confidence = max(0.40, confidence - 0.05)
             
+            # V3.1.58: Add prediction market data for BTC
+            pm_data = None
+            if pair == "BTC":
+                try:
+                    pm_data = fetch_prediction_market()
+                    if pm_data:
+                        pm_val = pm_data["pm_sentiment"]
+                        pm_sig = pm_data["pm_signal"]
+                        pm_str = pm_data["pm_strength"]
+                        reasoning += f" [PM: {pm_sig} {pm_str} ({pm_val:+.3f})]"
+                        # PM confirms whale signal = boost confidence
+                        if pm_sig == signal and signal != "NEUTRAL" and pm_str == "STRONG":
+                            confidence = min(0.90, confidence + 0.08)
+                        elif pm_sig == signal and signal != "NEUTRAL":
+                            confidence = min(0.85, confidence + 0.04)
+                        # PM contradicts = slight reduction
+                        elif pm_sig != "NEUTRAL" and signal != "NEUTRAL" and pm_sig != signal:
+                            confidence = max(0.40, confidence - 0.05)
+                except Exception as e:
+                    print(f"  [WHALE] PM fetch error: {e}")
+            
             return {
                 "persona": self.name,
                 "signal": signal,
@@ -1242,6 +1263,7 @@ class WhalePersona:
                     "outflow": total_outflow,
                     "whales_analyzed": whales_analyzed,
                     "cryptoracle": cr_signal,
+                    "prediction_market": pm_data,
                 },
             }
             
@@ -2028,26 +2050,31 @@ Days remaining: {days_left}
 PnL: ${pnl:.0f} ({pnl_pct:+.1f}%)
 Available balance: ${balance:.0f}
 
-=== RULES (V3.1.45 - learned from 45+ iterations) ===
-1. You MUST pick exactly ONE: LONG, SHORT, or WAIT.
-2. If we already have BOTH a LONG and SHORT on this pair, return WAIT.
-3. If we already have a LONG open and signal is LONG, return WAIT (already positioned).
-4. If we already have a SHORT open and signal is SHORT, return WAIT.
-5. If we have a losing position and a strong opposite signal (85%+), you CAN recommend the opposite direction (hedge).
-6. In EXTREME FEAR (F&G < 20), be cautious with SHORTs near round-number support levels. But do NOT assume fear = buy. If FLOW + SENTIMENT + TECHNICAL all agree on SHORT, the sell-off is real -- SHORT is allowed. Fear can always get worse.
-6b. CAPITULATION RULE (F&G < 15): Contrarian LONGs are ONLY valid when FLOW confirms actual buying (taker ratio > 1.5). If FLOW is NEUTRAL or BEARISH, extreme fear does NOT mean buy -- it means the sell-off is continuing. If 3+ personas agree on SHORT with 65%+ average confidence, SHORT is allowed even at F&G < 15. Do not fight confirmed downtrends because fear is high. The best SHORT entries happen when everyone is too scared to short.
-7. Negative funding rate = shorts paying longs = bullish. Positive funding + LONG = you pay every 8h, factor this into hold time.
-8. Tier awareness: T1 (BTC/ETH/BNB/LTC) = slow, 15x leverage. T2 (SOL) = medium, 12x. T3 (DOGE/XRP/ADA) = fast, 10x.
-9. DIRECTIONAL LIMIT: Max 6 positions in the same direction. We have 8 slots. Do NOT self-impose a lower limit.
-10. CORRELATED PAIRS: If 4+ correlated LONGs open (BTC/ETH/SOL/DOGE/XRP), require 85%+ to add another.
-11. TIME OF DAY: 00-06 UTC Asian session. Require 80%+ confidence (not 85%).
-12. POST-REGIME SHIFT: If regime just changed, still trade if confidence >= 80%. Speed matters.
-13. For TP/SL: SL 2-2.5%. TP 6-8% (set by tier config, NOT by you). Max hold: T1=72h, T2=48h, T3=24h. Let winners RUN to full TP. We need $200-400 wins to recover. TP/SL are handled by tier config -- focus your decision on DIRECTION only.
-14. RECOVERY MODE: We are DOWN from starting balance. We CANNOT afford to WAIT on good setups. If 2+ personas agree on direction with 70%+ average confidence, TAKE THE TRADE. Playing safe = guaranteed last place.
-15. SWAP MENTALITY: If we are full on slots, STILL say LONG or SHORT if the signal is strong (70%+). The daemon handles slot management. NEVER return WAIT just because slots are full. Your job is SIGNAL QUALITY, not position management.
-16. WHALE DATA QUALITY: For BTC/ETH, WHALE uses on-chain Etherscan data (most reliable - actual wallet flows). For other pairs (SOL/DOGE/XRP/ADA/BNB/LTC), WHALE uses Cryptoracle community sentiment (social signals from Twitter/Telegram/Discord). Etherscan > Cryptoracle in reliability. If WHALE and FLOW disagree on altcoins, trust FLOW (order book data > social data).
-17. SMART MONEY DIVERGENCE: If WHALE shows bullish but FLOW shows extreme selling, this is BULLISH ABSORPTION (whales/community buying the dip) - high conviction LONG. If WHALE shows bearish but FLOW shows buying, this is DISTRIBUTION INTO STRENGTH (smart money selling into FOMO) - caution on LONGs.
-18. SENTIMENT MOMENTUM: If WHALE reports sentiment momentum z-score > 1.5, community is overheated (contrarian SHORT risk). If z-score < -1.5, community panic (contrarian LONG opportunity with F&G < 20). Combine with FLOW for highest conviction.
+=== DECISION GUIDELINES (V3.1.58) ===
+
+YOUR ONLY JOB: Decide LONG, SHORT, or WAIT based on signal quality. Position limits, TP/SL, and slot management are handled by code -- ignore them entirely.
+
+SIGNAL RELIABILITY (most to least trustworthy):
+  1. FLOW (order book taker ratio) -- actual money moving. Most reliable.
+  2. WHALE (on-chain for BTC/ETH, Cryptoracle sentiment for alts) -- smart money / community intelligence.
+  3. SENTIMENT (web search price action) -- short-term momentum context.
+  4. TECHNICAL (RSI/SMA/momentum) -- lagging but useful for confirmation.
+
+HOW TO DECIDE:
+- If FLOW + WHALE agree on direction: trade it. This is your highest-conviction signal.
+- If FLOW contradicts WHALE on altcoins: trust FLOW (real orders > social chatter).
+- If WHALE shows buying but FLOW shows heavy selling: this is ABSORPTION -- bullish.
+- If WHALE shows selling but FLOW shows buying: this is DISTRIBUTION -- bearish.
+- WAIT only when signals genuinely conflict with no clear majority, or confidence is truly low.
+
+FEAR & GREED:
+- Extreme fear does NOT automatically mean buy. If FLOW confirms selling, the dump is real.
+- Extreme greed does NOT automatically mean sell. If FLOW confirms buying, the rally is real.
+- Contrarian trades need FLOW confirmation. Without it, go with the trend.
+
+FUNDING RATE: Negative = shorts paying longs (bullish lean). Positive = longs paying shorts (bearish lean). Not a trade signal alone, but tips the balance when other signals are close.
+
+IMPORTANT: Say LONG or SHORT if you see a good setup. Do not say WAIT to be "safe." We are in a competition and need to take quality trades. Only WAIT when there is genuinely no edge.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences explaining your decision"}}"""
