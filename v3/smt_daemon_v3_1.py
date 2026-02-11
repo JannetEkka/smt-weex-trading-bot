@@ -558,7 +558,7 @@ def check_trading_signals():
                         # V3.1.53: OPPOSITE - tighten SHORT SL + open LONG
                         short_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:SHORT")
                         existing_conf = short_trade.get("confidence", 0.75) if short_trade else 0.75
-                        if confidence > existing_conf and can_open_new:
+                        if confidence > existing_conf:  # V3.1.56: opposite trades bypass slot check
                             can_trade_this = True
                             trade_type = "opposite"
                             logger.info(f"    -> OPPOSITE: LONG {confidence:.0%} > SHORT {existing_conf:.0%}. Tighten SHORT SL + open LONG")
@@ -582,7 +582,7 @@ def check_trading_signals():
                         # V3.1.53: OPPOSITE - tighten LONG SL + open SHORT
                         long_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:LONG")
                         existing_conf = long_trade.get("confidence", 0.75) if long_trade else 0.75
-                        if confidence > existing_conf and can_open_new:
+                        if confidence > existing_conf:  # V3.1.56: opposite trades bypass slot check
                             can_trade_this = True
                             trade_type = "opposite"
                             logger.info(f"    -> OPPOSITE: SHORT {confidence:.0%} > LONG {existing_conf:.0%}. Tighten LONG SL + open SHORT")
@@ -738,7 +738,7 @@ def check_trading_signals():
             if trade_opportunities:
                 first_fg = trade_opportunities[0]["decision"].get("fear_greed", 50)
                 if first_fg < 15:
-                    MAX_SAME_DIRECTION = 5  # V3.1.55: was 99, caused all-LONG pileup
+                    MAX_SAME_DIRECTION = 7  # V3.1.56: capitulation allows 7
                     logger.info(f"CAPITULATION MODE: F&G={first_fg}, raising directional limit to 7")
             
             for opportunity in trade_opportunities:
@@ -946,6 +946,29 @@ def check_trading_signals():
                                     existing_trade["tighten_reason"] = f"Opposite {signal} at {confidence:.0%}"
                                     tracker.save_state()
                                 
+
+                                # V3.1.56: ACTUALLY PLACE SL ORDER ON WEEX
+                                try:
+                                    close_type = "3" if opp_side == "LONG" else "4"  # 3=close long, 4=close short
+                                    opp_size = float(opp_pos.get("size", 0))
+                                    plan_order_endpoint = "/capi/v2/order/plan_order"
+                                    sl_body = json.dumps({
+                                        "symbol": sym,
+                                        "client_oid": f"smt_tighten_{int(time.time()*1000)}",
+                                        "size": str(opp_size),
+                                        "type": close_type,
+                                        "match_type": "1",
+                                        "execute_price": "0",
+                                        "trigger_price": str(new_sl)
+                                    })
+                                    import requests as req_mod
+                                    from smt_nightly_trade_v3_1 import WEEX_BASE_URL, weex_headers
+                                    sl_r = req_mod.post(f"{WEEX_BASE_URL}{plan_order_endpoint}",
+                                                       headers=weex_headers("POST", plan_order_endpoint, sl_body),
+                                                       data=sl_body, timeout=15)
+                                    logger.info(f"  [SL TIGHTEN] Placed SL order on WEEX: {sl_r.status_code} {sl_r.text[:100]}")
+                                except Exception as place_err:
+                                    logger.warning(f"  [SL TIGHTEN] Could not place SL order: {place_err}")
                                 logger.info(f"  [SL TIGHTEN] Done. {opp_side} will close soon via tight SL.")
                             except Exception as sl_err:
                                 logger.warning(f"  [SL TIGHTEN] Could not tighten: {sl_err}")
@@ -1360,6 +1383,28 @@ def gemini_portfolio_review():
         if not positions:
             return
         
+        # V3.1.56: GRACE PERIOD - hide positions < 30min old from portfolio manager
+        # Gemini ignores prompt-based grace periods, so we enforce in code
+        grace_positions = []
+        for p in positions:
+            sym = p.get('symbol', '')
+            trade = tracker.get_active_trade(sym)
+            if trade and trade.get('opened_at'):
+                try:
+                    from datetime import datetime, timezone
+                    opened_at = datetime.fromisoformat(trade['opened_at'].replace('Z', '+00:00'))
+                    minutes_open = (datetime.now(timezone.utc) - opened_at).total_seconds() / 60
+                    if minutes_open < 30:
+                        logger.info(f'[PORTFOLIO] Grace period: {sym.replace("cmt_","").upper()} opened {minutes_open:.0f}m ago, hiding from PM')
+                        continue
+                except:
+                    pass
+            grace_positions.append(p)
+        positions = grace_positions
+        if not positions:
+            logger.info('[PORTFOLIO] All positions in grace period, skipping review')
+            return
+        
         account_info = get_account_equity()
         balance = account_info["available"]
         equity = account_info["equity"]
@@ -1484,13 +1529,16 @@ If F&G < 20 (extreme fear), be patient with positions BUT you CAN still close if
 Extreme fear does NOT mean blindly hold everything. Our SL orders are the last defense,
 but the PM should still trim obvious bad positions.
 
-RULE 5 - WHALE DISAGREE EXIT (NEW V3.1.55):
-If whale confidence >= 70% in the OPPOSITE direction of your position AND position is losing,
-CLOSE IT. Smart money has turned against this trade. Examples:
-- LONG position losing -1.5%, whale says SHORT@73% -> CLOSE the LONG
-- SHORT position losing -0.8%, whale says LONG@78% -> CLOSE the SHORT
-This is the INVERSE of Rule 11 (whale hold protection). Whale agreement = hold. Whale disagreement = exit.
-Exception: if position is WINNING despite whale disagreement, keep it (price action > whale signal).
+RULE 5 - WHALE DISAGREE EXIT (UPDATED V3.1.56):
+If whale confidence >= 70% in the OPPOSITE direction AND position is losing MORE THAN -1.0%,
+CLOSE IT. Smart money has turned against this trade.
+CRITICAL: Do NOT close positions losing less than -1.0% on whale disagreement alone.
+Small losses (-0.01% to -0.9%) are normal noise. Only act on whale signal when loss is meaningful.
+Examples:
+- LONG position losing -1.5%, whale says SHORT@73% -> CLOSE (loss > 1%)
+- SHORT position losing -0.3%, whale says LONG@78% -> KEEP (loss < 1%, too early)
+- LONG position losing -0.01%, whale says SHORT@72% -> KEEP (basically breakeven)
+Exception: if position is WINNING despite whale disagreement, ALWAYS keep it.
 
 RULE 6 - BREAKEVEN PATIENCE:
 If a position has faded to breakeven (within +/- 0.3%), DO NOT CLOSE. Crypto is volatile.
