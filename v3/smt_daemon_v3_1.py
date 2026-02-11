@@ -430,7 +430,7 @@ def check_trading_signals():
             if tracker.active_trades.get(symbol, {}).get('runner_triggered', False):
                 risk_free_count += 1
         
-        BASE_SLOTS = 5  # V3.1.53: 5 base + 2 bonus for high-confidence
+        BASE_SLOTS = 4  # V3.1.62: Fewer but BIGGER positions
         MAX_BONUS_SLOTS = 2  # V3.1.53: +2 slots only if new signal conf > all existing
         bonus_slots = min(risk_free_count, MAX_BONUS_SLOTS)
         effective_max_positions = BASE_SLOTS + bonus_slots
@@ -1579,6 +1579,10 @@ def gemini_portfolio_review():
         )
         
         prompt = f"""You are the AI Portfolio Manager for a crypto futures trading bot in a LIVE competition with REAL money.
+CRITICAL: We are LAST PLACE (37th/37). Started $10,000, now ~$4,600. Need aggressive recovery.
+- Do NOT close winning positions early. We need every dollar of profit.
+- Close losers FAST to free capital for better trades.
+- We cannot afford to be patient with stale positions. Cut and redeploy.
 You have learned from 40+ iterations of rules. Apply ALL of these rules strictly.
 
 === PORTFOLIO (ALL OPEN POSITIONS) ===
@@ -2394,7 +2398,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.61 - GEMINI TIMEOUT + OPPOSITE SIDE + WHALE EXITS")
+    logger.info("SMT Daemon V3.1.62 - AGGRESSIVE RECOVERY + 20x + BIG POSITIONS")
     logger.info("=" * 60)
     logger.info("V3.1.9 CRITICAL FIXES:")
     logger.info("  - FIXED: undefined btc_trend bug blocking regime filter")

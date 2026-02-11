@@ -15,15 +15,15 @@ Liquidation distances:
 # Key: (tier, confidence_bracket) -> leverage
 # Confidence brackets: "ultra" (90%+), "high" (80-89%), "normal" (<80%)
 LEVERAGE_MATRIX = {
-    (1, "ultra"):  18,  # T1 Blue Chip, 90%+ confidence
-    (1, "high"):   15,  # T1 Blue Chip, 80-89%
-    (1, "normal"): 12,  # T1 Blue Chip, <80%
-    (2, "ultra"):  15,  # T2 Mid Cap, 90%+
-    (2, "high"):   12,  # T2 Mid Cap, 80-89%
-    (2, "normal"): 10,  # T2 Mid Cap, <80%
-    (3, "ultra"):  12,  # T3 Small Cap, 90%+
-    (3, "high"):   10,  # T3 Small Cap, 80-89%
-    (3, "normal"):  8,  # T3 Small Cap, <80%
+    (1, "ultra"):  20,  # V3.1.62: AGGRESSIVE RECOVERY
+    (1, "high"):   20,
+    (1, "normal"): 18,
+    (2, "ultra"):  20,
+    (2, "high"):   20,
+    (2, "normal"): 18,
+    (3, "ultra"):  20,
+    (3, "high"):   18,
+    (3, "normal"): 15,
 }
 
 

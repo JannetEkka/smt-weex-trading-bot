@@ -826,9 +826,9 @@ FLOOR_BALANCE = 1500.0  # V3.1.42: Finals - emergency stop
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
 MAX_OPEN_POSITIONS = 8  # V3.1.35d: Never blocked - all pairs can trade  # V3.1.31: Competition mode - 5 positions with 10-12x leverage
-MAX_SINGLE_POSITION_PCT = 0.30  # V3.1.42: Recovery - aggressive sizing
-MIN_SINGLE_POSITION_PCT = 0.12  # V3.1.42: Recovery - 12% minimum
-MIN_CONFIDENCE_TO_TRADE = 0.65  # V3.1.42: Recovery mode - more at-bats
+MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
+MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
+MIN_CONFIDENCE_TO_TRADE = 0.60  # V3.1.62: Lower floor for more opportunities
 
 # ============================================================
 # V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
@@ -864,9 +864,9 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     return delay + jitter
 
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 10, "stop_loss": 0.025, "take_profit": 0.12, "trailing_stop": 0.015, "time_limit": 5760, "tp_pct": 8.0, "sl_pct": 2.5, "max_hold_hours": 72, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
-    2: {"name": "Mid Cap", "leverage": 8, "stop_loss": 0.03, "take_profit": 0.15, "trailing_stop": 0.02, "time_limit": 4320, "tp_pct": 7.0, "sl_pct": 2.0, "max_hold_hours": 48, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
-    3: {"name": "Small Cap", "leverage": 6, "stop_loss": 0.04, "take_profit": 0.18, "trailing_stop": 0.025, "time_limit": 2880, "tp_pct": 6.0, "sl_pct": 2.0, "max_hold_hours": 24, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -3.0},
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.03, "take_profit": 0.15, "trailing_stop": 0.02, "time_limit": 5760, "tp_pct": 12.0, "sl_pct": 3.0, "max_hold_hours": 72, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.03, "take_profit": 0.18, "trailing_stop": 0.025, "time_limit": 4320, "tp_pct": 10.0, "sl_pct": 3.0, "max_hold_hours": 48, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.035, "take_profit": 0.20, "trailing_stop": 0.03, "time_limit": 2880, "tp_pct": 8.0, "sl_pct": 3.0, "max_hold_hours": 24, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -5.0},
 }
 # Trading Pairs with correct tiers
 TRADING_PAIRS = {
@@ -2063,9 +2063,16 @@ Days remaining: {days_left}
 PnL: ${pnl:.0f} ({pnl_pct:+.1f}%)
 Available balance: ${balance:.0f}
 
-=== DECISION GUIDELINES (V3.1.58) ===
+=== DECISION GUIDELINES (V3.1.62 AGGRESSIVE RECOVERY) ===
+
+CRITICAL CONTEXT: We are LAST PLACE in the competition. Started with $10,000, now at ~$4,600.
+We need to recover $5,400+ in 12 days. We CANNOT afford to play it safe.
+- Every WAIT is a missed opportunity. Only WAIT when signals truly conflict.
+- High-conviction trades should be taken AGGRESSIVELY.
+- We need BIG winners, not small safe trades.
 
 YOUR ONLY JOB: Decide LONG, SHORT, or WAIT based on signal quality. Position limits, TP/SL, and slot management are handled by code -- ignore them entirely.
+BIAS TOWARD ACTION: If 2+ personas agree on direction, TRADE IT. Do not second-guess with WAIT.
 
 SIGNAL RELIABILITY (most to least trustworthy):
   1. FLOW (order book taker ratio) -- actual money moving. Most reliable.
@@ -2156,24 +2163,21 @@ Respond with JSON ONLY (no markdown, no backticks):
                     and whale_vote.get("confidence", 0) >= 0.60):
                     flow_whale_aligned = True
 
-            base_size = balance * 0.22  # V3.1.59: Slight bump from 20%
+            base_size = balance * 0.40  # V3.1.62: AGGRESSIVE 40% base
             if confidence >= 0.90 and flow_whale_aligned:
-                position_usdt = base_size * 1.6  # 35% of balance - ultra conviction
-                print(f"  [SIZING] ULTRA: 90%+ conf + FLOW/WHALE aligned -> 35%")
+                position_usdt = base_size * 1.25  # 50% of balance - ULTRA
+                print(f"  [SIZING] ULTRA: 90%+ conf + FLOW/WHALE aligned -> 50%")
             elif confidence > 0.85:
-                position_usdt = base_size * 1.4  # 31% of balance
+                position_usdt = base_size * 1.15  # 46% of balance
             elif confidence > 0.75:
-                position_usdt = base_size * 1.2  # 26% of balance
+                position_usdt = base_size * 1.05  # 42% of balance
             else:
-                position_usdt = base_size * 1.0  # 22% of balance
+                position_usdt = base_size * 1.0  # 40% of balance
             
-            # Balance protection - only at emergency levels
-            if balance < 500:
+            # V3.1.62: Balance protection - only at true emergency
+            if balance < 200:
                 position_usdt *= 0.5
                 print(f"  [JUDGE] EMERGENCY BALANCE: size halved")
-            elif balance < 1000:
-                position_usdt *= 0.7
-                print(f"  [JUDGE] LOW BALANCE: size at 70%")
             
             # Volatility adjustment from regime
             position_usdt *= regime.get("size_multiplier", 1.0)
@@ -2619,7 +2623,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         conf_bracket = "ULTRA" if trade_confidence >= 0.90 else "HIGH" if trade_confidence >= 0.80 else "NORMAL"
         print(f"  [LEVERAGE] Tier {tier} ({current_regime}, {conf_bracket} {trade_confidence:.0%}): Using {safe_leverage}x")
     except Exception as e:
-        safe_leverage = 10  # Competition fallback
+        safe_leverage = 18  # V3.1.62: Aggressive fallback
         print(f"  [LEVERAGE] Fallback to {safe_leverage}x: {e}")
     notional_usdt = position_usdt * safe_leverage
     raw_size = notional_usdt / current_price
@@ -2681,8 +2685,8 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     
     base_tp = tier_config["tp_pct"]
     if fg_val < 15:
-        tp_multiplier = 1.5
-        tp_label = "CAPITULATION"
+        tp_multiplier = 1.8
+        tp_label = "CAPITULATION_AGGRESSIVE"
     elif fg_val < 30:
         tp_multiplier = 1.25
         tp_label = "FEAR"
