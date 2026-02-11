@@ -973,6 +973,7 @@ def check_trading_signals():
                                 except Exception as place_err:
                                     logger.warning(f"  [SL TIGHTEN] Could not place SL order: {place_err}")
                                 logger.info(f"  [SL TIGHTEN] Done. {opp_side} will close soon via tight SL.")
+                                _sl_tightened_symbols[sym] = datetime.now(timezone.utc)
                             except Exception as sl_err:
                                 logger.warning(f"  [SL TIGHTEN] Could not tighten: {sl_err}")
                             
@@ -1349,6 +1350,9 @@ PORTFOLIO_REVIEW_INTERVAL = 900  # Every 5 minutes
 # Stores last 10 readings per symbol: [{"pnl_pct": x, "peak": y, "ts": z}, ...]
 _pnl_history = {}
 _PNL_HISTORY_MAX = 10
+
+# V3.1.60: Track symbols with recent SL tightens - prevent resolve_opposite from killing new trades
+_sl_tightened_symbols = {}
 
 
 def cleanup_dust_positions():
@@ -2037,6 +2041,17 @@ def resolve_opposite_sides():
             
             if not long_pos or not short_pos:
                 continue
+            
+            # V3.1.60: Skip if SL was recently tightened (opposite trade in progress)
+            if sym in _sl_tightened_symbols:
+                tighten_time = _sl_tightened_symbols[sym]
+                age_min = (datetime.now(timezone.utc) - tighten_time).total_seconds() / 60
+                if age_min < 15:
+                    sym_c = sym.replace('cmt_', '').upper()
+                    logger.info(f"  [OPPOSITE] Skipping {sym_c}: SL tightened {age_min:.0f}m ago, waiting")
+                    continue
+                else:
+                    del _sl_tightened_symbols[sym]
             
             long_pnl = float(long_pos.get('unrealized_pnl', 0))
             short_pnl = float(short_pos.get('unrealized_pnl', 0))
