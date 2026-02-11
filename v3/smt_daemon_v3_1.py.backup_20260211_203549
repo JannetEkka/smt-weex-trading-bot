@@ -430,7 +430,7 @@ def check_trading_signals():
             if tracker.active_trades.get(symbol, {}).get('runner_triggered', False):
                 risk_free_count += 1
         
-        BASE_SLOTS = 3  # V3.1.63: SNIPER mode  # V3.1.62: Fewer but BIGGER positions
+        BASE_SLOTS = 4  # V3.1.62: Fewer but BIGGER positions
         MAX_BONUS_SLOTS = 2  # V3.1.53: +2 slots only if new signal conf > all existing
         bonus_slots = min(risk_free_count, MAX_BONUS_SLOTS)
         effective_max_positions = BASE_SLOTS + bonus_slots
@@ -1268,31 +1268,24 @@ def monitor_positions():
                 })
                 if len(_pnl_history[symbol]) > _PNL_HISTORY_MAX:
                     _pnl_history[symbol] = _pnl_history[symbol][-_PNL_HISTORY_MAX:]
-                # V3.1.63 SMART PEAK EXIT - Re-enabled with intelligent thresholds
-                # At 20x leverage: 1.5% price move = 30% ROE. Capturing half a peak is better
-                # than watching it fade to zero waiting for a 15% TP that may never come.
-                fade_pct = peak_pnl_pct - pnl_pct if peak_pnl_pct > 0 else 0
+                # V3.1.46: PROFIT GUARDS DISABLED - Recovery mode
+                # Problem: Guards close at +0.5-1.3% (capturing $5-30) but losses hit $50-299
+                # Solution: Let TP orders do their job. Need +5-8% wins to recover.
+                # Guards were cutting winners before they could become big wins.
+                # V3.1.46: ALL PROFIT GUARDS DISABLED - Recovery mode
+                # We need wins of $100-300, not $15-50. Let TP orders handle exits.
+                # fade_pct = peak_pnl_pct - pnl_pct
+                # if tier == 3: T3_profit_guard ... DISABLED
+                # elif tier == 2: T2_profit_guard ... DISABLED
+                # else: T1_profit_guard ... DISABLED
                 
-                # Rule 1: High peak, deep fade -> lock profits
-                # If peaked > 2.0% and dropped more than 50% from peak
-                if not should_exit and peak_pnl_pct >= 2.0 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0:
-                    should_exit = True
-                    exit_reason = f"V3.1.63_peak_fade_high T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
-                    print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
-                
-                # Rule 2: Moderate peak, severe fade -> lock profits
-                # If peaked > 1.5% and dropped more than 60% from peak
-                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct < peak_pnl_pct * 0.40 and pnl_pct > 0:
-                    should_exit = True
-                    exit_reason = f"V3.1.63_peak_fade_mod T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
-                    print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
-                
-                # Rule 3: Any peak that went negative -> thesis broken
-                # If peaked > 1.0% but now negative
-                elif not should_exit and peak_pnl_pct >= 1.0 and pnl_pct <= 0:
-                    should_exit = True
-                    exit_reason = f"V3.1.63_peak_to_loss T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}%"
-                    print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
+                # V3.1.46: TIME-BASED TIGHTENING DISABLED - Let winners run
+                # Was closing positions that peaked at 0.5-1% after 2h. These need time to hit 5%+ TP.
+                # if not should_exit and hours_open >= 2.0 and peak_pnl_pct >= 0.5:
+                #     if pnl_pct < peak_pnl_pct * 0.35:
+                #         should_exit = True
+                #         exit_reason = f"time_fade_guard ..."
+                pass  # V3.1.46: Disabled
                 
 
                 # 1. Max hold time exceeded (tier-specific)
@@ -1374,43 +1367,6 @@ PORTFOLIO_REVIEW_INTERVAL = 900  # Every 5 minutes
 # Stores last 10 readings per symbol: [{"pnl_pct": x, "peak": y, "ts": z}, ...]
 _pnl_history = {}
 _PNL_HISTORY_MAX = 10
-
-def get_trade_history_summary(tracker) -> str:
-    """V3.1.63: Build summary of last 10 closed trades for Judge context."""
-    closed = tracker.closed_trades[-10:] if tracker.closed_trades else []
-    if not closed:
-        return "No closed trade history available yet."
-    
-    lines = []
-    wins = 0
-    losses = 0
-    for t in closed:
-        sym = t.get("close_data", {}).get("symbol", "?") if t.get("close_data") else "?"
-        if sym == "?":
-            # Try to extract from the trade key or other fields
-            sym = t.get("symbol", t.get("order_id", "?"))
-        side = t.get("side", "?")
-        pnl = t.get("close_data", {}).get("final_pnl_pct", 0) if t.get("close_data") else 0
-        reason = t.get("close_data", {}).get("reason", "?") if t.get("close_data") else "?"
-        conf = t.get("confidence", 0)
-        whale_d = t.get("whale_direction", "?")
-        
-        if pnl > 0:
-            wins += 1
-            result = "WIN"
-        elif pnl < 0:
-            losses += 1
-            result = "LOSS"
-        else:
-            result = "FLAT"
-        
-        lines.append(f"  {sym} {side} -> {result} ({pnl:+.1f}%) conf={conf:.0%} whale={whale_d} reason={reason}")
-    
-    win_rate = wins / max(wins + losses, 1) * 100
-    summary = f"Last {len(closed)} trades: {wins}W/{losses}L ({win_rate:.0f}% win rate)\n"
-    summary += "\n".join(lines[-5:])  # Show last 5 only to save tokens
-    return summary
-
 
 # V3.1.60: Track symbols with recent SL tightens - prevent resolve_opposite from killing new trades
 _sl_tightened_symbols = {}
@@ -1666,7 +1622,7 @@ Max 5 positions in the same direction normally. If 6+ LONGs or 6+ SHORTs, close 
 EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move all alts together.
 
 RULE 3 - LET WINNERS RUN:
-PEAK FADE RULE (V3.1.63): If a position peaked > 1.5% and faded > 50% from peak, CLOSE IT to lock profit. At 20x leverage, 1% captured = 20% ROE. Do NOT let winners become losers.
+Do NOT close winning positions just because they faded from peak. Our TP orders are at 5-8%.
 Closing at +0.5% when TP is at +6% means we capture $15 instead of $180.
 Only close a WINNING position if it has been held past max_hold_hours.
 
@@ -1681,8 +1637,7 @@ If F&G < 20 (extreme fear), be patient with positions BUT you CAN still close if
 (a) Same pair has both LONG and SHORT open (Rule 1 overrides)
 (b) Position losing > -2% AND whale confidence >= 70% AGAINST position direction
 (c) Position held longer than max_hold_hours AND losing
-(d) 4+ total positions clogging slots (close weakest loser to free capital)
-(e) V3.1.63: If any position is losing > -2% AND held > 4 hours, close it. At 20x that's -40% ROE. Cut the bleed.
+(d) 7+ total positions clogging slots (close weakest loser to free capital)
 Extreme fear does NOT mean blindly hold everything. Our SL orders are the last defense,
 but the PM should still trim obvious bad positions.
 
@@ -2443,14 +2398,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.63 - SNIPER MODE: 3 positions, 80% floor, WHALE+FLOW co-primary")
+    logger.info("SMT Daemon V3.1.62 - AGGRESSIVE RECOVERY + 20x + BIG POSITIONS")
     logger.info("=" * 60)
-    logger.info("V3.1.63 SNIPER MODE:")
-    logger.info("  - WHALE: CryptOracle for ALL 8 pairs (Etherscan removed)")
-    logger.info("  - Judge: WHALE+FLOW co-primary signals (was FLOW-only)")
-    logger.info("  - Smart peak exit: re-enabled (peak>1.5%, fade>50% = close)")
-    logger.info("  - Max 3 positions, 80% confidence floor")
-    logger.info("  - Anti-WAIT override + trade history to Judge")
+    logger.info("V3.1.9 CRITICAL FIXES:")
+    logger.info("  - FIXED: undefined btc_trend bug blocking regime filter")
+    logger.info("  - FIXED: Regime filter now applies to ALL pairs incl BTC")
+    logger.info("  - BEARISH threshold: -1% (was -2%)")
+    logger.info("  - Block LONGs when BTC 24h < -0.5%")
+    logger.info("  - Regime cache: 5min (was 15min)")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]

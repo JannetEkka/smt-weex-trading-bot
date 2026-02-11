@@ -821,14 +821,14 @@ def get_enhanced_market_regime() -> dict:
 COMPETITION_START = datetime(2026, 2, 8, 15, 0, 0, tzinfo=timezone.utc)
 COMPETITION_END = datetime(2026, 2, 24, 20, 0, 0, tzinfo=timezone.utc)
 STARTING_BALANCE = 10000.0  # V3.1.42: Finals - started with 10K
-FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
+FLOOR_BALANCE = 1500.0  # V3.1.42: Finals - emergency stop
 
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 3  # V3.1.63: SNIPER - fewer, bigger, better positions
+MAX_OPEN_POSITIONS = 8  # V3.1.35d: Never blocked - all pairs can trade  # V3.1.31: Competition mode - 5 positions with 10-12x leverage
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
-MIN_CONFIDENCE_TO_TRADE = 0.80  # V3.1.63: SNIPER - only high-conviction trades
+MIN_CONFIDENCE_TO_TRADE = 0.60  # V3.1.62: Lower floor for more opportunities
 
 # ============================================================
 # V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
@@ -1165,8 +1165,10 @@ class WhalePersona:
         cr_data = self._get_cryptoracle_data()
         cr_signal = cr_data.get(pair.upper()) if cr_data else None
         
-        # V3.1.63: CryptOracle for ALL pairs (Etherscan removed - unreliable timeouts)
-        return self._analyze_with_cryptoracle(pair, pair_info, cr_signal)
+        if pair in ("ETH", "BTC"):
+            return self._analyze_with_etherscan(pair, pair_info, cr_signal)
+        else:
+            return self._analyze_with_cryptoracle(pair, pair_info, cr_signal)
     
     def _analyze_with_etherscan(self, pair: str, pair_info: Dict, cr_signal: dict) -> Dict:
         """BTC/ETH: Etherscan whale flow (primary) + Cryptoracle (secondary)."""
@@ -2072,28 +2074,18 @@ We need to recover $5,400+ in 12 days. We CANNOT afford to play it safe.
 YOUR ONLY JOB: Decide LONG, SHORT, or WAIT based on signal quality. Position limits, TP/SL, and slot management are handled by code -- ignore them entirely.
 BIAS TOWARD ACTION: If 2+ personas agree on direction, TRADE IT. Do not second-guess with WAIT.
 
-SIGNAL RELIABILITY (V3.1.63 SNIPER):
-  CO-PRIMARY (equal weight, these drive your decision):
-    1. WHALE (Cryptoracle community intelligence) -- smart money / crowd wisdom for ALL pairs. Our unique edge.
-    2. FLOW (order book taker ratio) -- actual money moving right now.
-  SECONDARY (confirmation only, never override WHALE+FLOW):
-    3. SENTIMENT (web search price action) -- context, not a trading signal.
-    4. TECHNICAL (RSI/SMA/momentum) -- lagging indicator, confirmation only.
+SIGNAL RELIABILITY (most to least trustworthy):
+  1. FLOW (order book taker ratio) -- actual money moving. Most reliable.
+  2. WHALE (on-chain for BTC/ETH, Cryptoracle sentiment for alts) -- smart money / community intelligence.
+  3. SENTIMENT (web search price action) -- short-term momentum context.
+  4. TECHNICAL (RSI/SMA/momentum) -- lagging but useful for confirmation.
 
 HOW TO DECIDE:
-- If WHALE + FLOW agree: TRADE IT at 85%+ confidence. This is the strongest possible signal.
-- If WHALE is strong (>65% conf) but FLOW is weak/neutral: trust WHALE direction. Cryptoracle sees what orderbooks don't.
-- If FLOW is strong (>75% conf) but WHALE is weak/neutral: trust FLOW. Money is moving.
-- If WHALE and FLOW directly contradict (opposite directions, both >60%): this is the ONLY valid WAIT scenario.
-- NEVER WAIT when 2+ signals agree on direction. We are LAST PLACE in competition.
-
-PATTERN RECOGNITION:
-- WHALE buying + FLOW selling = ACCUMULATION (smart money loading while retail sells) -> LONG
-- WHALE selling + FLOW buying = DISTRIBUTION (smart money dumping into retail buying) -> SHORT
-- Both buying = STRONG LONG. Both selling = STRONG SHORT.
-
-TRADE HISTORY CONTEXT:
-{trade_history_summary}
+- If FLOW + WHALE agree on direction: trade it. This is your highest-conviction signal.
+- If FLOW contradicts WHALE on altcoins: trust FLOW (real orders > social chatter).
+- If WHALE shows buying but FLOW shows heavy selling: this is ABSORPTION -- bullish.
+- If WHALE shows selling but FLOW shows buying: this is DISTRIBUTION -- bearish.
+- WAIT only when signals genuinely conflict with no clear majority, or confidence is truly low.
 
 FEAR & GREED:
 - Extreme fear does NOT automatically mean buy. If FLOW confirms selling, the dump is real.
@@ -2125,21 +2117,6 @@ Respond with JSON ONLY (no markdown, no backticks):
             data = json.loads(clean_text)
             
             decision = data.get("decision", "WAIT").upper() if data.get("decision") else "WAIT"
-            
-            # V3.1.63 ANTI-WAIT OVERRIDE: If Gemini says WAIT but confidence >= 80%
-            # and reasoning clearly indicates a direction, override the WAIT.
-            # This catches cases where Gemini hedges with WAIT despite strong signals.
-            if decision == "WAIT" and confidence >= 0.80:
-                reasoning_lower = reasoning.lower() if reasoning else ""
-                # Check if reasoning text leans heavily toward a direction
-                long_words = sum(1 for w in ["long", "buy", "bullish", "accumulation", "oversold", "bounce"] if w in reasoning_lower)
-                short_words = sum(1 for w in ["short", "sell", "bearish", "distribution", "overbought", "dump"] if w in reasoning_lower)
-                if long_words >= 2 and short_words == 0:
-                    decision = "LONG"
-                    print(f"  [JUDGE] V3.1.63 ANTI-WAIT OVERRIDE: WAIT->LONG (conf={confidence:.0%}, reasoning leans LONG)")
-                elif short_words >= 2 and long_words == 0:
-                    decision = "SHORT"
-                    print(f"  [JUDGE] V3.1.63 ANTI-WAIT OVERRIDE: WAIT->SHORT (conf={confidence:.0%}, reasoning leans SHORT)")
             raw_conf = data.get("confidence")
             confidence = min(0.95, max(0.0, float(raw_conf))) if raw_conf is not None else 0.0
             reasoning = data.get("reasoning") or "Gemini Judge decision"
@@ -2171,9 +2148,9 @@ Respond with JSON ONLY (no markdown, no backticks):
                 return self._wait_decision(f"Gemini says SHORT but already have SHORT on {pair}", persona_votes,
                     [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
             
-            # V3.1.63: Minimum confidence floor (SNIPER)
-            if confidence < MIN_CONFIDENCE_TO_TRADE:
-                return self._wait_decision(f"Gemini confidence too low: {confidence:.0%} < {MIN_CONFIDENCE_TO_TRADE:.0%}", persona_votes,
+            # Minimum confidence floor
+            if confidence < 0.65:
+                return self._wait_decision(f"Gemini confidence too low: {confidence:.0%}", persona_votes,
                     [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
             
             # V3.1.59: Confidence-tiered position sizing with FLOW+WHALE alignment
@@ -2301,13 +2278,13 @@ Respond with JSON ONLY (no markdown, no backticks):
         for vote in persona_votes:
             weight = 1.0
             if vote["persona"] == "FLOW":
-                weight = 2.0  # V3.1.63: Equal with WHALE
+                weight = 2.5
             elif vote["persona"] == "TECHNICAL":
-                weight = 0.8  # V3.1.63: Confirmation only
+                weight = 1.5
             elif vote["persona"] == "SENTIMENT":
                 weight = 1.0
             elif vote["persona"] == "WHALE":
-                weight = 2.0  # V3.1.63: Equal with FLOW
+                weight = 1.5
             
             if vote["signal"] == "LONG":
                 long_score += vote["confidence"] * weight
