@@ -552,13 +552,13 @@ def check_trading_signals():
                     if has_long:
                         logger.info(f"    -> Already LONG")
                     elif has_short:
-                        # HEDGE opportunity!
+                        # V3.1.52: FLIP MODE - close SHORT fully, then open LONG
                         if confidence >= HEDGE_CONFIDENCE_THRESHOLD and can_open_new:
                             can_trade_this = True
-                            trade_type = "hedge"
-                            logger.info(f"    -> HEDGE: Can open LONG while SHORT running!")
+                            trade_type = "flip"
+                            logger.info(f"    -> FLIP: Will close SHORT fully, then open LONG")
                         else:
-                            logger.info(f"    -> Has SHORT, need {HEDGE_CONFIDENCE_THRESHOLD:.0%}+ to hedge (have {confidence:.0%})")
+                            logger.info(f"    -> Has SHORT, need {HEDGE_CONFIDENCE_THRESHOLD:.0%}+ to flip (have {confidence:.0%})")
                     else:
                         # No position - normal trade
                         if can_open_new:
@@ -569,13 +569,13 @@ def check_trading_signals():
                     if has_short:
                         logger.info(f"    -> Already SHORT")
                     elif has_long:
-                        # HEDGE opportunity!
+                        # V3.1.52: FLIP MODE - close LONG fully, then open SHORT
                         if confidence >= HEDGE_CONFIDENCE_THRESHOLD and can_open_new:
                             can_trade_this = True
-                            trade_type = "hedge"
-                            logger.info(f"    -> HEDGE: Can open SHORT while LONG running!")
+                            trade_type = "flip"
+                            logger.info(f"    -> FLIP: Will close LONG fully, then open SHORT")
                         else:
-                            logger.info(f"    -> Has LONG, need {HEDGE_CONFIDENCE_THRESHOLD:.0%}+ to hedge (have {confidence:.0%})")
+                            logger.info(f"    -> Has LONG, need {HEDGE_CONFIDENCE_THRESHOLD:.0%}+ to flip (have {confidence:.0%})")
                     else:
                         # No position - normal trade
                         if can_open_new:
@@ -870,11 +870,11 @@ def check_trading_signals():
                 confidence = opportunity["decision"]["confidence"]
                 
                 logger.info(f"")
-                type_label = "[HEDGE] " if trade_type == "hedge" else ""
+                type_label = "[FLIP] " if trade_type == "flip" else ""
                 logger.info(f"EXECUTING {type_label}{pair} {signal} (T{tier}) - {confidence:.0%}")
                 
-                # V3.1.38: Hedge partial close - reduce 50% of opposite position
-                if trade_type == "hedge":
+                # V3.1.52: FLIP - fully close opposite position before opening new
+                if trade_type == "flip":
                     try:
                         opp_side = "SHORT" if signal == "LONG" else "LONG"
                         sym = opportunity["pair_info"]["symbol"]
@@ -889,17 +889,17 @@ def check_trading_signals():
                             # Calculate 50% close size
                             # V3.1.44 FIX: Import place_order + round_size_to_step
                             from smt_nightly_trade_v3_1 import round_size_to_step, place_order
-                            close_size = round_size_to_step(opp_size * 0.5, sym)
+                            close_size = round_size_to_step(opp_size * 1.0, sym)
                             
                             if close_size > 0:
                                 close_type = "3" if opp_side == "LONG" else "4"
-                                logger.info(f"  [HEDGE REDUCE] Closing 50% of {opp_side} {pair}: {close_size}/{opp_size} units")
+                                logger.info(f"  [FLIP CLOSE] Closing 100% of {opp_side} {pair}: {close_size}/{opp_size} units (PnL: ${opp_pnl:.2f})")
                                 
                                 close_result = place_order(sym, close_type, close_size, tp_price=None, sl_price=None)
                                 close_oid = close_result.get("order_id")
                                 
                                 if close_oid:
-                                    logger.info(f"  [HEDGE REDUCE] Closed 50%: order {close_oid}")
+                                    logger.info(f"  [FLIP CLOSE] Closed 100%: order {close_oid}")
                                     
                                     # Upload AI log for hedge partial close
                                     upload_ai_log_to_weex(
@@ -914,7 +914,7 @@ def check_trading_signals():
                                             "new_confidence": confidence,
                                         },
                                         output_data={
-                                            "action": "HEDGE_PARTIAL_CLOSE",
+                                            "action": "FLIP_FULL_CLOSE",
                                             "close_size": close_size,
                                             "remaining_size": opp_size - close_size,
                                             "close_order_id": close_oid,
@@ -1383,8 +1383,8 @@ RULE 1 - DIRECTIONAL CONCENTRATION LIMIT:
 Max 5 positions in the same direction normally. If 6+ LONGs or 6+ SHORTs, close the WEAKEST ones
 (lowest PnL% or most faded from peak) until we have max 5. All-same-direction = cascade
 liquidation risk in cross margin.
-EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move ALL alts together,
-so being long across the board IS the correct play. Only enforce max 5 if F&G >= 15.
+EXCEPTION: If F&G < 15 (Capitulation/WAR MODE), allow up to 8 LONGs. ALL 8 slots go LONG.
+Violent bounces move ALL alts together - max long IS the correct play. Only enforce max 5 if F&G >= 15.
 
 RULE 2 - LET WINNERS RUN (V3.1.46 RECOVERY MODE):
 Do NOT close winning positions just because they faded from peak. Our TP orders are at 5-8%.
@@ -1408,9 +1408,9 @@ During extreme fear: NO closes. Period. Let SL handle risk.
 RULE 5 - CORRELATED PAIR LIMIT:
 BTC, ETH, SOL, DOGE all move together. If BTC LONG is open, max 2 more altcoin LONGs
 in the same direction normally. Close the weakest correlated altcoin positions.
-EXCEPTION: If F&G < 15 (Capitulation), allow up to 6 correlated altcoin LONGs alongside BTC.
+EXCEPTION: If F&G < 15 (Capitulation/WAR MODE), allow up to 8 correlated LONGs (all slots).
 During capitulation bounces, correlation is your FRIEND - everything bounces together.
-Only enforce the strict 3-altcoin limit when F&G >= 15.
+There is NO point diversifying when the whole market is bottoming. Only enforce the strict 3-altcoin limit when F&G >= 15.
 
 RULE 6 - TIME-BASED PATIENCE (V3.1.46 RECOVERY MODE):
 Do NOT close positions just because they have been open 2-4 hours.
