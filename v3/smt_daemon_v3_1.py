@@ -555,15 +555,22 @@ def check_trading_signals():
                     if has_long:
                         logger.info(f"    -> Already LONG")
                     elif has_short:
-                        # V3.1.52: FLIP MODE - close SHORT fully, then open LONG
-                        if confidence >= HEDGE_CONFIDENCE_THRESHOLD and can_open_new:
+                        # V3.1.53: OPPOSITE - tighten SHORT SL + open LONG
+                        short_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:SHORT")
+                        existing_conf = short_trade.get("confidence", 0.75) if short_trade else 0.75
+                        if confidence > existing_conf and can_open_new:
                             can_trade_this = True
-                            trade_type = "flip"
-                            logger.info(f"    -> FLIP: Will close SHORT fully, then open LONG")
+                            trade_type = "opposite"
+                            logger.info(f"    -> OPPOSITE: LONG {confidence:.0%} > SHORT {existing_conf:.0%}. Tighten SHORT SL + open LONG")
                         else:
-                            logger.info(f"    -> Has SHORT, need {HEDGE_CONFIDENCE_THRESHOLD:.0%}+ to flip (have {confidence:.0%})")
+                            logger.info(f"    -> Has SHORT at {existing_conf:.0%}, LONG {confidence:.0%} not stronger. Hold.")
+                            upload_ai_log_to_weex(
+                                stage=f"V3.1.53 HOLD: {symbol.replace('cmt_','').upper()} SHORT kept",
+                                input_data={"symbol": symbol, "existing_side": "SHORT", "existing_conf": existing_conf, "new_signal": "LONG", "new_conf": confidence},
+                                output_data={"action": "HOLD", "reason": "existing_confidence_higher"},
+                                explanation=f"AI decided to maintain SHORT position. Existing SHORT confidence ({existing_conf:.0%}) >= new LONG signal ({confidence:.0%}). No directional change warranted."
+                            )
                     else:
-                        # No position - normal trade
                         if can_open_new:
                             can_trade_this = True
                             trade_type = "new"
@@ -572,15 +579,22 @@ def check_trading_signals():
                     if has_short:
                         logger.info(f"    -> Already SHORT")
                     elif has_long:
-                        # V3.1.52: FLIP MODE - close LONG fully, then open SHORT
-                        if confidence >= HEDGE_CONFIDENCE_THRESHOLD and can_open_new:
+                        # V3.1.53: OPPOSITE - tighten LONG SL + open SHORT
+                        long_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:LONG")
+                        existing_conf = long_trade.get("confidence", 0.75) if long_trade else 0.75
+                        if confidence > existing_conf and can_open_new:
                             can_trade_this = True
-                            trade_type = "flip"
-                            logger.info(f"    -> FLIP: Will close LONG fully, then open SHORT")
+                            trade_type = "opposite"
+                            logger.info(f"    -> OPPOSITE: SHORT {confidence:.0%} > LONG {existing_conf:.0%}. Tighten LONG SL + open SHORT")
                         else:
-                            logger.info(f"    -> Has LONG, need {HEDGE_CONFIDENCE_THRESHOLD:.0%}+ to flip (have {confidence:.0%})")
+                            logger.info(f"    -> Has LONG at {existing_conf:.0%}, SHORT {confidence:.0%} not stronger. Hold.")
+                            upload_ai_log_to_weex(
+                                stage=f"V3.1.53 HOLD: {symbol.replace('cmt_','').upper()} LONG kept",
+                                input_data={"symbol": symbol, "existing_side": "LONG", "existing_conf": existing_conf, "new_signal": "SHORT", "new_conf": confidence},
+                                output_data={"action": "HOLD", "reason": "existing_confidence_higher"},
+                                explanation=f"AI decided to maintain LONG position. Existing LONG confidence ({existing_conf:.0%}) >= new SHORT signal ({confidence:.0%}). No directional change warranted."
+                            )
                     else:
-                        # No position - normal trade
                         if can_open_new:
                             can_trade_this = True
                             trade_type = "new"
@@ -1034,12 +1048,15 @@ def monitor_positions():
             if not trade:
                 continue
             
+            # V3.1.53: Extract real symbol (strip :SIDE suffix for API calls)
+            real_symbol = symbol.split(":")[0] if ":" in symbol else symbol
+            
             try:
                 position = check_position_status(symbol)
                 
                 if not position.get("is_open"):
                     logger.info(f"{symbol} CLOSED via TP/SL")
-                    cleanup = cancel_all_orders_for_symbol(symbol)
+                    cleanup = cancel_all_orders_for_symbol(real_symbol)
                     
                     # V3.1.26: Calculate ACTUAL PnL from trade data
                     entry_price = trade.get("entry_price", 0)
@@ -1119,7 +1136,7 @@ def monitor_positions():
                 hours_open = (datetime.now(timezone.utc) - opened_at).total_seconds() / 3600
                 
                 entry_price = trade.get("entry_price", position["entry_price"])
-                current_price = get_price(symbol)
+                current_price = get_price(real_symbol)
                 
                 if entry_price > 0 and current_price > 0:
                     if trade.get("side") == "LONG":

@@ -2854,9 +2854,18 @@ class TradeTracker:
 # ============================================================
 
 def check_position_status(symbol: str) -> Dict:
+    """V3.1.53: Handle symbol:SIDE keys (e.g. cmt_bnbusdt:SHORT)"""
     positions = get_open_positions()
+    # Extract real symbol and optional side filter
+    if ":" in symbol:
+        real_symbol, side_filter = symbol.split(":", 1)
+    else:
+        real_symbol, side_filter = symbol, None
+    
     for pos in positions:
-        if pos["symbol"] == symbol:
+        if pos["symbol"] == real_symbol:
+            if side_filter and pos["side"] != side_filter:
+                continue
             return {
                 "is_open": True,
                 "side": pos["side"],
