@@ -1235,6 +1235,7 @@ class WhalePersona:
             pm_data = None
             if pair == "BTC":
                 try:
+                    from cryptoracle_client import fetch_prediction_market
                     pm_data = fetch_prediction_market()
                     if pm_data:
                         pm_val = pm_data["pm_sentiment"]
