@@ -701,15 +701,14 @@ def check_trading_signals():
 
                 
                 # Add to opportunities if tradeable
-                # Gemini-controlled gating (local gate removed)
-                    # HARD GATES DISABLED — Gemini decides
+                if can_trade_this:
                     trade_opportunities.append({
-                            "pair": pair,
-                            "pair_info": pair_info,
-                            "decision": decision,
-                            "tier": tier,
-                            "trade_type": trade_type,
-                        })
+                        "pair": pair,
+                        "pair_info": pair_info,
+                        "decision": decision,
+                        "tier": tier,
+                        "trade_type": trade_type,
+                    })
                 
                 time.sleep(2)
                 
