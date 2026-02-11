@@ -413,35 +413,32 @@ def check_trading_signals():
             if tracker.active_trades.get(symbol, {}).get('runner_triggered', False):
                 risk_free_count += 1
         
-        BASE_SLOTS = 5  # V3.1.53: 5 base + 2 bonus for high-confidence
-        MAX_BONUS_SLOTS = 2  # V3.1.53: +2 slots only if new signal conf > all existing
+        BASE_SLOTS = 8  # V3.1.35d: match MAX_OPEN_POSITIONS  # V3.1.31: Competition mode - more exposure
+        MAX_BONUS_SLOTS = 2  # Can earn up to 2 extra slots from risk-free positions
         bonus_slots = min(risk_free_count, MAX_BONUS_SLOTS)
         effective_max_positions = BASE_SLOTS + bonus_slots
         
-        # V3.1.53: Count positions from WEEX (the truth), not tracker
-        weex_position_count = len(open_positions)  # This comes from allPosition API
+        # V3.1.26: High confidence override
+        CONFIDENCE_OVERRIDE_THRESHOLD = 0.85  # 85%+ signals can exceed normal limits
+        MAX_CONFIDENCE_SLOTS = 2  # Up to 2 extra slots for high conviction trades
         
-        available_slots = effective_max_positions - weex_position_count
-        
-        # V3.1.53: Confidence override constants (restored)
-        CONFIDENCE_OVERRIDE_THRESHOLD = 0.85
-        MAX_CONFIDENCE_SLOTS = 2
+        available_slots = effective_max_positions - len(open_positions)
         
         # V3.1.19: Override slot availability if low equity
         can_open_new = available_slots > 0 and not low_equity_mode
         
         if bonus_slots > 0:
-            logger.info(f"Smart Slots: {weex_position_count}/{effective_max_positions} (base {BASE_SLOTS} + {bonus_slots} risk-free bonus)")
+            logger.info(f"Smart Slots: {len(open_positions)}/{effective_max_positions} (base {BASE_SLOTS} + {bonus_slots} risk-free bonus)")
         
         if low_equity_mode:
             logger.info(f"Low equity mode - no new trades allowed")
         elif not can_open_new:
-            logger.info(f"Max positions ({weex_position_count}/{effective_max_positions}) - Analysis only")
+            logger.info(f"Max positions ({len(open_positions)}/{effective_max_positions}) - Analysis only")
         
         ai_log = {
             "run_id": f"v3_1_7_{run_timestamp}",
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "version": "v3.1.53-opposite",
+            "version": "v3.1.7-hedge",
             "tier_config": TIER_CONFIG,
             "analyses": [],
             "trades": [],
@@ -876,8 +873,8 @@ def check_trading_signals():
                 type_label = "[FLIP] " if trade_type == "flip" else ""
                 logger.info(f"EXECUTING {type_label}{pair} {signal} (T{tier}) - {confidence:.0%}")
                 
-                # V3.1.53: OPPOSITE SIDE - tighten SL on existing + open new direction
-                if trade_type == "opposite":
+                # V3.1.52: FLIP - fully close opposite position before opening new
+                if trade_type == "flip":
                     try:
                         opp_side = "SHORT" if signal == "LONG" else "LONG"
                         sym = opportunity["pair_info"]["symbol"]
@@ -888,77 +885,51 @@ def check_trading_signals():
                             opp_size = float(opp_pos.get("size", 0))
                             opp_entry = float(opp_pos.get("entry_price", 0))
                             opp_pnl = float(opp_pos.get("unrealized_pnl", 0))
-                            current_price = get_price(sym)
                             
-                            # TIGHTEN SL: Move SL to 50% of original distance from current price
-                            # This gives the old position a short leash - it'll close itself if wrong
-                            from smt_nightly_trade_v3_1 import round_price_to_tick, cancel_all_orders_for_symbol, place_order, round_size_to_step
+                            # Calculate 50% close size
+                            # V3.1.44 FIX: Import place_order + round_size_to_step
+                            from smt_nightly_trade_v3_1 import round_size_to_step, place_order
+                            close_size = round_size_to_step(opp_size * 1.0, sym)
                             
-                            if opp_side == "LONG":
-                                # LONG position - tighten SL upward (closer to current price)
-                                old_sl_dist = opp_entry * 0.02  # Original ~2% SL
-                                new_sl = round_price_to_tick(current_price * 0.992, sym)  # 0.8% SL
-                                # Don't set SL above entry (would be instant loss lock)
-                                new_sl = max(new_sl, round_price_to_tick(opp_entry * 0.995, sym))
+                            if close_size > 0:
+                                close_type = "3" if opp_side == "LONG" else "4"
+                                logger.info(f"  [FLIP CLOSE] Closing 100% of {opp_side} {pair}: {close_size}/{opp_size} units (PnL: ${opp_pnl:.2f})")
+                                
+                                close_result = place_order(sym, close_type, close_size, tp_price=None, sl_price=None)
+                                close_oid = close_result.get("order_id")
+                                
+                                if close_oid:
+                                    logger.info(f"  [FLIP CLOSE] Closed 100%: order {close_oid}")
+                                    
+                                    # Upload AI log for hedge partial close
+                                    upload_ai_log_to_weex(
+                                        stage=f"V3.1.38 Hedge Reduce: {opp_side} {pair}",
+                                        input_data={
+                                            "symbol": sym,
+                                            "existing_side": opp_side,
+                                            "existing_size": opp_size,
+                                            "existing_entry": opp_entry,
+                                            "existing_pnl": opp_pnl,
+                                            "new_signal": signal,
+                                            "new_confidence": confidence,
+                                        },
+                                        output_data={
+                                            "action": "FLIP_FULL_CLOSE",
+                                            "close_size": close_size,
+                                            "remaining_size": opp_size - close_size,
+                                            "close_order_id": close_oid,
+                                        },
+                                        explanation=f"AI Hedge: {signal} signal at {confidence:.0%} detected while {opp_side} is open (PnL: ${opp_pnl:.2f}). Reducing {opp_side} by 50% ({close_size} units) to free margin and reduce losing exposure before opening {signal}."
+                                    )
+                                    
+                                    state.trades_closed += 1
+                                else:
+                                    logger.warning(f"  [HEDGE REDUCE] Partial close failed: {close_result}")
                             else:
-                                # SHORT position - tighten SL downward (closer to current price)
-                                new_sl = round_price_to_tick(current_price * 1.008, sym)  # 0.8% SL
-                                # Don't set SL below entry
-                                new_sl = min(new_sl, round_price_to_tick(opp_entry * 1.005, sym))
-                            
-                            logger.info(f"  [SL TIGHTEN] {opp_side} {pair}: Moving SL to ${new_sl:.4f} (entry: ${opp_entry:.4f}, current: ${current_price:.4f})")
-                            
-                            # Cancel old TP/SL and place new tighter ones
-                            try:
-                                # We can't easily modify just the SL on WEEX, 
-                                # so we cancel all orders and re-place with tight SL
-                                cancel_result = cancel_all_orders_for_symbol(sym)
-                                
-                                # Re-place the existing position's TP/SL with tighter SL
-                                # Use plan order or just let the monitor handle it
-                                # For now, the position will be monitored with tighter threshold
-                                
-                                # Update tracker with tighter SL
-                                trade_key = sym
-                                existing_trade = tracker.get_active_trade(trade_key)
-                                if not existing_trade:
-                                    trade_key = f"{sym}:{opp_side}"
-                                    existing_trade = tracker.get_active_trade(trade_key)
-                                
-                                if existing_trade:
-                                    existing_trade["sl_tightened"] = True
-                                    existing_trade["sl_tightened_at"] = datetime.now(timezone.utc).isoformat()
-                                    existing_trade["sl_price"] = new_sl
-                                    existing_trade["tighten_reason"] = f"Opposite {signal} at {confidence:.0%}"
-                                    tracker.save_state()
-                                
-                                logger.info(f"  [SL TIGHTEN] Done. {opp_side} will close soon via tight SL.")
-                            except Exception as sl_err:
-                                logger.warning(f"  [SL TIGHTEN] Could not tighten: {sl_err}")
-                            
-                            # Upload AI log for SL tightening
-                            upload_ai_log_to_weex(
-                                stage=f"V3.1.53 Directional Shift: {pair} {opp_side}->SL tightened",
-                                input_data={
-                                    "symbol": sym,
-                                    "existing_side": opp_side,
-                                    "existing_size": opp_size,
-                                    "existing_entry": opp_entry,
-                                    "existing_pnl": round(opp_pnl, 2),
-                                    "new_signal": signal,
-                                    "new_confidence": confidence,
-                                },
-                                output_data={
-                                    "action": "SL_TIGHTENED",
-                                    "new_sl": new_sl,
-                                    "reason": "opposite_signal_stronger",
-                                },
-                                explanation=f"AI detected directional shift on {pair}. New {signal} signal at {confidence:.0%} is stronger than existing {opp_side}. Tightened {opp_side} stop-loss to ${new_sl:.4f} (was wider). {opp_side} will exit soon. Opening {signal} to capture new direction."
-                            )
+                                logger.info(f"  [HEDGE REDUCE] Position too small to split, skipping partial close")
                     except Exception as e:
-                        logger.error(f"  [OPPOSITE] Error tightening SL: {e}")
-                        import traceback
-                        logger.error(traceback.format_exc())
+                        logger.error(f"  [HEDGE REDUCE] Error: {e}")
+                        # Continue to open hedge even if partial close fails
                 
                 try:
                     trade_result = run_with_retry(
@@ -1286,41 +1257,6 @@ def monitor_positions():
 
 _last_portfolio_review = 0
 PORTFOLIO_REVIEW_INTERVAL = 900  # Every 5 minutes
-
-
-def cleanup_dust_positions():
-    """V3.1.53: Close dust positions (<$5 margin) that waste slots"""
-    try:
-        positions = get_open_positions()
-        for pos in positions:
-            margin = float(pos.get("margin", 0))
-            size = float(pos.get("size", 0))
-            symbol = pos.get("symbol", "")
-            side = pos.get("side", "")
-            
-            if margin < 5.0 and size > 0:
-                symbol_clean = symbol.replace("cmt_", "").upper()
-                logger.info(f"  [DUST] Closing {side} {symbol_clean}: margin=${margin:.2f}, size={size}")
-                
-                close_type = "3" if side == "LONG" else "4"
-                from smt_nightly_trade_v3_1 import place_order, round_size_to_step
-                close_size = round_size_to_step(size, symbol)
-                
-                if close_size > 0:
-                    result = place_order(symbol, close_type, close_size, tp_price=None, sl_price=None)
-                    oid = result.get("order_id")
-                    
-                    upload_ai_log_to_weex(
-                        stage=f"V3.1.53 Position Optimization: Close dust {side} {symbol_clean}",
-                        input_data={"symbol": symbol, "side": side, "margin": margin, "size": size},
-                        output_data={"action": "CLOSE_DUST", "order_id": oid},
-                        explanation=f"AI closing negligible {side} {symbol_clean} position (margin: ${margin:.2f}). Position too small to generate meaningful returns. Freeing slot for higher-conviction trades.",
-                        order_id=oid
-                    )
-                    logger.info(f"  [DUST] Closed: order {oid}")
-    except Exception as e:
-        logger.error(f"  [DUST] Cleanup error: {e}")
-
 
 def gemini_portfolio_review():
     """V3.1.40: Gemini reviews ALL positions and decides what to close.
@@ -2090,12 +2026,6 @@ def run_daemon():
 
     # V3.1.9: Sync with WEEX on startup
     sync_tracker_with_weex()
-    
-    # V3.1.53: Clean dust positions on startup
-    try:
-        cleanup_dust_positions()
-    except Exception as e:
-        logger.warning(f'Dust cleanup error: {e}')
     
     last_signal = 0
     last_position = 0
