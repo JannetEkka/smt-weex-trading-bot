@@ -237,8 +237,24 @@ try:
     from hot_reload import get_confidence_threshold, should_pause, should_emergency_exit, is_direction_enabled, get_tp_sl_multipliers
     HOT_RELOAD_ENABLED = True
     print("  [V3.1.21] Hot-reload enabled")
+
 except ImportError:
     HOT_RELOAD_ENABLED = False
+
+
+# V3.1.61: Gemini timeout wrapper
+def _gemini_with_timeout(client, model, contents, config, timeout=120):
+    """Call Gemini with a thread-based timeout."""
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            client.models.generate_content,
+            model=model,
+            contents=contents,
+            config=config
+        )
+        return future.result(timeout=timeout)
+
 
 
 # ============================================================
@@ -1510,11 +1526,7 @@ Respond with JSON only:
             
         )
         
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=combined_prompt,
-            config=grounding_config
-        )
+        response = _gemini_with_timeout(client, "gemini-2.5-flash", combined_prompt, grounding_config, timeout=120)
         
         clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         data = json.loads(clean_text)
@@ -2092,11 +2104,7 @@ Respond with JSON ONLY (no markdown, no backticks):
                 temperature=0.1,
             )
             
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=config
-            )
+            response = _gemini_with_timeout(client, "gemini-2.5-flash", prompt, config, timeout=120)
             
             clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
             data = json.loads(clean_text)

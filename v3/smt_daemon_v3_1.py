@@ -274,6 +274,23 @@ except ImportError:
 # DAEMON STATE
 # ============================================================
 
+
+# ============================================================
+# V3.1.61: GEMINI TIMEOUT WRAPPER
+# ============================================================
+
+def _gemini_with_timeout(client, model, contents, config, timeout=120):
+    """Call Gemini with a thread-based timeout to prevent daemon hangs."""
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            client.models.generate_content,
+            model=model,
+            contents=contents,
+            config=config
+        )
+        return future.result(timeout=timeout)
+
 class DaemonState:
     def __init__(self):
         self.started_at = datetime.now(timezone.utc)
@@ -1682,11 +1699,7 @@ If nothing should be closed, return:
         client = genai.Client()
         config = GenerateContentConfig(temperature=0.1)
         
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-            config=config
-        )
+        response = _gemini_with_timeout(client, "gemini-2.5-flash", prompt, config, timeout=120)
         
         clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         data = json.loads(clean_text)
@@ -2381,7 +2394,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.55 - OPPOSITE SIDE + WHALE EXITS + SYNC FIX")
+    logger.info("SMT Daemon V3.1.61 - GEMINI TIMEOUT + OPPOSITE SIDE + WHALE EXITS")
     logger.info("=" * 60)
     logger.info("V3.1.9 CRITICAL FIXES:")
     logger.info("  - FIXED: undefined btc_trend bug blocking regime filter")
