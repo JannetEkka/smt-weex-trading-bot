@@ -26736,3 +26736,6 @@ nohup: ignoring input
   "errors": 0
 }
   [LOG] Saved: logs/v3_1_1_20260209_171309.json
+watchdog.sh: line 36: 1119463 Killed                  nohup $DAEMON_CMD >> logs/daemon_v3_1_7_$(date +%Y%m%d).log 2>&1
+watchdog.sh: line 47: 1138933 Killed                  nohup python3 smt_daemon_v3_1.py >> logs/daemon_v3_1_7_$(date +%Y%m%d).log 2>&1
+watchdog.sh: line 47: 1139005 Killed                  nohup python3 smt_daemon_v3_1.py >> logs/daemon_v3_1_7_$(date +%Y%m%d).log 2>&1
