@@ -323,6 +323,10 @@ state = DaemonState()
 tracker = TradeTracker(state_file="trade_state_v3_1_7.json")
 analyzer = MultiPersonaAnalyzer()
 
+# V3.1.65: GLOBAL TRADE COOLDOWN - prevent fee bleed from rapid trading
+_last_trade_opened_at = 0  # unix timestamp
+GLOBAL_TRADE_COOLDOWN = 1800  # 30 minutes between ANY new trade
+
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -774,9 +778,9 @@ def check_trading_signals():
                         logger.info(f"CONFIDENCE OVERRIDE: {confidence:.0%} >= 85% - using conviction slot {confidence_slots_used + 1}/{MAX_CONFIDENCE_SLOTS}")
                         confidence_slots_used += 1
                     else:
-                        # V3.1.42: SWAP LOGIC - replace worst loser with better signal
-                        SWAP_MIN_CONFIDENCE = 0.80
-                        if confidence >= SWAP_MIN_CONFIDENCE:
+                        # V3.1.65: SWAP DISABLED - realizing losses + fees kills equity
+                        SWAP_MIN_CONFIDENCE = 999  # effectively disabled
+                        if False and confidence >= SWAP_MIN_CONFIDENCE:
                             signal_dir = opportunity['decision']['decision']
                             # Find worst same-direction position that is losing
                             worst_pos = None
@@ -902,6 +906,57 @@ def check_trading_signals():
                 else:
                     logger.info(f"SESSION [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} >= {session_min_conf:.0%}, proceeding {opportunity['pair']}")
                 
+                # V3.1.65: REGIME VETO - code-level block on counter-regime trades
+                try:
+                    from smt_daemon_v3_1 import get_market_regime_for_exit
+                except ImportError:
+                    pass
+                _regime_now = get_market_regime_for_exit()
+                _regime_label = _regime_now.get("regime", "NEUTRAL")
+                _opp_signal = opportunity["decision"]["decision"]
+                _regime_vetoed = False
+                if _regime_label == "BEARISH" and _opp_signal == "LONG":
+                    # Exception: allow if WHALE strongly says LONG (contrarian accumulation)
+                    _whale_vote_check = next((v for v in opportunity["decision"].get("persona_votes", []) if v.get("persona") == "WHALE"), None)
+                    _whale_conf_check = _whale_vote_check.get("confidence", 0) if _whale_vote_check else 0
+                    _whale_dir_check = _whale_vote_check.get("signal", "NEUTRAL") if _whale_vote_check else "NEUTRAL"
+                    if _whale_dir_check == "LONG" and _whale_conf_check >= 0.75:
+                        logger.info(f"REGIME VETO OVERRIDE: BEARISH but WHALE says LONG@{_whale_conf_check:.0%}, allowing {opportunity['pair']}")
+                    else:
+                        _regime_vetoed = True
+                        logger.warning(f"REGIME VETO: {_regime_label} market, blocking LONG on {opportunity['pair']} (whale={_whale_dir_check}@{_whale_conf_check:.0%})")
+                elif _regime_label == "BULLISH" and _opp_signal == "SHORT":
+                    _whale_vote_check = next((v for v in opportunity["decision"].get("persona_votes", []) if v.get("persona") == "WHALE"), None)
+                    _whale_conf_check = _whale_vote_check.get("confidence", 0) if _whale_vote_check else 0
+                    _whale_dir_check = _whale_vote_check.get("signal", "NEUTRAL") if _whale_vote_check else "NEUTRAL"
+                    if _whale_dir_check == "SHORT" and _whale_conf_check >= 0.75:
+                        logger.info(f"REGIME VETO OVERRIDE: BULLISH but WHALE says SHORT@{_whale_conf_check:.0%}, allowing {opportunity['pair']}")
+                    else:
+                        _regime_vetoed = True
+                        logger.warning(f"REGIME VETO: {_regime_label} market, blocking SHORT on {opportunity['pair']} (whale={_whale_dir_check}@{_whale_conf_check:.0%})")
+                elif _regime_label in ("SPIKE_UP",) and _opp_signal == "SHORT":
+                    _regime_vetoed = True
+                    logger.warning(f"REGIME VETO: SPIKE_UP, blocking SHORT on {opportunity['pair']}")
+                elif _regime_label in ("SPIKE_DOWN",) and _opp_signal == "LONG":
+                    _regime_vetoed = True
+                    logger.warning(f"REGIME VETO: SPIKE_DOWN, blocking LONG on {opportunity['pair']}")
+                
+                if _regime_vetoed:
+                    upload_ai_log_to_weex(
+                        stage=f"V3.1.65 REGIME VETO: {_opp_signal} {opportunity['pair']} blocked",
+                        input_data={"regime": _regime_label, "signal": _opp_signal, "pair": opportunity['pair']},
+                        output_data={"action": "VETOED", "reason": f"counter-regime trade in {_regime_label}"},
+                        explanation=f"Code-level regime filter blocked {_opp_signal} on {opportunity['pair']} in {_regime_label} market. Judge ignored regime but code enforces it."
+                    )
+                    continue
+
+                # V3.1.65: GLOBAL TRADE COOLDOWN CHECK
+                _now_cooldown = time.time()
+                if _now_cooldown - _last_trade_opened_at < GLOBAL_TRADE_COOLDOWN:
+                    _cd_remaining = GLOBAL_TRADE_COOLDOWN - (_now_cooldown - _last_trade_opened_at)
+                    logger.info(f"GLOBAL COOLDOWN: {_cd_remaining:.0f}s remaining, skipping {opportunity['pair']}")
+                    continue
+
                 tier = opportunity["tier"]
                 tier_config = get_tier_config(tier)
                 trade_type = opportunity["trade_type"]
@@ -1044,6 +1099,7 @@ def check_trading_signals():
                         trade_result["whale_direction"] = whale_dir
                         tracker.add_trade(opportunity["pair_info"]["symbol"], trade_result)
                         state.trades_opened += 1
+                        _last_trade_opened_at = time.time()  # V3.1.65: Update global cooldown
                         ai_log["trades"].append(trade_result)
                         # V3.1.41: Update directional count
                         if signal == "LONG": long_count += 1
