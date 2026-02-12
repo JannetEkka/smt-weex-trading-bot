@@ -864,9 +864,9 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     return delay + jitter
 
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.03, "take_profit": 0.15, "trailing_stop": 0.02, "time_limit": 5760, "tp_pct": 12.0, "sl_pct": 3.0, "max_hold_hours": 72, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.03, "take_profit": 0.18, "trailing_stop": 0.025, "time_limit": 4320, "tp_pct": 10.0, "sl_pct": 3.0, "max_hold_hours": 48, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.035, "take_profit": 0.20, "trailing_stop": 0.03, "time_limit": 2880, "tp_pct": 8.0, "sl_pct": 3.0, "max_hold_hours": 24, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -5.0},
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.03, "take_profit": 0.05, "trailing_stop": 0.02, "time_limit": 5760, "tp_pct": 5.0, "sl_pct": 3.0, "max_hold_hours": 72, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.03, "take_profit": 0.06, "trailing_stop": 0.025, "time_limit": 4320, "tp_pct": 6.0, "sl_pct": 3.0, "max_hold_hours": 48, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.035, "take_profit": 0.07, "trailing_stop": 0.03, "time_limit": 2880, "tp_pct": 7.0, "sl_pct": 3.0, "max_hold_hours": 24, "early_exit_hours": 999, "early_exit_loss_pct": -5.0, "force_exit_loss_pct": -5.0},
 }
 # Trading Pairs with correct tiers
 TRADING_PAIRS = {
