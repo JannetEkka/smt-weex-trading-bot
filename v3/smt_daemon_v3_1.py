@@ -431,7 +431,7 @@ def check_trading_signals():
                 risk_free_count += 1
         
         BASE_SLOTS = 3  # V3.1.63: SNIPER mode  # V3.1.62: Fewer but BIGGER positions
-        MAX_BONUS_SLOTS = 2  # V3.1.53: +2 slots only if new signal conf > all existing
+        MAX_BONUS_SLOTS = 0  # V3.1.64a: DISABLED - hard cap is absolute
         bonus_slots = min(risk_free_count, MAX_BONUS_SLOTS)
         effective_max_positions = BASE_SLOTS + bonus_slots
         
@@ -442,7 +442,7 @@ def check_trading_signals():
         
         # V3.1.53: Confidence override constants (restored)
         CONFIDENCE_OVERRIDE_THRESHOLD = 0.85
-        MAX_CONFIDENCE_SLOTS = 2
+        MAX_CONFIDENCE_SLOTS = 0  # V3.1.64a: DISABLED - hard cap is absolute
         
         # V3.1.19: Override slot availability if low equity
         can_open_new = available_slots > 0 and not low_equity_mode
@@ -767,8 +767,8 @@ def check_trading_signals():
                 # V3.1.56: Opposite trades bypass slot check
                 trade_type_check = opportunity.get("trade_type", "none")
                 if trade_type_check == "opposite":
-                    logger.info(f"OPPOSITE TRADE: bypassing slot check for {opportunity['pair']}")
-                elif trades_executed >= available_slots:
+                    logger.info(f"OPPOSITE TRADE: {opportunity['pair']} (no slot bypass in V3.1.64a)")
+                if trades_executed >= available_slots:
                     # V3.1.26: High confidence override - can use extra slots
                     if confidence >= CONFIDENCE_OVERRIDE_THRESHOLD and confidence_slots_used < MAX_CONFIDENCE_SLOTS:
                         logger.info(f"CONFIDENCE OVERRIDE: {confidence:.0%} >= 85% - using conviction slot {confidence_slots_used + 1}/{MAX_CONFIDENCE_SLOTS}")
@@ -891,10 +891,10 @@ def check_trading_signals():
                     session_name = "ACTIVE"
                     session_min_conf = 0.70  # Normal hours
                 
-                # Extreme fear overrides session filter
+                # V3.1.64a: REMOVED extreme fear floor override
+                # 85% confidence floor is absolute - no exceptions
                 if is_extreme_fear:
-                    session_min_conf = min(session_min_conf, 0.70)
-                    logger.info(f"EXTREME FEAR OVERRIDE: F&G={opp_fear_greed}, session floor -> 70% for {opportunity['pair']}")
+                    logger.info(f"EXTREME FEAR: F&G={opp_fear_greed}, but 85% floor stays for {opportunity['pair']}")
                 
                 if opp_confidence < session_min_conf:
                     logger.warning(f"SESSION FILTER [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} < {session_min_conf:.0%}, skipping {opportunity['pair']}")

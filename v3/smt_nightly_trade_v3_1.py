@@ -2719,7 +2719,13 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
             dynamic_sl = round(atr_pct * 1.2, 2)
             tier_floor_sl = tier_config["sl_pct"]
             sl_pct_raw = max(dynamic_sl, tier_floor_sl)
-            sl_pct_raw = min(sl_pct_raw, 4.0)
+            # V3.1.64a: Widen SL cap in extreme fear (respect Judge's vol-adjusted SL)
+            try:
+                _fg_sl = get_fear_greed_index().get("value", 50)
+            except:
+                _fg_sl = 50
+            _sl_cap = 6.0 if _fg_sl < 15 else 4.5 if _fg_sl < 30 else 4.0
+            sl_pct_raw = min(sl_pct_raw, _sl_cap)
         else:
             sl_pct_raw = tier_config["sl_pct"]
     except Exception as e:
