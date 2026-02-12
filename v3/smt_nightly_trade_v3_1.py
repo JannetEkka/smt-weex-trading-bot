@@ -2757,10 +2757,10 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         tp_label = "NORMAL"
     
     tp_pct_raw = round(base_tp * tp_multiplier, 2)
-    # Floor: TP must be at least 2x SL for positive expectancy
-    tp_pct_raw = max(tp_pct_raw, sl_pct_raw * 2.0)
-    # Cap: TP max 15% (avoid unrealistic targets)
-    tp_pct_raw = min(tp_pct_raw, 15.0)
+    # Floor: TP must be at least 1.5x SL for positive expectancy
+    tp_pct_raw = max(tp_pct_raw, sl_pct_raw * 1.5)
+
+
     tp_pct_raw = min(tp_pct_raw, 7.0)
     print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% ({tp_label}, F&G={fg_val}, base={base_tp}%, mult={tp_multiplier}x)")
     
