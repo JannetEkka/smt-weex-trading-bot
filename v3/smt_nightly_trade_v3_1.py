@@ -1524,7 +1524,7 @@ Respond with JSON only:
             
         )
         
-        response = _gemini_with_timeout(client, "gemini-2.5-flash", combined_prompt, grounding_config, timeout=120)
+        response = _gemini_with_timeout(client, "gemini-2.5-flash", combined_prompt, grounding_config, timeout=60)
         
         clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         data = json.loads(clean_text)
@@ -2037,6 +2037,14 @@ class JudgePersona:
         pnl_pct = competition_status.get("pnl_pct", 0)
         
         # Build the prompt
+        # V3.1.63: Build trade history summary for Judge
+        try:
+            from smt_daemon_v3_1 import get_trade_history_summary
+            _hist_tracker = TradeTracker(state_file="trade_state_v3_1_7.json")
+            trade_history_summary = get_trade_history_summary(_hist_tracker)
+        except Exception:
+            trade_history_summary = "Trade history unavailable."
+        
         prompt = f"""You are the AI Judge for a crypto futures trading bot in a live competition (real money).
 Your job: analyze all signals and decide the SINGLE BEST action for {pair} right now.
 
@@ -2119,12 +2127,15 @@ Respond with JSON ONLY (no markdown, no backticks):
                 temperature=0.1,
             )
             
-            response = _gemini_with_timeout(client, "gemini-2.5-flash", prompt, config, timeout=120)
+            response = _gemini_with_timeout(client, "gemini-2.5-flash", prompt, config, timeout=60)
             
             clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
             data = json.loads(clean_text)
             
             decision = data.get("decision", "WAIT").upper() if data.get("decision") else "WAIT"
+            raw_conf = data.get("confidence")
+            confidence = min(0.95, max(0.0, float(raw_conf))) if raw_conf is not None else 0.0
+            reasoning = data.get("reasoning") or "Gemini Judge decision"
             
             # V3.1.63 ANTI-WAIT OVERRIDE: If Gemini says WAIT but confidence >= 80%
             # and reasoning clearly indicates a direction, override the WAIT.
@@ -2140,9 +2151,6 @@ Respond with JSON ONLY (no markdown, no backticks):
                 elif short_words >= 2 and long_words == 0:
                     decision = "SHORT"
                     print(f"  [JUDGE] V3.1.63 ANTI-WAIT OVERRIDE: WAIT->SHORT (conf={confidence:.0%}, reasoning leans SHORT)")
-            raw_conf = data.get("confidence")
-            confidence = min(0.95, max(0.0, float(raw_conf))) if raw_conf is not None else 0.0
-            reasoning = data.get("reasoning") or "Gemini Judge decision"
             raw_tp = data.get("tp_pct")
             tp_pct = float(raw_tp) if raw_tp is not None else tier_config["tp_pct"]
             raw_sl = data.get("sl_pct")
