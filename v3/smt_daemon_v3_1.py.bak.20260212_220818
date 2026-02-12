@@ -875,16 +875,12 @@ def check_trading_signals():
                     )
                     continue
 
-                # V3.1.68: INTER-CYCLE COOLDOWN (not intra-cycle)
-                # Only block if the last trade was from a PREVIOUS cycle
+                # V3.1.65: GLOBAL TRADE COOLDOWN CHECK
                 _now_cooldown = time.time()
-                _cooldown_elapsed = _now_cooldown - _last_trade_opened_at
-                if _cooldown_elapsed < GLOBAL_TRADE_COOLDOWN and _cooldown_elapsed > 120:
-                    # More than 2min since last trade = different cycle, apply cooldown
-                    _cd_remaining = GLOBAL_TRADE_COOLDOWN - _cooldown_elapsed
+                if _now_cooldown - _last_trade_opened_at < GLOBAL_TRADE_COOLDOWN:
+                    _cd_remaining = GLOBAL_TRADE_COOLDOWN - (_now_cooldown - _last_trade_opened_at)
                     logger.info(f"GLOBAL COOLDOWN: {_cd_remaining:.0f}s remaining, skipping {opportunity['pair']}")
                     continue
-                # Within same cycle (< 2min gap) = allow multiple trades
 
                 tier = opportunity["tier"]
                 tier_config = get_tier_config(tier)
@@ -1044,7 +1040,7 @@ def check_trading_signals():
                 except Exception as e:
                     logger.error(f"Error executing {pair}: {e}")
                 
-                time.sleep(3)  # V3.1.68: 3s delay between trades (Gemini rate limit)
+                time.sleep(1)  # Small delay between trades
             
             if trades_executed > 0:
                 logger.info(f"")
@@ -2453,7 +2449,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.68 - SNIPER MODE: inter-cycle cooldown, Gemini rate limit fix, tighter TP")
+    logger.info("SMT Daemon V3.1.67 - SNIPER MODE + RECOVERY: regime veto fix, realistic TP, aggressive slots")
     logger.info("=" * 60)
     logger.info("V3.1.67 SNIPER MODE (RECOVERED):")
     logger.info("  - WHALE: CryptOracle for ALL 8 pairs (Etherscan removed)")
