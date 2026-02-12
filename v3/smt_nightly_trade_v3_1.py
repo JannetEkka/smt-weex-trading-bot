@@ -2761,7 +2761,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     tp_pct_raw = max(tp_pct_raw, sl_pct_raw * 2.0)
     # Cap: TP max 15% (avoid unrealistic targets)
     tp_pct_raw = min(tp_pct_raw, 15.0)
-    
+    tp_pct_raw = min(tp_pct_raw, 7.0)
     print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% ({tp_label}, F&G={fg_val}, base={base_tp}%, mult={tp_multiplier}x)")
     
     tp_pct = tp_pct_raw / 100
