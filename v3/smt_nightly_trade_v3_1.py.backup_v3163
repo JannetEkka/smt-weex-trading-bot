@@ -828,7 +828,7 @@ MAX_LEVERAGE = 20
 MAX_OPEN_POSITIONS = 3  # V3.1.63: SNIPER - fewer, bigger, better positions
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
-MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.1.64: SNIPER++ - higher conviction for endgame
+MIN_CONFIDENCE_TO_TRADE = 0.80  # V3.1.63: SNIPER - only high-conviction trades
 
 # ============================================================
 # V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
@@ -2137,47 +2137,28 @@ Respond with JSON ONLY (no markdown, no backticks):
             confidence = min(0.95, max(0.0, float(raw_conf))) if raw_conf is not None else 0.0
             reasoning = data.get("reasoning") or "Gemini Judge decision"
             
-            # V3.1.64 ANTI-WAIT V2: Two-layer override
-            # Layer 1: If 2+ personas agree on direction at >= 70% each, force that direction
-            # Layer 2: Fall back to reasoning word-count (V3.1.63 method)
-            if decision == "WAIT" and confidence >= 0.75:
-                # Layer 1: Persona consensus override
-                _long_voters = [v for v in persona_votes if v["signal"] == "LONG" and v["confidence"] >= 0.70]
-                _short_voters = [v for v in persona_votes if v["signal"] == "SHORT" and v["confidence"] >= 0.70]
-                
-                if len(_long_voters) >= 2 and len(_short_voters) == 0:
+            # V3.1.63 ANTI-WAIT OVERRIDE: If Gemini says WAIT but confidence >= 80%
+            # and reasoning clearly indicates a direction, override the WAIT.
+            # This catches cases where Gemini hedges with WAIT despite strong signals.
+            if decision == "WAIT" and confidence >= 0.80:
+                reasoning_lower = reasoning.lower() if reasoning else ""
+                # Check if reasoning text leans heavily toward a direction
+                long_words = sum(1 for w in ["long", "buy", "bullish", "accumulation", "oversold", "bounce"] if w in reasoning_lower)
+                short_words = sum(1 for w in ["short", "sell", "bearish", "distribution", "overbought", "dump"] if w in reasoning_lower)
+                if long_words >= 2 and short_words == 0:
                     decision = "LONG"
-                    _voter_names = [v["persona"] for v in _long_voters]
-                    print(f"  [JUDGE] V3.1.64 ANTI-WAIT: WAIT->LONG (consensus: {_voter_names}, conf={confidence:.0%})")
-                elif len(_short_voters) >= 2 and len(_long_voters) == 0:
+                    print(f"  [JUDGE] V3.1.63 ANTI-WAIT OVERRIDE: WAIT->LONG (conf={confidence:.0%}, reasoning leans LONG)")
+                elif short_words >= 2 and long_words == 0:
                     decision = "SHORT"
-                    _voter_names = [v["persona"] for v in _short_voters]
-                    print(f"  [JUDGE] V3.1.64 ANTI-WAIT: WAIT->SHORT (consensus: {_voter_names}, conf={confidence:.0%})")
-                else:
-                    # Layer 2: Reasoning text analysis (fallback)
-                    reasoning_lower = reasoning.lower() if reasoning else ""
-                    long_words = sum(1 for w in ["long", "buy", "bullish", "accumulation", "oversold", "bounce", "support"] if w in reasoning_lower)
-                    short_words = sum(1 for w in ["short", "sell", "bearish", "distribution", "overbought", "dump", "resistance"] if w in reasoning_lower)
-                    if long_words >= 2 and short_words == 0:
-                        decision = "LONG"
-                        print(f"  [JUDGE] V3.1.64 ANTI-WAIT: WAIT->LONG (reasoning: {long_words} long words, conf={confidence:.0%})")
-                    elif short_words >= 2 and long_words == 0:
-                        decision = "SHORT"
-                        print(f"  [JUDGE] V3.1.64 ANTI-WAIT: WAIT->SHORT (reasoning: {short_words} short words, conf={confidence:.0%})")
+                    print(f"  [JUDGE] V3.1.63 ANTI-WAIT OVERRIDE: WAIT->SHORT (conf={confidence:.0%}, reasoning leans SHORT)")
             raw_tp = data.get("tp_pct")
             tp_pct = float(raw_tp) if raw_tp is not None else tier_config["tp_pct"]
             raw_sl = data.get("sl_pct")
             sl_pct = float(raw_sl) if raw_sl is not None else tier_config["sl_pct"]
             
-            # V3.1.64: VOL-ADJUSTED SL - widen in extreme fear to survive wicks
-            _fg_for_sl = regime.get("fear_greed", 50) if regime else 50
-            if _fg_for_sl < 15:
-                sl_pct = sl_pct * 1.5  # 3% -> 4.5% in capitulation
-                print(f"  [JUDGE] V3.1.64 VOL-SL: F&G={_fg_for_sl}, widened SL to {sl_pct:.1f}%")
-            
-            # Clamp TP/SL to reasonable ranges (wider max for vol-adjusted)
+            # Clamp TP/SL to reasonable ranges
             tp_pct = max(1.5, min(10.0, tp_pct))
-            sl_pct = max(1.5, min(7.0, sl_pct))
+            sl_pct = max(1.5, min(6.0, sl_pct))
             
             print(f"  [JUDGE] V3.1.39 Gemini: {decision} ({confidence:.0%})")
             print(f"  [JUDGE] Reasoning: {reasoning[:150]}")

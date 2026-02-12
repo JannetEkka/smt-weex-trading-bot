@@ -740,9 +740,6 @@ def check_trading_signals():
             # V3.1.19: Use smart slot calculation (same as above)
             current_positions = len(open_positions)
             available_slots = effective_max_positions - current_positions
-            # V3.1.64: HARD CAP - never exceed BASE_SLOTS total regardless of mode
-            if current_positions >= BASE_SLOTS:
-                available_slots = 0
             
             # V3.1.26: Track confidence override slots used
             confidence_slots_used = 0
@@ -758,7 +755,7 @@ def check_trading_signals():
                 first_fg = trade_opportunities[0]["decision"].get("fear_greed", 50)
                 if first_fg < 15:
                     MAX_SAME_DIRECTION = 7  # V3.1.56: capitulation allows 7
-                    logger.info(f"CAPITULATION MODE: F&G={first_fg}, keeping hard cap at BASE_SLOTS={BASE_SLOTS}")
+                    logger.info(f"CAPITULATION MODE: F&G={first_fg}, raising directional limit to 7")
             
             for opportunity in trade_opportunities:
                 confidence = opportunity["decision"]["confidence"]
@@ -1271,37 +1268,30 @@ def monitor_positions():
                 })
                 if len(_pnl_history[symbol]) > _PNL_HISTORY_MAX:
                     _pnl_history[symbol] = _pnl_history[symbol][-_PNL_HISTORY_MAX:]
-                # V3.1.64 PROFIT LOCK EXIT - Aggressive peak capture
-                # At 18x leverage: 1% price move = 18% ROE. Lock profits early.
-                # Don't wait for 15% TP when you can bank 1% repeatedly.
+                # V3.1.63 SMART PEAK EXIT - Re-enabled with intelligent thresholds
+                # At 20x leverage: 1.5% price move = 30% ROE. Capturing half a peak is better
+                # than watching it fade to zero waiting for a 15% TP that may never come.
                 fade_pct = peak_pnl_pct - pnl_pct if peak_pnl_pct > 0 else 0
                 
-                # Rule 0 (NEW): PROFIT LOCK - peak >= 1.0%, faded 40%+, still green
-                # Example: peaked 1.5%, now at 0.85% (faded 43%) -> CLOSE and bank 0.85%
-                if not should_exit and peak_pnl_pct >= 1.0 and pnl_pct < peak_pnl_pct * 0.60 and pnl_pct > 0.15:
-                    should_exit = True
-                    exit_reason = f"V3.1.64_profit_lock T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%, locking gains)"
-                    print(f"  [PROFIT LOCK] {symbol}: {exit_reason}")
-                
                 # Rule 1: High peak, deep fade -> lock profits
-                # If peaked > 1.5% and dropped more than 50% from peak
-                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0:
+                # If peaked > 2.0% and dropped more than 50% from peak
+                if not should_exit and peak_pnl_pct >= 2.0 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0:
                     should_exit = True
-                    exit_reason = f"V3.1.64_peak_fade_high T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
+                    exit_reason = f"V3.1.63_peak_fade_high T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
                     print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
                 
-                # Rule 2: Moderate peak, severe fade -> lock profits  
-                # If peaked > 1.0% and dropped more than 65% from peak
-                elif not should_exit and peak_pnl_pct >= 1.0 and pnl_pct < peak_pnl_pct * 0.35 and pnl_pct > 0:
+                # Rule 2: Moderate peak, severe fade -> lock profits
+                # If peaked > 1.5% and dropped more than 60% from peak
+                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct < peak_pnl_pct * 0.40 and pnl_pct > 0:
                     should_exit = True
-                    exit_reason = f"V3.1.64_peak_fade_mod T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
+                    exit_reason = f"V3.1.63_peak_fade_mod T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
                     print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
                 
                 # Rule 3: Any peak that went negative -> thesis broken
-                # If peaked > 0.8% but now negative (lowered from 1.0%)
-                elif not should_exit and peak_pnl_pct >= 0.8 and pnl_pct <= 0:
+                # If peaked > 1.0% but now negative
+                elif not should_exit and peak_pnl_pct >= 1.0 and pnl_pct <= 0:
                     should_exit = True
-                    exit_reason = f"V3.1.64_peak_to_loss T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}%"
+                    exit_reason = f"V3.1.63_peak_to_loss T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}%"
                     print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
                 
 
@@ -1676,7 +1666,7 @@ Max 5 positions in the same direction normally. If 6+ LONGs or 6+ SHORTs, close 
 EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move all alts together.
 
 RULE 3 - LET WINNERS RUN:
-PROFIT LOCK RULE (V3.1.64): If a position peaked > 1.0% and faded > 40% from peak (still green), CLOSE IT to lock profit. At 18x leverage, 1% captured = 18% ROE. Do NOT let winners become losers. Banking small wins repeatedly beats waiting for huge TPs.
+PEAK FADE RULE (V3.1.63): If a position peaked > 1.5% and faded > 50% from peak, CLOSE IT to lock profit. At 20x leverage, 1% captured = 20% ROE. Do NOT let winners become losers.
 Closing at +0.5% when TP is at +6% means we capture $15 instead of $180.
 Only close a WINNING position if it has been held past max_hold_hours.
 
@@ -2294,16 +2284,8 @@ def regime_aware_exit_check():
         
         regime = get_market_regime_for_exit()
         
-        # V3.1.64: Inject F&G into regime for fear shield logic
-        try:
-            from smt_nightly_trade_v3_1 import get_fear_greed_index
-            _fg_regime = get_fear_greed_index()
-            regime["fear_greed"] = _fg_regime.get("value", 50)
-        except:
-            regime["fear_greed"] = 50
-        
         spike_msg = " SPIKE!" if regime.get('spike') else ""
-        logger.info(f"[REGIME] Market: {regime['regime']} | 1h: {regime.get('change_1h', 0):+.1f}% | 4h: {regime['change_4h']:+.1f}% | 24h: {regime['change_24h']:+.1f}%{spike_msg} | F&G: {regime.get('fear_greed', 50)}")
+        logger.info(f"[REGIME] Market: {regime['regime']} | 1h: {regime.get('change_1h', 0):+.1f}% | 4h: {regime['change_4h']:+.1f}% | 24h: {regime['change_24h']:+.1f}%{spike_msg}")
         
         # V3.1.10: Log position balance
         long_pnl = sum(float(p.get('unrealized_pnl', 0)) for p in positions if p['side'] == 'LONG')
@@ -2347,13 +2329,6 @@ def regime_aware_exit_check():
             
             # V3.1.20 PREDATOR: No regime exits within first 4 hours - let trades breathe
             if hours_open < 4:
-                continue
-            
-            # V3.1.64: EXTREME FEAR SHIELD - Don't cut profitable positions in capitulation
-            # In F&G < 20, regime bounces are noise. Trust whale-aligned positions.
-            _fg_for_regime = regime.get("fear_greed", 50)
-            if _fg_for_regime < 20 and pnl > 0:
-                logger.info(f"[REGIME] FEAR SHIELD: Skipping {symbol_clean} {side} (profitable ${pnl:+.1f} in F&G={_fg_for_regime})")
                 continue
             
             # V3.1.25: SPIKE detection - fast exit on sudden moves
@@ -2473,10 +2448,7 @@ def run_daemon():
     logger.info("V3.1.63 SNIPER MODE:")
     logger.info("  - WHALE: CryptOracle for ALL 8 pairs (Etherscan removed)")
     logger.info("  - Judge: WHALE+FLOW co-primary signals (was FLOW-only)")
-    logger.info("  - V3.1.64 PROFIT LOCK: peak>=1.0%, fade>40% = close (bank small wins)")
-    logger.info("  - V3.1.64 FEAR SHIELD: skip regime exit for profitable positions when F&G<20")
-    logger.info("  - V3.1.64 VOL-ADJUSTED SL: 1.5x wider SL when F&G<15")
-    logger.info("  - V3.1.64 HARD CAP: MAX_POSITIONS strictly enforced, no capitulation override")
+    logger.info("  - Smart peak exit: re-enabled (peak>1.5%, fade>50% = close)")
     logger.info("  - Max 3 positions, 80% confidence floor")
     logger.info("  - Anti-WAIT override + trade history to Judge")
     logger.info("Tier Configuration:")
