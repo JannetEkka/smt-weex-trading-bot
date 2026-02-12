@@ -325,7 +325,7 @@ analyzer = MultiPersonaAnalyzer()
 
 # V3.1.65: GLOBAL TRADE COOLDOWN - prevent fee bleed from rapid trading
 _last_trade_opened_at = 0  # unix timestamp
-GLOBAL_TRADE_COOLDOWN = 900  # V3.1.66c: 15 minutes (was 30min, too slow for competition)
+GLOBAL_TRADE_COOLDOWN = 1800  # 30 minutes between ANY new trade
 
 
 # ============================================================
@@ -371,7 +371,6 @@ def check_trading_signals():
     WEEX supports bidirectional positions on same pair!
     """
     
-    global _last_trade_opened_at
     run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     logger.info("=" * 60)
     logger.info(f"V3.1.9 SIGNAL CHECK - {run_timestamp}")
@@ -691,10 +690,7 @@ def check_trading_signals():
                 if RL_ENABLED and rl_collector:
                     try:
                         # Get regime data for RL logging
-                        try:
-                            rl_regime = get_market_regime_for_exit()
-                        except Exception:
-                            rl_regime = {"change_24h": 0, "change_4h": 0, "regime": "NEUTRAL"}
+                        rl_regime = get_market_regime_for_exit()
                         
                         persona_dict = {}
                         for v in decision.get("persona_votes", []):
@@ -782,9 +778,89 @@ def check_trading_signals():
                         logger.info(f"CONFIDENCE OVERRIDE: {confidence:.0%} >= 85% - using conviction slot {confidence_slots_used + 1}/{MAX_CONFIDENCE_SLOTS}")
                         confidence_slots_used += 1
                     else:
-                        # V3.1.66: SWAP DISABLED - realizing losses + fees kills equity
-                        logger.info(f"Max positions reached, skipping {opportunity['pair']} (swap disabled)")
-                        break
+                        # V3.1.65: SWAP DISABLED - realizing losses + fees kills equity
+                        SWAP_MIN_CONFIDENCE = 999  # effectively disabled
+                        if False and confidence >= SWAP_MIN_CONFIDENCE:
+                            signal_dir = opportunity['decision']['decision']
+                            # Find worst same-direction position that is losing
+                            worst_pos = None
+                            worst_pnl = 0
+                            for p in open_positions:
+                                p_side = p.get('side', '').upper()
+                                p_pnl = float(p.get('unrealized_pnl', 0))
+                                p_sym = p.get('symbol', '')
+                                new_sym = opportunity['pair_info']['symbol']
+                                # Only swap same direction, only swap losers, never swap the same symbol
+                                if p_side == signal_dir and p_pnl < 0 and p_sym != new_sym:
+                                    if worst_pos is None or p_pnl < worst_pnl:
+                                        worst_pos = p
+                                        worst_pnl = p_pnl
+                            
+                            if worst_pos:
+                                w_sym = worst_pos.get('symbol', '')
+                                w_side = worst_pos.get('side', '')
+                                w_size = float(worst_pos.get('size', 0))
+                                w_entry = float(worst_pos.get('entry_price', 0))
+                                w_clean = w_sym.replace('cmt_', '').replace('usdt', '').upper()
+                                new_pair = opportunity['pair']
+                                
+                                logger.warning(f"""SWAP: Closing {w_clean} {w_side} (PnL: ${worst_pnl:.2f}) to open {new_pair} {signal_dir} ({confidence:.0%})""")
+                                
+                                try:
+                                    from smt_nightly_trade_v3_1 import close_position_manually, cancel_all_orders_for_symbol
+                                    
+                                    # Cancel existing orders on the position being swapped
+                                    cancel_all_orders_for_symbol(w_sym)
+                                    time.sleep(0.5)
+                                    
+                                    # Close the worst position
+                                    close_result = close_position_manually(w_sym, w_side, w_size)
+                                    close_oid = close_result.get('order_id')
+                                    
+                                    if close_oid:
+                                        logger.info(f"SWAP: Closed {w_clean} {w_side}, order {close_oid}")
+                                        
+                                        # Log the swap to WEEX
+                                        upload_ai_log_to_weex(
+                                            stage=f"V3.1.42 SWAP: Close {w_side} {w_clean} for {new_pair}",
+                                            input_data={
+                                                'closed_symbol': w_sym,
+                                                'closed_side': w_side,
+                                                'closed_pnl': worst_pnl,
+                                                'closed_entry': w_entry,
+                                                'new_pair': new_pair,
+                                                'new_signal': signal_dir,
+                                                'new_confidence': confidence,
+                                            },
+                                            output_data={
+                                                'action': 'POSITION_SWAP',
+                                                'close_order_id': close_oid,
+                                            },
+                                            explanation=f"AI Swap: {w_clean} {w_side} (PnL: ${worst_pnl:.2f}) replaced by {new_pair} {signal_dir} at {confidence:.0%} conviction. Upgrading portfolio quality."
+                                        )
+                                        
+                                        # Update tracker
+                                        try:
+                                            tracker.close_trade(w_sym, {'reason': f'swap_for_{new_pair}', 'pnl': worst_pnl})
+                                        except:
+                                            pass
+                                        
+                                        state.trades_closed += 1
+                                        time.sleep(1)
+                                        balance = get_balance()
+                                        # Don't break - let the new trade execute in the normal flow below
+                                    else:
+                                        logger.warning(f"SWAP: Failed to close {w_clean}, skipping swap")
+                                        continue
+                                except Exception as e:
+                                    logger.error(f"SWAP error: {e}")
+                                    continue
+                            else:
+                                logger.info(f"Max positions reached, no losing same-direction position to swap, skipping")
+                                break
+                        else:
+                            logger.info(f"Max positions reached, {confidence:.0%} < 80% swap threshold, skipping")
+                            break
                 
                 # V3.1.41: DIRECTIONAL LIMIT CHECK
                 sig_check = opportunity["decision"]["decision"]
@@ -830,13 +906,12 @@ def check_trading_signals():
                 else:
                     logger.info(f"SESSION [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} >= {session_min_conf:.0%}, proceeding {opportunity['pair']}")
                 
-                # V3.1.66: REGIME VETO - code-level block on counter-regime trades
-                # get_market_regime_for_exit is defined in this file, no import needed
+                # V3.1.65: REGIME VETO - code-level block on counter-regime trades
                 try:
-                    _regime_now = get_market_regime_for_exit()
-                except Exception as _re:
-                    logger.warning(f"REGIME VETO: regime check failed ({_re}), allowing trade")
-                    _regime_now = {"regime": "NEUTRAL"}
+                    from smt_daemon_v3_1 import get_market_regime_for_exit
+                except ImportError:
+                    pass
+                _regime_now = get_market_regime_for_exit()
                 _regime_label = _regime_now.get("regime", "NEUTRAL")
                 _opp_signal = opportunity["decision"]["decision"]
                 _regime_vetoed = False
@@ -2449,9 +2524,9 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.67 - SNIPER MODE + RECOVERY: regime veto fix, realistic TP, aggressive slots")
+    logger.info("SMT Daemon V3.1.63 - SNIPER MODE: 3 positions, 80% floor, WHALE+FLOW co-primary")
     logger.info("=" * 60)
-    logger.info("V3.1.67 SNIPER MODE (RECOVERED):")
+    logger.info("V3.1.63 SNIPER MODE:")
     logger.info("  - WHALE: CryptOracle for ALL 8 pairs (Etherscan removed)")
     logger.info("  - Judge: WHALE+FLOW co-primary signals (was FLOW-only)")
     logger.info("  - V3.1.64 PROFIT LOCK: peak>=1.0%, fade>40% = close (bank small wins)")
@@ -2532,7 +2607,6 @@ def run_daemon():
             break
         except Exception as e:
             logger.error(f"Loop error: {e}")
-            logger.error(traceback.format_exc())
             state.errors += 1
             time.sleep(30)
     

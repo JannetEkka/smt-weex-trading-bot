@@ -1,5 +1,5 @@
 #!/bin/bash
-TIMEOUT=600
+TIMEOUT=1200
 
 while true; do
     sleep 60

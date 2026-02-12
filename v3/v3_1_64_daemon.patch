@@ -1,0 +1,22 @@
+--- smt_daemon_v3_1.py
++++ smt_daemon_v3_1.py
+@@ -35,6 +35,8 @@
++from concurrent.futures import ThreadPoolExecutor
++import sys
+ 
+@@ -410,1 +412,14 @@
+-    for pair in TRADING_PAIRS:
++    logger.info(f"Starting parallel analysis for {len(TRADING_PAIRS)} pairs...")
++    def analyze_and_trade(pair):
++        try:
++            execute_trade_pipeline(pair)
++            sys.stdout.flush()
++        except Exception as e:
++            logger.error(f"Error analyzing {pair}: {e}")
++
++    with ThreadPoolExecutor(max_workers=3) as executor:
++        executor.map(analyze_and_trade, TRADING_PAIRS.keys())
++
++def get_market_regime_for_exit():
++    from smt_nightly_trade_v3_1 import REGIME_STATE
++    return REGIME_STATE.get("current_regime", "NEUTRAL")

@@ -1,0 +1,13 @@
+--- smt_nightly_trade_v3_1.py
++++ smt_nightly_trade_v3_1.py
+@@ -95 +95,9 @@
+-    time.sleep(GEMINI_CALL_DELAY - elapsed)
++    sleep_time = GEMINI_CALL_DELAY - elapsed
++    for i in range(int(sleep_time) + 1):
++        print(f"  [HEARTBEAT] Gemini Cooling... {int(sleep_time)-i}s")
++        sys.stdout.flush()
++        time.sleep(1)
++
++def check_profit_lock_v64(current_pnl, peak_pnl):
++    if peak_pnl >= 1.0:
++        fade_limit = peak_pnl * 0.60

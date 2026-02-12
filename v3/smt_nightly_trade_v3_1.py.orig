@@ -1526,17 +1526,7 @@ Respond with JSON only:
         
         response = _gemini_with_timeout(client, "gemini-2.5-flash", combined_prompt, grounding_config, timeout=60)
         
-        # V3.1.67: Validate Gemini response is not empty
-        if not response or not hasattr(response, 'text') or not response.text:
-            print(f"  [SENTIMENT] Empty response from Gemini for {pair}")
-            return self._fallback_result(pair, "Empty Gemini response")
-        
         clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
-        
-        if not clean_text:
-            print(f"  [SENTIMENT] Empty text after cleanup for {pair}")
-            return self._fallback_result(pair, "Empty response text")
-        
         data = json.loads(clean_text)
         
         signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"

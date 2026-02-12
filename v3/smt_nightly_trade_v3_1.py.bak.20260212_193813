@@ -1526,17 +1526,7 @@ Respond with JSON only:
         
         response = _gemini_with_timeout(client, "gemini-2.5-flash", combined_prompt, grounding_config, timeout=60)
         
-        # V3.1.67: Validate Gemini response is not empty
-        if not response or not hasattr(response, 'text') or not response.text:
-            print(f"  [SENTIMENT] Empty response from Gemini for {pair}")
-            return self._fallback_result(pair, "Empty Gemini response")
-        
         clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
-        
-        if not clean_text:
-            print(f"  [SENTIMENT] Empty text after cleanup for {pair}")
-            return self._fallback_result(pair, "Empty response text")
-        
         data = json.loads(clean_text)
         
         signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
@@ -2742,17 +2732,37 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         sl_pct_raw = tier_config["sl_pct"]
         print(f"  [ATR-SL] Error ({e}), using tier SL: {sl_pct_raw}%")
     
-    # V3.1.66b: REALISTIC TP - tier-based, no F&G scaling
-    # F&G scaling caused 9% TPs in capitulation (unrealistic, never hit)
-    # TP is now strictly tier-based with a sane floor
-    base_tp = tier_config["tp_pct"]  # T1=5%, T2=6%, T3=7%
-    tp_floor = sl_pct_raw * 1.2  # Minimum 1.2x SL for positive expectancy
-    tp_pct_raw = max(base_tp, tp_floor)
-    # Hard cap per tier (no exceptions)
-    _tier_tp_caps = {1: 5.0, 2: 6.0, 3: 7.0}
-    _tp_cap = _tier_tp_caps.get(tier, 7.0)
-    tp_pct_raw = min(tp_pct_raw, _tp_cap)
-    print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% (Tier {tier} cap={_tp_cap}%, floor=SL*1.2={tp_floor:.2f}%)")
+    # V3.1.51: Regime-scaled TP
+    try:
+        fg_data = get_fear_greed_index()
+        fg_val = fg_data.get("value", 50)
+    except:
+        fg_val = 50
+    
+    base_tp = tier_config["tp_pct"]
+    if fg_val < 15:
+        tp_multiplier = 1.8
+        tp_label = "CAPITULATION_AGGRESSIVE"
+    elif fg_val < 30:
+        tp_multiplier = 1.25
+        tp_label = "FEAR"
+    elif fg_val > 80:
+        tp_multiplier = 0.50
+        tp_label = "EXTREME_GREED"
+    elif fg_val > 60:
+        tp_multiplier = 0.65
+        tp_label = "GREED"
+    else:
+        tp_multiplier = 1.0
+        tp_label = "NORMAL"
+    
+    tp_pct_raw = round(base_tp * tp_multiplier, 2)
+    # Floor: TP must be at least 1.5x SL for positive expectancy
+    tp_pct_raw = max(tp_pct_raw, sl_pct_raw * 1.5)
+
+
+    tp_pct_raw = min(tp_pct_raw, 7.0)
+    print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% ({tp_label}, F&G={fg_val}, base={base_tp}%, mult={tp_multiplier}x)")
     
     tp_pct = tp_pct_raw / 100
     sl_pct = sl_pct_raw / 100
