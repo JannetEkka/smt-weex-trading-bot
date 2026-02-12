@@ -253,40 +253,7 @@ def _gemini_with_timeout(client, model, contents, config, timeout=120):
             contents=contents,
             config=config
         )
-        try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
-            print(f"  [GEMINI TIMEOUT] Call exceeded {timeout}s, cancelling")
-            future.cancel()
-            raise TimeoutError(f"Gemini call timed out after {timeout}s")
-
-
-def _gemini_full_call(model, contents, config, timeout=90, use_grounding=False):
-    """V3.1.69: BULLETPROOF Gemini call - wraps EVERYTHING in one timeout.
-    
-    This wraps client creation + generate_content in a single thread timeout.
-    Prevents hangs from genai.Client() initialization or network issues.
-    """
-    import concurrent.futures
-    
-    def _do_call():
-        from google import genai
-        from google.genai.types import GenerateContentConfig
-        client = genai.Client()
-        return client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=config
-        )
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_do_call)
-        try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
-            print(f"  [GEMINI TIMEOUT] Full call exceeded {timeout}s")
-            future.cancel()
-            raise TimeoutError(f"Gemini full call timed out after {timeout}s")
+        return future.result(timeout=timeout)
 
 
 
@@ -1530,7 +1497,10 @@ class SentimentPersona:
     
     def _analyze_with_retry(self, pair: str, pair_info: Dict, competition_status: Dict) -> Dict:
         """Single API call combining grounding + analysis (V3.1.21)"""
+        from google import genai
         from google.genai.types import GenerateContentConfig, GoogleSearch, Tool
+        
+        client = genai.Client()
         
         # V3.1.21: COMBINED PROMPT - One API call instead of two!
         combined_prompt = f"""Search for "{pair} cryptocurrency price action last 24 hours" and analyze:
@@ -1554,7 +1524,7 @@ Respond with JSON only:
             
         )
         
-        response = _gemini_full_call("gemini-2.5-flash", combined_prompt, grounding_config, timeout=75)
+        response = _gemini_with_timeout(client, "gemini-2.5-flash", combined_prompt, grounding_config, timeout=60)
         
         # V3.1.68: Validate Gemini response - retry once on empty
         if not response or not hasattr(response, 'text') or not response.text:
@@ -1562,7 +1532,7 @@ Respond with JSON only:
             import time as _time
             _time.sleep(5)
             try:
-                response = _gemini_full_call("gemini-2.5-flash", combined_prompt, grounding_config, timeout=75)
+                response = _gemini_with_timeout(client, "gemini-2.5-flash", combined_prompt, grounding_config, timeout=60)
             except Exception:
                 pass
             if not response or not hasattr(response, 'text') or not response.text:
@@ -2166,13 +2136,16 @@ Respond with JSON ONLY (no markdown, no backticks):
         try:
             _rate_limit_gemini()
             
+            from google import genai
             from google.genai.types import GenerateContentConfig
+            
+            client = genai.Client()
             
             config = GenerateContentConfig(
                 temperature=0.1,
             )
             
-            response = _gemini_full_call("gemini-2.5-flash", prompt, config, timeout=75)
+            response = _gemini_with_timeout(client, "gemini-2.5-flash", prompt, config, timeout=60)
             
             clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
             data = json.loads(clean_text)

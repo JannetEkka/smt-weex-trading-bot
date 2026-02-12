@@ -289,36 +289,7 @@ def _gemini_with_timeout(client, model, contents, config, timeout=120):
             contents=contents,
             config=config
         )
-        try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
-            logger.error(f"Gemini call timed out after {timeout}s")
-            future.cancel()
-            raise TimeoutError(f"Gemini call timed out after {timeout}s")
-
-
-def _gemini_full_call_daemon(model, contents, config, timeout=90):
-    """V3.1.69: BULLETPROOF Gemini call for daemon - wraps EVERYTHING."""
-    import concurrent.futures
-    
-    def _do_call():
-        from google import genai
-        from google.genai.types import GenerateContentConfig
-        client = genai.Client()
-        return client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=config
-        )
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_do_call)
-        try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
-            logger.error(f"Gemini full call timed out after {timeout}s")
-            future.cancel()
-            raise TimeoutError(f"Gemini full call timed out after {timeout}s")
+        return future.result(timeout=timeout)
 
 class DaemonState:
     def __init__(self):
@@ -350,38 +321,6 @@ class DaemonState:
 
 state = DaemonState()
 tracker = TradeTracker(state_file="trade_state_v3_1_7.json")
-
-# ============================================================
-# V3.1.69: INTERNAL WATCHDOG - detect and recover from hangs
-# ============================================================
-import threading
-
-_last_progress_time = time.time()
-_progress_lock = threading.Lock()
-
-def _mark_progress():
-    """Called by main loop to indicate the daemon is making progress."""
-    global _last_progress_time
-    with _progress_lock:
-        _last_progress_time = time.time()
-
-def _internal_watchdog():
-    """Background thread that kills the process if it hangs > 10 minutes."""
-    HANG_TIMEOUT = 600  # 10 minutes without progress = hung
-    while True:
-        time.sleep(60)
-        with _progress_lock:
-            elapsed = time.time() - _last_progress_time
-        if elapsed > HANG_TIMEOUT:
-            logger.error(f"INTERNAL WATCHDOG: No progress for {elapsed:.0f}s. Force exit!")
-            logger.error("The external watchdog.sh will restart us.")
-            os._exit(1)  # Hard exit, watchdog.sh will restart
-
-# Start internal watchdog as daemon thread
-_watchdog_thread = threading.Thread(target=_internal_watchdog, daemon=True)
-_watchdog_thread.start()
-
-
 analyzer = MultiPersonaAnalyzer()
 
 # V3.1.65: GLOBAL TRADE COOLDOWN - prevent fee bleed from rapid trading
@@ -1798,11 +1737,13 @@ If nothing should be closed, return:
 
         _rate_limit_gemini()
         
+        from google import genai
         from google.genai.types import GenerateContentConfig
         
+        client = genai.Client()
         config = GenerateContentConfig(temperature=0.1)
         
-        response = _gemini_full_call_daemon("gemini-2.5-flash", prompt, config, timeout=90)
+        response = _gemini_with_timeout(client, "gemini-2.5-flash", prompt, config, timeout=120)
         
         clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         data = json.loads(clean_text)
@@ -2512,7 +2453,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.69 - SNIPER MODE: inter-cycle cooldown, Gemini rate limit fix, tighter TP")
+    logger.info("SMT Daemon V3.1.68 - SNIPER MODE: inter-cycle cooldown, Gemini rate limit fix, tighter TP")
     logger.info("=" * 60)
     logger.info("V3.1.67 SNIPER MODE (RECOVERED):")
     logger.info("  - WHALE: CryptOracle for ALL 8 pairs (Etherscan removed)")
@@ -2572,12 +2513,10 @@ def run_daemon():
             
             if now - last_signal >= SIGNAL_CHECK_INTERVAL:
                 check_trading_signals()
-                _mark_progress()
                 last_signal = now
             
             if now - last_position >= POSITION_MONITOR_INTERVAL:
                 monitor_positions()
-                _mark_progress()
                 resolve_opposite_sides()  # V3.1.55: Close losing side when both exist
                 regime_aware_exit_check()  # V3.1.9: Check for regime-fighting positions
                 gemini_portfolio_review()  # V3.1.55: Gemini reviews portfolio with whale-aware rules
@@ -2589,7 +2528,6 @@ def run_daemon():
             
             if now - last_health >= HEALTH_CHECK_INTERVAL:
                 log_health()
-                _mark_progress()
                 last_health = now
             
             time.sleep(5)
