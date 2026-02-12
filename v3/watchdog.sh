@@ -7,7 +7,7 @@ while true; do
     # If multiple daemons, kill all and restart one
     if [ "$DAEMON_COUNT" -gt 1 ]; then
         echo "$(date) | WATCHDOG: $DAEMON_COUNT daemons found. Killing all and restarting one..." >> ~/smt-weex-trading-bot/v3/logs/watchdog.log
-        pkill -f "smt_daemon_v3_1.py"
+        pkill -9 -f "smt_daemon_v3_1.py"
         sleep 5
         cd ~/smt-weex-trading-bot/v3
         nohup python3 smt_daemon_v3_1.py --force >> logs/daemon_v3_1_7_$(date +%Y%m%d).log 2>&1 &
@@ -30,7 +30,7 @@ while true; do
         DIFF=$((NOW - LAST_MOD))
         if [ $DIFF -gt $TIMEOUT ]; then
             echo "$(date) | WATCHDOG: Log stale for ${DIFF}s. Killing and restarting..." >> ~/smt-weex-trading-bot/v3/logs/watchdog.log
-            pkill -f "smt_daemon_v3_1.py"
+            pkill -9 -f "smt_daemon_v3_1.py"
             sleep 5
             cd ~/smt-weex-trading-bot/v3
             nohup python3 smt_daemon_v3_1.py --force >> logs/daemon_v3_1_7_$(date +%Y%m%d).log 2>&1 &
