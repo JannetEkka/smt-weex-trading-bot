@@ -30,7 +30,7 @@ LEVERAGE_MATRIX = {
 class LeverageManager:
     def __init__(self):
         self.MIN_LEVERAGE = 8
-        self.MAX_LEVERAGE = 18  # V3.1.59: Up from 15, but only for ultra-conf
+        self.MAX_LEVERAGE = 20  # V3.1.72: 20x for all trades in recovery
         self.MAX_POSITION_PCT = 0.35  # V3.1.59: Up from 0.20
         self.MIN_LIQUIDATION_DISTANCE = 4  # 4% min buffer above SL
 
