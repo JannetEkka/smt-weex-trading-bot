@@ -496,7 +496,7 @@ def check_trading_signals():
             if tracker.active_trades.get(symbol, {}).get('runner_triggered', False):
                 risk_free_count += 1
         
-        BASE_SLOTS = 5  # V3.1.71: RECOVERY - 5 positions for final push
+        BASE_SLOTS = 3  # V3.1.70: PREDATOR REVIVAL - 3 positions, high conviction only
         MAX_BONUS_SLOTS = 0  # V3.1.64a: DISABLED - hard cap is absolute
         bonus_slots = min(risk_free_count, MAX_BONUS_SLOTS)
         effective_max_positions = BASE_SLOTS + bonus_slots

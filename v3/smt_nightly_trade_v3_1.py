@@ -896,10 +896,12 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     jitter = random.uniform(0, delay * 0.1)
     return delay + jitter
 
+# V3.1.70 PREDATOR REVIVAL: Back to prelim discipline. Tight SLs, fast exits, high conviction only.
+# Prelims: 1.5% SL -> 566% ROI. Finals: 3% SL -> -70% drawdown. The data speaks.
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.03, "take_profit": 0.03, "trailing_stop": 0.015, "time_limit": 1440, "tp_pct": 3.0, "sl_pct": 3.0, "max_hold_hours": 24, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.03, "take_profit": 0.035, "trailing_stop": 0.018, "time_limit": 720, "tp_pct": 3.5, "sl_pct": 3.0, "max_hold_hours": 12, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.035, "take_profit": 0.04, "trailing_stop": 0.02, "time_limit": 360, "tp_pct": 4.0, "sl_pct": 3.0, "max_hold_hours": 6, "early_exit_hours": 999, "early_exit_loss_pct": -5.0, "force_exit_loss_pct": -5.0},
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.025, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 2.5, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.035, "trailing_stop": 0.015, "time_limit": 360, "tp_pct": 3.5, "sl_pct": 1.8, "max_hold_hours": 4, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
 }
 # Trading Pairs with correct tiers
 TRADING_PAIRS = {
@@ -2249,11 +2251,11 @@ Respond with JSON ONLY (no markdown, no backticks):
             raw_sl = data.get("sl_pct")
             sl_pct = float(raw_sl) if raw_sl is not None else tier_config["sl_pct"]
             
-            # V3.1.64: VOL-ADJUSTED SL - widen in extreme fear to survive wicks
-            _fg_for_sl = regime.get("fear_greed", 50) if regime else 50
-            if _fg_for_sl < 15:
-                sl_pct = sl_pct * 1.5  # 3% -> 4.5% in capitulation
-                print(f"  [JUDGE] V3.1.64 VOL-SL: F&G={_fg_for_sl}, widened SL to {sl_pct:.1f}%")
+            # V3.1.70: VOL-SL DISABLED - tight SLs are non-negotiable. Prelim discipline.
+            # _fg_for_sl = regime.get("fear_greed", 50) if regime else 50
+            # if _fg_for_sl < 15:
+            #     sl_pct = sl_pct * 1.5
+            #     print(f"  [JUDGE] V3.1.64 VOL-SL: F&G={_fg_for_sl}, widened SL to {sl_pct:.1f}%")
             
             # Clamp TP/SL to reasonable ranges (wider max for vol-adjusted)
             tp_pct = max(1.5, min(10.0, tp_pct))
