@@ -1179,26 +1179,60 @@ class WhalePersona:
         
         try:
             from cryptoracle_client import get_all_trading_pair_sentiment, fetch_prediction_market
-            data = get_all_trading_pair_sentiment()
+            import signal as _sig
+            def _timeout_handler(signum, frame):
+                raise TimeoutError("Cryptoracle API timeout (5s)")
+            old_handler = _sig.signal(_sig.SIGALRM, _timeout_handler)
+            _sig.alarm(5)  # 5 second hard timeout
+            try:
+                data = get_all_trading_pair_sentiment()
+            finally:
+                _sig.alarm(0)  # Cancel alarm
+                _sig.signal(_sig.SIGALRM, old_handler)
             if data:
                 self._cryptoracle_data = data
                 self._cryptoracle_fetched_at = now
                 return data
         except ImportError:
-            print("  [WHALE] cryptoracle_client not found - using Etherscan only")
+            print("  [WHALE] cryptoracle_client not found - using Etherscan fallback")
+        except TimeoutError:
+            print("  [WHALE] Cryptoracle TIMEOUT (5s) - cloud server down, using Etherscan fallback")
         except Exception as e:
-            print(f"  [WHALE] Cryptoracle fetch error: {e}")
+            print(f"  [WHALE] Cryptoracle fetch error: {e} - using Etherscan fallback")
         
         return self._cryptoracle_data or {}
     
     def analyze(self, pair: str, pair_info: Dict) -> Dict:
-        """Analyze whale/smart money activity for trading signal."""
+        """Analyze whale/smart money activity for trading signal.
         
-        # Fetch Cryptoracle data for all pairs (one API call, cached)
+        V3.1.64: EMERGENCY FALLBACK - Cryptoracle cloud shutdown.
+        Priority: Cryptoracle (fast timeout) -> Etherscan whales (BTC/ETH) -> Neutral hold.
+        """
+        
+        # Try Cryptoracle first (fast fail - 5s timeout)
         cr_data = self._get_cryptoracle_data()
         cr_signal = cr_data.get(pair.upper()) if cr_data else None
         
-        # V3.1.63: CryptOracle for ALL pairs (Etherscan removed - unreliable timeouts)
+        # If Cryptoracle has data, use it (works for ALL pairs)
+        if cr_signal and cr_signal.get("signal") != "NEUTRAL":
+            return self._analyze_with_cryptoracle(pair, pair_info, cr_signal)
+        
+        # FALLBACK: Etherscan whale flow for BTC/ETH
+        if pair.upper() in ("BTC", "ETH"):
+            print(f"  [WHALE] Cryptoracle down/empty for {pair}, falling back to Etherscan whale flow")
+            return self._analyze_with_etherscan(pair, pair_info, cr_signal)
+        
+        # Other pairs: no Cryptoracle = neutral hold (cannot fabricate signal)
+        if not cr_signal:
+            print(f"  [WHALE] No data for {pair} (Cryptoracle down, no Etherscan fallback for altcoins)")
+            return {
+                "persona": self.name,
+                "signal": "NEUTRAL",
+                "confidence": 0.30,
+                "reasoning": f"Cryptoracle unavailable, no on-chain fallback for {pair}. Deferring to FLOW+SENTIMENT.",
+            }
+        
+        # Cryptoracle returned but neutral - pass it through
         return self._analyze_with_cryptoracle(pair, pair_info, cr_signal)
     
     def _analyze_with_etherscan(self, pair: str, pair_info: Dict, cr_signal: dict) -> Dict:

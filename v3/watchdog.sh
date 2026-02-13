@@ -5,7 +5,7 @@ TIMEOUT=300  # 5 minutes without log activity = hung
 while true; do
     sleep 30  # Check every 30 seconds
 
-    DAEMON_COUNT=$(pgrep -fc "smt_daemon_v3_1.py" 2>/dev/null || echo 0)
+    DAEMON_COUNT=$(pgrep -f "smt_daemon_v3_1.py" 2>/dev/null | wc -l)
 
     # Kill duplicates
     if [ "$DAEMON_COUNT" -gt 1 ]; then
