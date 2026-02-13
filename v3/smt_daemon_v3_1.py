@@ -164,7 +164,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # ============================================================
 
 # Timing
-SIGNAL_CHECK_INTERVAL = 15 * 60  # V3.1.34: 15 min - catch moves earlier
+SIGNAL_CHECK_INTERVAL = 30 * 60  # V3.1.72: 30 min - reduce overtrading, let positions breathe
 POSITION_MONITOR_INTERVAL = 2 * 60  # 2 minutes (check more often for tier 3)
 HEALTH_CHECK_INTERVAL = 60
 CLEANUP_CHECK_INTERVAL = 30
@@ -891,6 +891,25 @@ def check_trading_signals():
                 else:
                     logger.info(f"SESSION [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} >= {session_min_conf:.0%}, proceeding {opportunity['pair']}")
                 
+                # V3.1.72: HARD F&G DIRECTIONAL FILTER - no overrides, no exceptions
+                # F&G < 20 = RECOVERY MODE = LONG ONLY. Shorts in extreme fear catch god-candle bounces.
+                try:
+                    from smt_nightly_trade_v3_1 import get_fear_greed_index as _get_fg_filter
+                    _fg_filter = _get_fg_filter()
+                    _fg_val_filter = _fg_filter.get("value", 50)
+                except Exception:
+                    _fg_val_filter = 50
+                _opp_signal_fg = opportunity["decision"]["decision"]
+                if _fg_val_filter < 20 and _opp_signal_fg == "SHORT":
+                    logger.warning(f"F&G FILTER: F&G={_fg_val_filter} < 20 (RECOVERY MODE). Blocking SHORT on {opportunity['pair']}. LONG-only in extreme fear.")
+                    upload_ai_log_to_weex(
+                        stage=f"V3.1.72 F&G FILTER: SHORT {opportunity['pair']} blocked",
+                        input_data={"fear_greed": _fg_val_filter, "signal": "SHORT", "pair": opportunity['pair']},
+                        output_data={"action": "BLOCKED", "reason": f"F&G={_fg_val_filter} < 20, LONG-only mode"},
+                        explanation=f"RECOVERY MODE: F&G={_fg_val_filter} (extreme fear). Blocking SHORT on {opportunity['pair']}. Only LONGs allowed when F&G < 20."
+                    )
+                    continue
+
                 # V3.1.66: REGIME VETO - code-level block on counter-regime trades
                 # get_market_regime_for_exit is defined in this file, no import needed
                 try:
@@ -1317,37 +1336,38 @@ def monitor_positions():
                 })
                 if len(_pnl_history[symbol]) > _PNL_HISTORY_MAX:
                     _pnl_history[symbol] = _pnl_history[symbol][-_PNL_HISTORY_MAX:]
-                # V3.1.64 PROFIT LOCK EXIT - Aggressive peak capture
-                # At 18x leverage: 1% price move = 18% ROE. Lock profits early.
-                # Don't wait for 15% TP when you can bank 1% repeatedly.
+                # V3.1.72 PROFIT LOCK EXIT - RELAXED: Let winners run to TP
+                # Old thresholds were closing at +0.5% when TP is 3%. We need big wins.
+                # Only lock profits on SIGNIFICANT peaks that are clearly reversing.
                 fade_pct = peak_pnl_pct - pnl_pct if peak_pnl_pct > 0 else 0
-                
-                # Rule 0 (NEW): PROFIT LOCK - peak >= 1.0%, faded 40%+, still green
-                # Example: peaked 1.5%, now at 0.85% (faded 43%) -> CLOSE and bank 0.85%
-                if not should_exit and peak_pnl_pct >= 1.0 and pnl_pct < peak_pnl_pct * 0.60 and pnl_pct > 0.15:
+
+                # Rule 0: PROFIT LOCK - peak >= 2.5%, faded 50%+, still meaningfully green
+                # Example: peaked 3.0%, now at 1.4% (faded 53%) -> CLOSE and bank 1.4%
+                # At 20x leverage: 1.4% = 28% ROE = $40+ on a $150 margin position
+                if not should_exit and peak_pnl_pct >= 2.5 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0.5:
                     should_exit = True
-                    exit_reason = f"V3.1.64_profit_lock T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%, locking gains)"
+                    exit_reason = f"V3.1.72_profit_lock T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%, locking gains)"
                     print(f"  [PROFIT LOCK] {symbol}: {exit_reason}")
-                
-                # Rule 1: High peak, deep fade -> lock profits
-                # If peaked > 1.5% and dropped more than 50% from peak
-                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0:
+
+                # Rule 1: High peak, severe fade -> lock profits
+                # If peaked > 2.0% and dropped more than 60% from peak
+                elif not should_exit and peak_pnl_pct >= 2.0 and pnl_pct < peak_pnl_pct * 0.40 and pnl_pct > 0.3:
                     should_exit = True
-                    exit_reason = f"V3.1.64_peak_fade_high T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
+                    exit_reason = f"V3.1.72_peak_fade_high T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
                     print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
                 
-                # Rule 2: Moderate peak, severe fade -> lock profits  
-                # If peaked > 1.0% and dropped more than 65% from peak
-                elif not should_exit and peak_pnl_pct >= 1.0 and pnl_pct < peak_pnl_pct * 0.35 and pnl_pct > 0:
+                # Rule 2: Only close if peak was significant AND completely collapsed
+                # If peaked > 1.5% and dropped more than 75% from peak (nearly all gains gone)
+                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct < peak_pnl_pct * 0.25 and pnl_pct > 0:
                     should_exit = True
-                    exit_reason = f"V3.1.64_peak_fade_mod T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
+                    exit_reason = f"V3.1.72_peak_fade_mod T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
                     print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
-                
-                # Rule 3: Any peak that went negative -> thesis broken
-                # If peaked > 0.8% but now negative (lowered from 1.0%)
-                elif not should_exit and peak_pnl_pct >= 0.8 and pnl_pct <= 0:
+
+                # Rule 3: Peak went negative -> thesis broken, but only on significant peaks
+                # If peaked > 1.5% but now negative = clearly reversing
+                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct <= 0:
                     should_exit = True
-                    exit_reason = f"V3.1.64_peak_to_loss T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}%"
+                    exit_reason = f"V3.1.72_peak_to_loss T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}%"
                     print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
                 
 
@@ -1721,16 +1741,18 @@ Max 5 positions in the same direction normally. If 6+ LONGs or 6+ SHORTs, close 
 (lowest PnL% or highest loss) until we have max 5.
 EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move all alts together.
 
-RULE 3 - LET WINNERS RUN:
-PROFIT LOCK RULE (V3.1.64): If a position peaked > 1.0% and faded > 40% from peak (still green), CLOSE IT to lock profit. At 18x leverage, 1% captured = 18% ROE. Do NOT let winners become losers. Banking small wins repeatedly beats waiting for huge TPs.
-Closing at +0.5% when TP is at +6% means we capture $15 instead of $180.
-Only close a WINNING position if it has been held past max_hold_hours.
+RULE 3 - LET WINNERS RUN (V3.1.72 FIX - STOP CLOSING WINNERS EARLY):
+CRITICAL: Our TP targets are 2.5-3.5%. DO NOT close winning positions before they reach TP.
+At 20x leverage: 3% TP = 60% ROE = $90+ on a $150 margin position.
+Closing at +0.5% when TP is at +3% means we capture $7 instead of $90. THIS IS THE MAIN REASON WE ARE LOSING.
+ONLY close a winning position if: it peaked > 2.5% AND faded more than 50% from peak AND is still green.
+Positions at +0.2%, +0.5%, +1.0% are NOT candidates for closing. They are working toward TP.
+NEVER close a profitable position because of funding costs. Funding is pennies compared to TP potential.
 
-RULE 3b - TRAJECTORY-BASED EXIT (V3.1.59):
-If a position's PnL trajectory shows 5+ readings of steady decline from a peak > 1.0%
-(e.g. +1.8% -> +1.5% -> +1.2% -> +0.9% -> +0.6%), the trade thesis may be invalidating.
-Consider closing to lock partial profit UNLESS Cryptoracle sentiment still supports the direction.
+RULE 3b - TRAJECTORY-BASED EXIT (V3.1.72):
+Only consider trajectory exit if peak was > 2.0% AND position shows 5+ readings of steady decline.
 If Cryptoracle momentum is positive for our direction, let it ride despite the fade.
+Small peaks (< 2%) with fading are NORMAL NOISE. Do not close.
 
 RULE 4 - F&G EXTREME FEAR (UPDATED V3.1.55):
 If F&G < 20 (extreme fear), be patient with positions BUT you CAN still close if:
@@ -1759,7 +1781,7 @@ A position at 0% can rally to +5% in the next hour. Only the SL should close bre
 
 RULE 7 - TIME-BASED PATIENCE:
 Do NOT close positions just because they have been open 2-4 hours.
-Our TP targets are 5-8%. These moves take TIME (4-12h for alts, 12-48h for BTC).
+Our TP targets are 2.5-3.5% at 20x leverage. These moves take TIME (1-4h for alts, 4-24h for BTC).
 Only close if: max_hold_hours exceeded AND position is negative.
 
 RULE 8 - WEEKEND/LOW LIQUIDITY (check if Saturday or Sunday):
@@ -1781,14 +1803,21 @@ If whale confidence >= 70% in the SAME direction as the position,
 do NOT close it. Smart money agrees. Let it run to full TP.
 Only exception: max_hold_hours exceeded AND losing more than -3%.
 
-RULE 12 - FUNDING COST AWARENESS:
-If funding rate is positive and we are LONG, we PAY every 8h. If position is barely
-profitable (+0.1-0.3%) and funding eats the profit, close it. Same for negative funding + SHORT.
+RULE 12 - FUNDING COST AWARENESS (V3.1.72 RELAXED):
+Funding costs are PENNIES compared to TP targets. A position paying 0.01% funding every 8h
+loses $0.50 on a $5000 notional. Our TP target is $150+. DO NOT close positions for funding.
+Only consider funding if: position is stuck at breakeven for > 12 hours AND funding rate > 0.05%.
 
 RULE 13 - STALE POSITION CLEANUP:
 If a position has been held > max_hold_hours AND is losing ANY amount, close it.
 Do not wait for -3%. A stale losing position is dead capital. Free it.
 If the position is winning past max_hold_hours, let it run but tighten expectations.
+
+RULE 14 - REGIME-ALIGNED PROTECTION (V3.1.72 NEW):
+If regime is BULLISH and a LONG position is profitable (any amount), DO NOT CLOSE IT.
+If regime is BULLISH and F&G < 20, ALL LONGs get extra patience - this is a contrarian buy zone.
+If a position is aligned with the regime AND profitable, it should NEVER be closed by the PM.
+Let the TP order handle it. The PM's job is to cut LOSERS and COUNTER-REGIME positions, not winners.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"closes": [{{"symbol": "DOGEUSDT", "side": "SHORT", "reason": "Rule X: brief reason"}}, ...], "keep_reasons": "brief summary of why others are kept, referencing rule numbers"}}
@@ -2393,12 +2422,20 @@ def regime_aware_exit_check():
             if hours_open < 4:
                 continue
             
-            # V3.1.64: EXTREME FEAR SHIELD - Don't cut profitable positions in capitulation
-            # In F&G < 20, regime bounces are noise. Trust whale-aligned positions.
+            # V3.1.72: FEAR SHIELD - Only protect REGIME-ALIGNED profitable positions
+            # Don't protect SHORTs in BULLISH regime just because they happen to be green
             _fg_for_regime = regime.get("fear_greed", 50)
-            if _fg_for_regime < 20 and pnl > 0:
-                logger.info(f"[REGIME] FEAR SHIELD: Skipping {symbol_clean} {side} (profitable ${pnl:+.1f} in F&G={_fg_for_regime})")
+            _regime_dir = regime.get("regime", "NEUTRAL")
+            _is_regime_aligned = (
+                (side == "LONG" and _regime_dir in ("BULLISH", "SPIKE_UP")) or
+                (side == "SHORT" and _regime_dir in ("BEARISH", "SPIKE_DOWN")) or
+                _regime_dir == "NEUTRAL"
+            )
+            if _fg_for_regime < 20 and pnl > 0 and _is_regime_aligned:
+                logger.info(f"[REGIME] FEAR SHIELD: Skipping {symbol_clean} {side} (profitable ${pnl:+.1f}, regime-aligned in F&G={_fg_for_regime})")
                 continue
+            elif _fg_for_regime < 20 and pnl > 0 and not _is_regime_aligned:
+                logger.info(f"[REGIME] FEAR SHIELD DENIED: {symbol_clean} {side} is counter-regime ({_regime_dir}), not protected despite F&G={_fg_for_regime}")
             
             # V3.1.25: SPIKE detection - fast exit on sudden moves
             if regime.get("spike"):
@@ -2512,17 +2549,18 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.69 - SNIPER MODE: inter-cycle cooldown, Gemini rate limit fix, tighter TP")
+    logger.info("SMT Daemon V3.1.72 - RECOVERY MODE: F&G filter, per-pair structure, relaxed profit lock")
     logger.info("=" * 60)
-    logger.info("V3.1.67 SNIPER MODE (RECOVERED):")
-    logger.info("  - WHALE: CryptOracle for ALL 8 pairs (Etherscan removed)")
-    logger.info("  - Judge: WHALE+FLOW co-primary signals (was FLOW-only)")
-    logger.info("  - V3.1.64 PROFIT LOCK: peak>=1.0%, fade>40% = close (bank small wins)")
-    logger.info("  - V3.1.64 FEAR SHIELD: skip regime exit for profitable positions when F&G<20")
-    logger.info("  - V3.1.64 VOL-ADJUSTED SL: 1.5x wider SL when F&G<15")
-    logger.info("  - V3.1.64 HARD CAP: MAX_POSITIONS strictly enforced, no capitulation override")
-    logger.info("  - Max 3 positions, 80% confidence floor")
-    logger.info("  - Anti-WAIT override + trade history to Judge")
+    logger.info("V3.1.72 RECOVERY MODE:")
+    logger.info("  - F&G < 20 = LONG-ONLY (hard filter, no override)")
+    logger.info("  - Per-pair price structure: ADX, HH/HL, range position, 4h trend")
+    logger.info("  - Per-pair freshness filter (not just BTC)")
+    logger.info("  - Profit Lock RELAXED: peak>=2.5%, fade>50% (was 1.0%/40%)")
+    logger.info("  - PM: STOP closing winners early for funding/negligible reasons")
+    logger.info("  - Judge: F&G-aware (LONG-only in extreme fear)")
+    logger.info("  - Flow: Short cap at F&G < 20 (was < 5)")
+    logger.info("  - 30min signal interval (was 15min)")
+    logger.info("  - 20x leverage all trades")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
