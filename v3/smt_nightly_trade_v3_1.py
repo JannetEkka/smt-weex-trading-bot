@@ -859,8 +859,8 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
 MAX_OPEN_POSITIONS = 5  # V3.1.71: RECOVERY - 5 positions for final push - fewer, bigger, better positions
-MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
-MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
+MAX_SINGLE_POSITION_PCT = 0.35  # V3.1.73: 35% max per trade (was 50% for 3 slots, adjusted for 5 slots)
+MIN_SINGLE_POSITION_PCT = 0.15  # V3.1.73: 15% min per trade (was 20%, adjusted for 5 slots)
 MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.1.64: SNIPER++ - higher conviction for endgame
 
 # ============================================================
@@ -896,12 +896,13 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     jitter = random.uniform(0, delay * 0.1)
     return delay + jitter
 
-# V3.1.70 PREDATOR REVIVAL: Back to prelim discipline. Tight SLs, fast exits, high conviction only.
-# Prelims: 1.5% SL -> 566% ROI. Finals: 3% SL -> -70% drawdown. The data speaks.
+# V3.1.73 RECOVERY PUSH: Wider TPs to capture full trend moves instead of re-entering.
+# Recent data: BTC +3.0%, ETH +3.0%, DOGE +3.1% - all exceeded old T1 2.5% TP.
+# Keep tight SLs (prelim discipline) but let winners run further.
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.025, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 2.5, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.035, "trailing_stop": 0.015, "time_limit": 360, "tp_pct": 3.5, "sl_pct": 1.8, "max_hold_hours": 4, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.035, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 3.5, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.04, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 4.0, "sl_pct": 1.5, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.045, "trailing_stop": 0.015, "time_limit": 360, "tp_pct": 4.5, "sl_pct": 1.8, "max_hold_hours": 4, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
 }
 # Trading Pairs with correct tiers
 TRADING_PAIRS = {
@@ -3036,15 +3037,14 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         sl_pct_raw = tier_config["sl_pct"]
         print(f"  [ATR-SL] Error ({e}), using tier SL: {sl_pct_raw}%")
     
-    # V3.1.66b: REALISTIC TP - tier-based, no F&G scaling
-    # F&G scaling caused 9% TPs in capitulation (unrealistic, never hit)
-    # TP is now strictly tier-based with a sane floor
-    base_tp = tier_config["tp_pct"]  # V3.1.70: T1=3%, T2=3.5%, T3=4%
+    # V3.1.73: WIDER TP - capture full trend moves
+    # Old caps (3/3.5/4%) kept closing before trend was done, causing re-entries
+    base_tp = tier_config["tp_pct"]  # V3.1.73: T1=3.5%, T2=4.0%, T3=4.5%
     tp_floor = sl_pct_raw * 1.2  # Minimum 1.2x SL for positive expectancy
     tp_pct_raw = max(base_tp, tp_floor)
-    # Hard cap per tier (no exceptions)
-    _tier_tp_caps = {1: 3.0, 2: 3.5, 3: 4.0}  # V3.1.70: 1-4h window (was 4/5/6)
-    _tp_cap = _tier_tp_caps.get(tier, 4.0)  # V3.1.70: fallback matches T3
+    # Hard cap per tier (raised to match new wider TPs)
+    _tier_tp_caps = {1: 4.5, 2: 5.0, 3: 5.5}  # V3.1.73: room above base TP for ATR-adjusted entries
+    _tp_cap = _tier_tp_caps.get(tier, 5.5)
     tp_pct_raw = min(tp_pct_raw, _tp_cap)
     print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% (Tier {tier} cap={_tp_cap}%, floor=SL*1.2={tp_floor:.2f}%)")
     
@@ -3129,23 +3129,23 @@ COOLDOWN_HOURS = {
 # Only for Tier 1 and Tier 2 - Tier 3 is scalp only
 
 RUNNER_CONFIG = {
-    1: {  # BTC, ETH, BNB, LTC - trigger at 50% of 8% TP = 4%
-        "enabled": True,   # V3.1.51: Re-enabled with staggered TP
-        "trigger_pct": 4.0,  # 50% of T1 TP (8%)
+    1: {  # BTC, ETH, BNB, LTC - trigger at ~75% of 3.5% TP = 2.5%
+        "enabled": True,   # V3.1.73: Re-tuned for wider TPs
+        "trigger_pct": 2.5,  # Lock partial profit before full TP
         "close_pct": 40,     # Close 40%, let 60% ride to full TP
         "move_sl_to_entry": True,  # Move SL to breakeven on remaining
         "remove_tp": False,  # Keep TP order for remaining size
     },
-    2: {  # SOL - trigger at 50% of 7% TP = 3.5%
-        "enabled": True,   # V3.1.51: Re-enabled
-        "trigger_pct": 3.5,
+    2: {  # SOL - trigger at ~75% of 4.0% TP = 3.0%
+        "enabled": True,   # V3.1.73: Re-tuned
+        "trigger_pct": 3.0,
         "close_pct": 40,
         "move_sl_to_entry": True,
         "remove_tp": False,
     },
-    3: {  # DOGE, XRP, ADA - trigger at 50% of 6% TP = 3%
-        "enabled": True,   # V3.1.51: Re-enabled
-        "trigger_pct": 3.0,
+    3: {  # DOGE, XRP, ADA - trigger at ~75% of 4.5% TP = 3.5%
+        "enabled": True,   # V3.1.73: Re-tuned
+        "trigger_pct": 3.5,
         "close_pct": 40,
         "move_sl_to_entry": True,
         "remove_tp": False,
@@ -3478,11 +3478,22 @@ def execute_runner_partial_close(symbol: str, side: str, current_size: float,
 
 
 def save_local_log(log_data: Dict, timestamp: str):
+    # Save to logs/ (operational logs)
     os.makedirs("logs", exist_ok=True)
     filename = f"logs/v3_1_1_{timestamp}.json"
     with open(filename, 'w') as f:
         json.dump(log_data, f, indent=2, default=str)
     print(f"  [LOG] Saved: {filename}")
+
+    # V3.1.73: Also save to ai_logs/ (competition compliance - was missing since prelims!)
+    try:
+        os.makedirs("ai_logs", exist_ok=True)
+        ai_filename = f"ai_logs/v3_{timestamp}.json"
+        with open(ai_filename, 'w') as f:
+            json.dump(log_data, f, indent=2, default=str)
+        print(f"  [AI LOG] Saved: {ai_filename}")
+    except Exception as e:
+        print(f"  [AI LOG] Save error: {e}")
 
 
 # ============================================================
