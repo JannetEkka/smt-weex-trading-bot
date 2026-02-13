@@ -897,9 +897,9 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     return delay + jitter
 
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.03, "take_profit": 0.05, "trailing_stop": 0.02, "time_limit": 5760, "tp_pct": 5.0, "sl_pct": 3.0, "max_hold_hours": 72, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.03, "take_profit": 0.06, "trailing_stop": 0.025, "time_limit": 4320, "tp_pct": 6.0, "sl_pct": 3.0, "max_hold_hours": 48, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.035, "take_profit": 0.07, "trailing_stop": 0.03, "time_limit": 2880, "tp_pct": 7.0, "sl_pct": 3.0, "max_hold_hours": 24, "early_exit_hours": 999, "early_exit_loss_pct": -5.0, "force_exit_loss_pct": -5.0},
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.03, "take_profit": 0.03, "trailing_stop": 0.015, "time_limit": 1440, "tp_pct": 3.0, "sl_pct": 3.0, "max_hold_hours": 24, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.03, "take_profit": 0.035, "trailing_stop": 0.018, "time_limit": 720, "tp_pct": 3.5, "sl_pct": 3.0, "max_hold_hours": 12, "early_exit_hours": 999, "early_exit_loss_pct": -99.0, "force_exit_loss_pct": -10.0},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.035, "take_profit": 0.04, "trailing_stop": 0.02, "time_limit": 360, "tp_pct": 4.0, "sl_pct": 3.0, "max_hold_hours": 6, "early_exit_hours": 999, "early_exit_loss_pct": -5.0, "force_exit_loss_pct": -5.0},
 }
 # Trading Pairs with correct tiers
 TRADING_PAIRS = {
@@ -1535,10 +1535,10 @@ class SentimentPersona:
         # V3.1.21: COMBINED PROMPT - One API call instead of two!
         combined_prompt = f"""Search for "{pair} cryptocurrency price action last 24 hours" and analyze:
 
-You are a SHORT-TERM crypto trader making a 4-24 hour trade decision for {pair}.
+You are a SHORT-TERM crypto trader making a 1-4 hour trade decision for {pair}.
 
 IGNORE: Long-term "moon" predictions, "institutional adoption", "ETF hopes", price targets for next year.
-FOCUS ON: Last 24 hours price action, support/resistance breaks, volume on red vs green candles, liquidation data.
+FOCUS ON: Last 1-4 hours price action, support/resistance breaks, volume on red vs green candles, liquidation data.
 
 Based ONLY on short-term price action and momentum:
 - If price is breaking DOWN through support or volume is spiking on RED candles = BEARISH
@@ -2095,6 +2095,7 @@ class JudgePersona:
         
         prompt = f"""You are the AI Judge for a crypto futures trading bot in a live competition (real money).
 Your job: analyze all signals and decide the SINGLE BEST action for {pair} right now.
+TRADE WINDOW: 1-4 hours. We check positions every 15 minutes. TP targets are 3-4% (54-72% ROE at 18x).
 
 === MARKET REGIME ===
 Regime: {regime.get('regime', 'NEUTRAL')}
@@ -2780,12 +2781,12 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     # V3.1.66b: REALISTIC TP - tier-based, no F&G scaling
     # F&G scaling caused 9% TPs in capitulation (unrealistic, never hit)
     # TP is now strictly tier-based with a sane floor
-    base_tp = tier_config["tp_pct"]  # T1=5%, T2=6%, T3=7%
+    base_tp = tier_config["tp_pct"]  # V3.1.70: T1=3%, T2=3.5%, T3=4%
     tp_floor = sl_pct_raw * 1.2  # Minimum 1.2x SL for positive expectancy
     tp_pct_raw = max(base_tp, tp_floor)
     # Hard cap per tier (no exceptions)
-    _tier_tp_caps = {1: 4.0, 2: 5.0, 3: 6.0}  # V3.1.68: Tighter (was 5/6/7)
-    _tp_cap = _tier_tp_caps.get(tier, 7.0)
+    _tier_tp_caps = {1: 3.0, 2: 3.5, 3: 4.0}  # V3.1.70: 1-4h window (was 4/5/6)
+    _tp_cap = _tier_tp_caps.get(tier, 4.0)  # V3.1.70: fallback matches T3
     tp_pct_raw = min(tp_pct_raw, _tp_cap)
     print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% (Tier {tier} cap={_tp_cap}%, floor=SL*1.2={tp_floor:.2f}%)")
     
