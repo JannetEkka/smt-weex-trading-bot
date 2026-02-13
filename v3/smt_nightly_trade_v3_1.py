@@ -859,8 +859,8 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
 MAX_OPEN_POSITIONS = 5  # V3.1.71: RECOVERY - 5 positions for final push - fewer, bigger, better positions
-MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
-MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
+MAX_SINGLE_POSITION_PCT = 0.35  # V3.1.73: 35% max per trade (was 50% for 3 slots, adjusted for 5 slots)
+MIN_SINGLE_POSITION_PCT = 0.15  # V3.1.73: 15% min per trade (was 20%, adjusted for 5 slots)
 MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.1.64: SNIPER++ - higher conviction for endgame
 
 # ============================================================

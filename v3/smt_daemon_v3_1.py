@@ -496,7 +496,7 @@ def check_trading_signals():
             if tracker.active_trades.get(symbol, {}).get('runner_triggered', False):
                 risk_free_count += 1
         
-        BASE_SLOTS = 3  # V3.1.70: PREDATOR REVIVAL - 3 positions, high conviction only
+        BASE_SLOTS = 5  # V3.1.73: 5 positions for recovery push - signals are 85%+ consistently
         MAX_BONUS_SLOTS = 0  # V3.1.64a: DISABLED - hard cap is absolute
         bonus_slots = min(risk_free_count, MAX_BONUS_SLOTS)
         effective_max_positions = BASE_SLOTS + bonus_slots
@@ -810,7 +810,7 @@ def check_trading_signals():
             # V3.1.19: Use smart slot calculation (same as above)
             current_positions = len(open_positions)
             available_slots = effective_max_positions - current_positions
-            # V3.1.64: HARD CAP - never exceed BASE_SLOTS total regardless of mode
+            # V3.1.73: HARD CAP - never exceed BASE_SLOTS (5) total regardless of mode
             if current_positions >= BASE_SLOTS:
                 available_slots = 0
             
@@ -2557,7 +2557,7 @@ def run_daemon():
     logger.info("  - AI LOGS RESTORED: saving to ai_logs/ folder (was missing since prelims)")
     logger.info("  - WATCHDOG FIX: per-pair progress marks, 15min timeout (was 10min)")
     logger.info("  - FEAR SHIELD: skip regime exit for profitable positions when F&G<20")
-    logger.info("  - Max 3 positions, 85% confidence floor")
+    logger.info("  - Max 5 positions (was 3), 85% confidence floor, 15-35% margin per trade")
     logger.info("  - Anti-WAIT override + trade history to Judge")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
