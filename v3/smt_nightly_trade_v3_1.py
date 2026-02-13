@@ -170,13 +170,13 @@ def apply_regime_hysteresis(score: int, raw_regime: str, btc_4h_change: float = 
     # V3.1.23: MOMENTUM OVERRIDE - bypass hysteresis for strong 4h moves
     if btc_4h_change < -1.5 and current != "BEARISH":
         REGIME_STATE["current_regime"] = "BEARISH"
-        REGIME_STATE["regime_locked_until"] = now + 600  # 10 min lock
+        REGIME_STATE["regime_locked_until"] = now + 1800  # V3.1.71: 30min lock  # 10 min lock
         print(f"  [HYSTERESIS] MOMENTUM OVERRIDE: -> BEARISH (4h: {btc_4h_change:+.1f}%)")
         return "BEARISH"
     
     if btc_4h_change > 1.5 and current != "BULLISH":
         REGIME_STATE["current_regime"] = "BULLISH"
-        REGIME_STATE["regime_locked_until"] = now + 600  # 10 min lock
+        REGIME_STATE["regime_locked_until"] = now + 1800  # V3.1.71: 30min lock  # 10 min lock
         print(f"  [HYSTERESIS] MOMENTUM OVERRIDE: -> BULLISH (4h: {btc_4h_change:+.1f}%)")
         return "BULLISH"
     
@@ -189,13 +189,13 @@ def apply_regime_hysteresis(score: int, raw_regime: str, btc_4h_change: float = 
     # V3.1.23: Strong signals (score >= 2 or <= -2) switch immediately
     if score <= -2 and current != "BEARISH":
         REGIME_STATE["current_regime"] = "BEARISH"
-        REGIME_STATE["regime_locked_until"] = now + 600
+        REGIME_STATE["regime_locked_until"] = now + 1800  # V3.1.71: 30min lock
         print(f"  [HYSTERESIS] STRONG BEARISH (score: {score}) -> BEARISH")
         return "BEARISH"
     
     if score >= 2 and current != "BULLISH":
         REGIME_STATE["current_regime"] = "BULLISH"
-        REGIME_STATE["regime_locked_until"] = now + 600
+        REGIME_STATE["regime_locked_until"] = now + 1800  # V3.1.71: 30min lock
         print(f"  [HYSTERESIS] STRONG BULLISH (score: {score}) -> BULLISH")
         return "BULLISH"
     
@@ -205,23 +205,23 @@ def apply_regime_hysteresis(score: int, raw_regime: str, btc_4h_change: float = 
         if current == "BEARISH" and avg >= 1:
             new_r = "NEUTRAL" if avg < 2 else "BULLISH"
             REGIME_STATE["current_regime"] = new_r
-            REGIME_STATE["regime_locked_until"] = now + 600  # V3.1.23: 10 min
+            REGIME_STATE["regime_locked_until"] = now + 1800  # V3.1.71: 30min lock  # V3.1.23: 10 min
             print(f"  [HYSTERESIS] BEARISH -> {new_r}")
             return new_r
         if current == "BULLISH" and avg <= -1:
             new_r = "NEUTRAL" if avg > -2 else "BEARISH"
             REGIME_STATE["current_regime"] = new_r
-            REGIME_STATE["regime_locked_until"] = now + 600  # V3.1.23: 10 min
+            REGIME_STATE["regime_locked_until"] = now + 1800  # V3.1.71: 30min lock  # V3.1.23: 10 min
             print(f"  [HYSTERESIS] BULLISH -> {new_r}")
             return new_r
         if current == "NEUTRAL":
             if all(s <= -1 for s in history[-2:]):
                 REGIME_STATE["current_regime"] = "BEARISH"
-                REGIME_STATE["regime_locked_until"] = now + 600
+                REGIME_STATE["regime_locked_until"] = now + 1800  # V3.1.71: 30min lock
                 return "BEARISH"
             if all(s >= 1 for s in history[-2:]):
                 REGIME_STATE["current_regime"] = "BULLISH"
-                REGIME_STATE["regime_locked_until"] = now + 600
+                REGIME_STATE["regime_locked_until"] = now + 1800  # V3.1.71: 30min lock
                 return "BULLISH"
         return current
     REGIME_STATE["current_regime"] = raw_regime
@@ -858,7 +858,7 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 3  # V3.1.63: SNIPER - fewer, bigger, better positions
+MAX_OPEN_POSITIONS = 5  # V3.1.71: RECOVERY - 5 positions for final push - fewer, bigger, better positions
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
 MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.1.64: SNIPER++ - higher conviction for endgame
@@ -2512,6 +2512,29 @@ class MultiPersonaAnalyzer:
         
         if final['decision'] in ("LONG", "SHORT"):
             print(f"  [JUDGE] TP: {final.get('take_profit_percent')}%, SL: {final.get('stop_loss_percent')}%, Max Hold: {final.get('hold_time_hours')}h")
+        
+        # V3.1.71: TREND FRESHNESS FILTER - don't enter late in a move
+        if final['decision'] in ("LONG", "SHORT"):
+            _regime = get_enhanced_market_regime()
+            btc_1h = _regime.get('change_1h', 0)
+            btc_4h = _regime.get('change_4h', 0)
+            decision = final['decision']
+            # Late SHORT: 4h already dumped hard, 1h recovering = we missed the move
+            if decision == "SHORT" and btc_4h < -1.5 and btc_1h > 0.2:
+                print(f"  [FRESHNESS] BLOCKED SHORT: 4h={btc_4h:+.1f}% (dumped), 1h={btc_1h:+.1f}% (recovering). Late entry.")
+                final['decision'] = 'WAIT'
+                final['confidence'] = 0
+            # Late LONG: 4h already pumped hard, 1h fading = we missed the move
+            elif decision == "LONG" and btc_4h > 1.5 and btc_1h < -0.2:
+                print(f"  [FRESHNESS] BLOCKED LONG: 4h={btc_4h:+.1f}% (pumped), 1h={btc_1h:+.1f}% (fading). Late entry.")
+                final['decision'] = 'WAIT'
+                final['confidence'] = 0
+            # Fresh flip: 4h was down but 1h recovering = good LONG entry
+            elif decision == "LONG" and btc_4h < -0.5 and btc_1h > 0.3:
+                print(f"  [FRESHNESS] FRESH FLIP LONG: 4h={btc_4h:+.1f}%, 1h={btc_1h:+.1f}%. Good entry timing.")
+            # Fresh flip: 4h was up but 1h dumping = good SHORT entry
+            elif decision == "SHORT" and btc_4h > 0.5 and btc_1h < -0.3:
+                print(f"  [FRESHNESS] FRESH FLIP SHORT: 4h={btc_4h:+.1f}%, 1h={btc_1h:+.1f}%. Good entry timing.")
         
         return final
 
