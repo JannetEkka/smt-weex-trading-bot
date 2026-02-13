@@ -366,8 +366,8 @@ def _mark_progress():
         _last_progress_time = time.time()
 
 def _internal_watchdog():
-    """Background thread that kills the process if it hangs > 10 minutes."""
-    HANG_TIMEOUT = 600  # 10 minutes without progress = hung
+    """Background thread that kills the process if it hangs > 15 minutes."""
+    HANG_TIMEOUT = 900  # V3.1.73: 15 minutes (was 10min, too aggressive with per-pair Gemini calls)
     while True:
         time.sleep(60)
         with _progress_lock:
@@ -797,10 +797,11 @@ def check_trading_signals():
                     })
                 
                 time.sleep(2)
-                
+                _mark_progress()  # V3.1.73: Keep watchdog alive during per-pair analysis (8 pairs × ~90s each)
+
             except Exception as e:
                 logger.error(f"Error analyzing {pair}: {e}")
-        
+
 # Execute ALL qualifying trades (up to available slots)
         if trade_opportunities:
             # Sort by confidence (highest first)
@@ -936,16 +937,9 @@ def check_trading_signals():
                     )
                     continue
 
-                # V3.1.68: INTER-CYCLE COOLDOWN (not intra-cycle)
-                # Only block if the last trade was from a PREVIOUS cycle
-                _now_cooldown = time.time()
-                _cooldown_elapsed = _now_cooldown - _last_trade_opened_at
-                if _cooldown_elapsed < GLOBAL_TRADE_COOLDOWN and _cooldown_elapsed > 120:
-                    # More than 2min since last trade = different cycle, apply cooldown
-                    _cd_remaining = GLOBAL_TRADE_COOLDOWN - _cooldown_elapsed
-                    logger.info(f"GLOBAL COOLDOWN: {_cd_remaining:.0f}s remaining, skipping {opportunity['pair']}")
-                    continue
-                # Within same cycle (< 2min gap) = allow multiple trades
+                # V3.1.73: Global cooldown REMOVED - per-symbol cooldown still active for loss protection
+                # Was: 15-minute global cooldown between trades. Too slow for competition with 11 days left.
+                # Per-symbol cooldown (after losses) is handled by tracker.is_on_cooldown()
 
                 tier = opportunity["tier"]
                 tier_config = get_tier_config(tier)
@@ -1317,37 +1311,30 @@ def monitor_positions():
                 })
                 if len(_pnl_history[symbol]) > _PNL_HISTORY_MAX:
                     _pnl_history[symbol] = _pnl_history[symbol][-_PNL_HISTORY_MAX:]
-                # V3.1.64 PROFIT LOCK EXIT - Aggressive peak capture
-                # At 18x leverage: 1% price move = 18% ROE. Lock profits early.
-                # Don't wait for 15% TP when you can bank 1% repeatedly.
+                # V3.1.73 PROFIT LOCK - RELAXED for wider TPs
+                # Old: peak >= 1.0%, fade > 40% (too aggressive, kept closing before TP)
+                # New: peak >= 2.5%, fade > 50% (let winners run to wider TPs)
                 fade_pct = peak_pnl_pct - pnl_pct if peak_pnl_pct > 0 else 0
-                
-                # Rule 0 (NEW): PROFIT LOCK - peak >= 1.0%, faded 40%+, still green
-                # Example: peaked 1.5%, now at 0.85% (faded 43%) -> CLOSE and bank 0.85%
-                if not should_exit and peak_pnl_pct >= 1.0 and pnl_pct < peak_pnl_pct * 0.60 and pnl_pct > 0.15:
+
+                # Rule 0: PROFIT LOCK - peak >= 2.5%, faded 50%+, still green
+                # Example: peaked 3.0%, now at 1.4% (faded 53%) -> CLOSE and bank 1.4%
+                if not should_exit and peak_pnl_pct >= 2.5 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0.3:
                     should_exit = True
-                    exit_reason = f"V3.1.64_profit_lock T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%, locking gains)"
+                    exit_reason = f"V3.1.73_profit_lock T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%, locking gains)"
                     print(f"  [PROFIT LOCK] {symbol}: {exit_reason}")
-                
+
                 # Rule 1: High peak, deep fade -> lock profits
-                # If peaked > 1.5% and dropped more than 50% from peak
-                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0:
+                # If peaked > 3.0% and dropped more than 60% from peak
+                elif not should_exit and peak_pnl_pct >= 3.0 and pnl_pct < peak_pnl_pct * 0.40 and pnl_pct > 0:
                     should_exit = True
-                    exit_reason = f"V3.1.64_peak_fade_high T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
+                    exit_reason = f"V3.1.73_peak_fade_high T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
                     print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
-                
-                # Rule 2: Moderate peak, severe fade -> lock profits  
-                # If peaked > 1.0% and dropped more than 65% from peak
-                elif not should_exit and peak_pnl_pct >= 1.0 and pnl_pct < peak_pnl_pct * 0.35 and pnl_pct > 0:
+
+                # Rule 2: Any significant peak that went negative -> thesis broken
+                # If peaked > 1.5% but now negative
+                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct <= 0:
                     should_exit = True
-                    exit_reason = f"V3.1.64_peak_fade_mod T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
-                    print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
-                
-                # Rule 3: Any peak that went negative -> thesis broken
-                # If peaked > 0.8% but now negative (lowered from 1.0%)
-                elif not should_exit and peak_pnl_pct >= 0.8 and pnl_pct <= 0:
-                    should_exit = True
-                    exit_reason = f"V3.1.64_peak_to_loss T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}%"
+                    exit_reason = f"V3.1.73_peak_to_loss T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}%"
                     print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
                 
 
@@ -1399,13 +1386,61 @@ def monitor_positions():
                     
                     state.trades_closed += 1
                     
+                    # V3.1.73: Classify exit type for comprehensive AI logging
+                    if "profit_lock" in exit_reason or "peak_fade" in exit_reason or "peak_to_loss" in exit_reason:
+                        _exit_label = "PROFIT_LOCK"
+                    elif "max_hold" in exit_reason:
+                        _exit_label = "MAX_HOLD_EXIT"
+                    elif "early_exit" in exit_reason:
+                        _exit_label = "EARLY_EXIT"
+                    elif "force_stop" in exit_reason:
+                        _exit_label = "HARD_STOP"
+                    else:
+                        _exit_label = "SMART_EXIT"
+
                     upload_ai_log_to_weex(
-                        stage=f"V3.1.9 Smart Exit - {symbol_clean}",
-                        input_data={"symbol": symbol, "tier": tier, "hours_open": hours_open},
-                        output_data={"reason": exit_reason, "pnl_pct": pnl_pct},
-                        explanation=f"Tier {tier} smart exit: {exit_reason}. PnL: {pnl_pct:+.2f}%"
+                        stage=f"V3.1.73 {_exit_label}: {trade.get('side','?')} {symbol_clean}",
+                        input_data={
+                            "symbol": symbol,
+                            "side": trade.get("side", "?"),
+                            "tier": tier,
+                            "hours_open": round(hours_open, 2),
+                            "entry_price": entry_price,
+                            "current_price": current_price,
+                            "peak_pnl_pct": round(peak_pnl_pct, 2),
+                            "position_usdt": trade.get("position_usdt", 0),
+                        },
+                        output_data={
+                            "action": "CLOSED",
+                            "exit_type": _exit_label,
+                            "reason": exit_reason,
+                            "pnl_pct": round(pnl_pct, 2),
+                            "pnl_usd": round(pnl_usdt, 2) if pnl_usdt else 0,
+                        },
+                        explanation=f"{_exit_label}: {trade.get('side','?')} {symbol_clean} T{tier} held {hours_open:.1f}h. {exit_reason}. PnL: {pnl_pct:+.2f}% (peak: {peak_pnl_pct:.2f}%). Entry: ${entry_price:.4f}, Exit: ${current_price:.4f}."
                     )
-                    
+
+                else:
+                    # V3.1.73: Log HOLD decision for every monitored position (competition compliance)
+                    symbol_clean = symbol.replace("cmt_", "").upper()
+                    _hold_reason = f"T{tier} within parameters: PnL {pnl_pct:+.2f}% (peak: {peak_pnl_pct:.2f}%), held {hours_open:.1f}h/{max_hold}h"
+                    upload_ai_log_to_weex(
+                        stage=f"V3.1.73 HOLD: {trade.get('side','?')} {symbol_clean}",
+                        input_data={
+                            "symbol": symbol,
+                            "side": trade.get("side", "?"),
+                            "tier": tier,
+                            "hours_open": round(hours_open, 2),
+                            "pnl_pct": round(pnl_pct, 2),
+                            "peak_pnl_pct": round(peak_pnl_pct, 2),
+                        },
+                        output_data={
+                            "action": "HOLD",
+                            "reason": _hold_reason,
+                        },
+                        explanation=f"HOLD: {trade.get('side','?')} {symbol_clean} T{tier}. {_hold_reason}. Entry: ${entry_price:.4f}, Current: ${current_price:.4f}. No exit criteria met."
+                    )
+
             except Exception as e:
                 logger.error(f"Monitor error {symbol}: {e}")
         
@@ -1802,7 +1837,7 @@ If nothing should be closed, return:
         
         config = GenerateContentConfig(temperature=0.1)
         
-        response = _gemini_full_call_daemon("gemini-2.5-flash", prompt, config, timeout=90)
+        response = _gemini_full_call_daemon("gemini-2.5-flash", prompt, config, timeout=60)  # V3.1.73: Reduced from 90s
         
         clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         data = json.loads(clean_text)
@@ -2498,9 +2533,9 @@ def regime_aware_exit_check():
         
         if closed_count > 0:
             logger.info(f"[REGIME EXIT] Closed {closed_count} positions fighting the trend")
-            # Trigger signal check to find new opportunities
-            logger.info("[REGIME EXIT] Checking for new opportunities...")
-            check_trading_signals()
+            # V3.1.73: Removed recursive check_trading_signals() call - it doubled execution time
+            # and caused watchdog timeouts. The next scheduled signal check will find opportunities.
+            logger.info("[REGIME EXIT] Freed slots. Next signal check will find opportunities.")
         else:
             logger.info("[REGIME] No positions need regime exit")
             
@@ -2512,16 +2547,17 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.69 - SNIPER MODE: inter-cycle cooldown, Gemini rate limit fix, tighter TP")
+    logger.info("SMT Daemon V3.1.73 - RECOVERY PUSH: wider TPs, no global cooldown, comprehensive logging")
     logger.info("=" * 60)
-    logger.info("V3.1.67 SNIPER MODE (RECOVERED):")
-    logger.info("  - WHALE: CryptOracle for ALL 8 pairs (Etherscan removed)")
-    logger.info("  - Judge: WHALE+FLOW co-primary signals (was FLOW-only)")
-    logger.info("  - V3.1.64 PROFIT LOCK: peak>=1.0%, fade>40% = close (bank small wins)")
-    logger.info("  - V3.1.64 FEAR SHIELD: skip regime exit for profitable positions when F&G<20")
-    logger.info("  - V3.1.64 VOL-ADJUSTED SL: 1.5x wider SL when F&G<15")
-    logger.info("  - V3.1.64 HARD CAP: MAX_POSITIONS strictly enforced, no capitulation override")
-    logger.info("  - Max 3 positions, 80% confidence floor")
+    logger.info("V3.1.73 RECOVERY PUSH:")
+    logger.info("  - WIDER TPs: T1=3.5%, T2=4.0%, T3=4.5% (capture full trend, stop re-entering)")
+    logger.info("  - PROFIT LOCK RELAXED: peak>=2.5%, fade>50% (was 1.0%/40%)")
+    logger.info("  - GLOBAL COOLDOWN REMOVED (per-symbol loss cooldown still active)")
+    logger.info("  - COMPREHENSIVE AI LOGGING: partials, holds, hard stops, all exits logged")
+    logger.info("  - AI LOGS RESTORED: saving to ai_logs/ folder (was missing since prelims)")
+    logger.info("  - WATCHDOG FIX: per-pair progress marks, 15min timeout (was 10min)")
+    logger.info("  - FEAR SHIELD: skip regime exit for profitable positions when F&G<20")
+    logger.info("  - Max 3 positions, 85% confidence floor")
     logger.info("  - Anti-WAIT override + trade history to Judge")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
@@ -2557,6 +2593,7 @@ def run_daemon():
     if is_competition_active():
         logger.info("Competition ACTIVE - initial signal check")
         check_trading_signals()
+        _mark_progress()  # V3.1.73: Prevent watchdog firing during initial long signal check
         last_signal = time.time()
     
     while state.is_running and not state.shutdown_event.is_set():
@@ -2580,7 +2617,9 @@ def run_daemon():
                 _mark_progress()
                 resolve_opposite_sides()  # V3.1.55: Close losing side when both exist
                 regime_aware_exit_check()  # V3.1.9: Check for regime-fighting positions
+                _mark_progress()  # V3.1.73: Keep watchdog alive before portfolio review
                 gemini_portfolio_review()  # V3.1.55: Gemini reviews portfolio with whale-aware rules
+                _mark_progress()  # V3.1.73: Keep watchdog alive after portfolio review
                 last_position = now
             
             if now - last_cleanup >= CLEANUP_CHECK_INTERVAL:
