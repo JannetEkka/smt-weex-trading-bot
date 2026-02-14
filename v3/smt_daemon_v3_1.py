@@ -1766,11 +1766,15 @@ Only close if: max_hold_hours exceeded AND position is negative.
 RULE 8 - WEEKEND/LOW LIQUIDITY (check if Saturday or Sunday):
 On weekends, max 4 positions. Thinner books = more manipulation.
 
-RULE 9 - SLOT MANAGEMENT (UPDATED V3.1.55):
-If we have 7+ total positions, we SHOULD free slots by closing the weakest position.
-7+ positions means we are over-committed and have no room for high-conviction entries.
-Close the position with: worst PnL% + whale disagreement + longest hold time past max.
-If we have 5 or fewer, be patient - SL orders protect us.
+RULE 9 - SLOT MANAGEMENT (UPDATED V3.1.72):
+We have a MAX of 5 positions. If ALL 5 slots are full, free the weakest position so new
+high-conviction signals can enter. A position is "weakest" if it has:
+- PnL% closest to 0% (stale, going nowhere)
+- Longest hold time relative to its tier's max_hold
+- Whale disagreement
+Close the single weakest position when all 5 slots are full AND at least one position
+has been held > 2 hours with PnL < +0.3%. Do NOT keep 5 stale positions that block
+better opportunities. Dead capital is worse than a small realized loss.
 
 RULE 10 - GRACE PERIOD:
 Positions opened < 30 minutes ago with confidence >= 85% get a GRACE PERIOD.
@@ -1790,6 +1794,13 @@ RULE 13 - STALE POSITION CLEANUP:
 If a position has been held > max_hold_hours AND is losing ANY amount, close it.
 Do not wait for -3%. A stale losing position is dead capital. Free it.
 If the position is winning past max_hold_hours, let it run but tighten expectations.
+
+RULE 14 - NEAR-BREAKEVEN RECYCLING (V3.1.72):
+If ALL slots are full (5 positions) and a position has been held > 2 hours with
+PnL between -0.3% and +0.3%, it is STALE. Close it to free the slot.
+At 20x leverage, +0.3% = 6% ROE = ~$5-15. This is noise, not profit.
+A freed slot can capture a real 1-2% move ($50-100+). Do not protect noise positions.
+Exception: keep if Cryptoracle momentum is strongly positive for that position's direction.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"closes": [{{"symbol": "DOGEUSDT", "side": "SHORT", "reason": "Rule X: brief reason"}}, ...], "keep_reasons": "brief summary of why others are kept, referencing rule numbers"}}
@@ -2514,16 +2525,16 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.69 - SNIPER MODE: inter-cycle cooldown, Gemini rate limit fix, tighter TP")
+    logger.info("SMT Daemon V3.1.72 - WATCHDOG FIX + SLOT RECYCLING + TP WIDEN")
     logger.info("=" * 60)
-    logger.info("V3.1.67 SNIPER MODE (RECOVERED):")
-    logger.info("  - WHALE: CryptOracle for ALL 8 pairs (Etherscan removed)")
-    logger.info("  - Judge: WHALE+FLOW co-primary signals (was FLOW-only)")
-    logger.info("  - V3.1.64 PROFIT LOCK: peak>=1.0%, fade>40% = close (bank small wins)")
+    logger.info("V3.1.72 Changes:")
+    logger.info("  - WATCHDOG FIX: per-pair progress marks (was only marking after full signal check)")
+    logger.info("  - SLOT RECYCLING: PM Rule 9 at 5 positions (was 7), Rule 14 stale breakeven close")
+    logger.info("  - TP CAPS WIDENED: T1=4%, T2=5%, T3=5% (was 3/3.5/4% - never hit)")
+    logger.info("  - PM LOGS: full keep_reasons to Weex (was truncated at 200 chars)")
+    logger.info("  - V3.1.64 PROFIT LOCK RESTORED: peak>=1.0%, fade>40% = close (V3.1.73 broke this)")
     logger.info("  - V3.1.64 FEAR SHIELD: skip regime exit for profitable positions when F&G<20")
-    logger.info("  - V3.1.64 VOL-ADJUSTED SL: 1.5x wider SL when F&G<15")
-    logger.info("  - V3.1.64 HARD CAP: MAX_POSITIONS strictly enforced, no capitulation override")
-    logger.info("  - Max 3 positions, 80% confidence floor")
+    logger.info("  - Max 5 positions (synced with nightly), 85% confidence floor")
     logger.info("  - Anti-WAIT override + trade history to Judge")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
