@@ -2844,8 +2844,8 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     tp_floor = sl_pct_raw * 1.2  # Minimum 1.2x SL for positive expectancy
     tp_pct_raw = max(base_tp, tp_floor)
     # Hard cap per tier (no exceptions)
-    _tier_tp_caps = {1: 3.0, 2: 3.5, 3: 4.0}  # V3.1.70: 1-4h window (was 4/5/6)
-    _tp_cap = _tier_tp_caps.get(tier, 4.0)  # V3.1.70: fallback matches T3
+    _tier_tp_caps = {1: 4.0, 2: 5.0, 3: 5.0}  # V3.1.72: Widen back (was 3/3.5/4 - too tight, never hit). PM Rule 3 handles actual exits.
+    _tp_cap = _tier_tp_caps.get(tier, 5.0)  # V3.1.72: fallback matches T2/T3
     tp_pct_raw = min(tp_pct_raw, _tp_cap)
     print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% (Tier {tier} cap={_tp_cap}%, floor=SL*1.2={tp_floor:.2f}%)")
     

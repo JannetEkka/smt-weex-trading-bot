@@ -496,7 +496,7 @@ def check_trading_signals():
             if tracker.active_trades.get(symbol, {}).get('runner_triggered', False):
                 risk_free_count += 1
         
-        BASE_SLOTS = 3  # V3.1.70: PREDATOR REVIVAL - 3 positions, high conviction only
+        BASE_SLOTS = 5  # V3.1.72: Match V3.1.71 nightly (was 3 in V3.1.70, missed sync)
         MAX_BONUS_SLOTS = 0  # V3.1.64a: DISABLED - hard cap is absolute
         bonus_slots = min(risk_free_count, MAX_BONUS_SLOTS)
         effective_max_positions = BASE_SLOTS + bonus_slots
@@ -797,10 +797,11 @@ def check_trading_signals():
                     })
                 
                 time.sleep(2)
-                
+                _mark_progress()  # V3.1.72: Keep watchdog alive during long signal checks
+
             except Exception as e:
                 logger.error(f"Error analyzing {pair}: {e}")
-        
+
 # Execute ALL qualifying trades (up to available slots)
         if trade_opportunities:
             # Sort by confidence (highest first)
@@ -1668,14 +1669,14 @@ def gemini_portfolio_review():
                 "balance": round(balance, 2),
                 "regime": regime.get("regime", "NEUTRAL"),
                 "fear_greed": regime.get("fear_greed", 50),
-                "cryptoracle": cryptoracle_context[:200],
+                "cryptoracle": cryptoracle_context[:500],
             },
             output_data={
                 "action": "PM_REVIEW",
                 "long_count": long_count,
                 "short_count": short_count,
             },
-            explanation=f"Portfolio Manager reviewing {len(positions)} positions. Equity: ${equity:.0f}. {cryptoracle_context[:150]}"
+            explanation=f"Portfolio Manager reviewing {len(positions)} positions. Equity: ${equity:.0f}. {cryptoracle_context[:500]}"
         )
         
         prompt = f"""You are the AI Portfolio Manager for a crypto futures trading bot in a LIVE competition with REAL money.
@@ -1723,7 +1724,7 @@ EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move
 
 RULE 3 - LET WINNERS RUN:
 PROFIT LOCK RULE (V3.1.64): If a position peaked > 1.0% and faded > 40% from peak (still green), CLOSE IT to lock profit. At 18x leverage, 1% captured = 18% ROE. Do NOT let winners become losers. Banking small wins repeatedly beats waiting for huge TPs.
-Closing at +0.5% when TP is at +6% means we capture $15 instead of $180.
+Closing at +0.5% when TP is at +4% means we capture $15 instead of $120.
 Only close a WINNING position if it has been held past max_hold_hours.
 
 RULE 3b - TRAJECTORY-BASED EXIT (V3.1.59):
@@ -1759,7 +1760,7 @@ A position at 0% can rally to +5% in the next hour. Only the SL should close bre
 
 RULE 7 - TIME-BASED PATIENCE:
 Do NOT close positions just because they have been open 2-4 hours.
-Our TP targets are 5-8%. These moves take TIME (4-12h for alts, 12-48h for BTC).
+Our TP targets are 2.5-5%. These moves take TIME (2-6h for alts, 6-24h for BTC).
 Only close if: max_hold_hours exceeded AND position is negative.
 
 RULE 8 - WEEKEND/LOW LIQUIDITY (check if Saturday or Sunday):
@@ -1803,7 +1804,8 @@ If nothing should be closed, return:
         config = GenerateContentConfig(temperature=0.1)
         
         response = _gemini_full_call_daemon("gemini-2.5-flash", prompt, config, timeout=90)
-        
+        _mark_progress()  # V3.1.72: Keep watchdog alive after PM Gemini call
+
         clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
         data = json.loads(clean_text)
         
@@ -1882,7 +1884,7 @@ If nothing should be closed, return:
                     time.sleep(1)
                     break
         
-        logger.info(f"[PORTFOLIO] Review complete. Keep reasons: {keep_reasons[:100]}")
+        logger.info(f"[PORTFOLIO] Review complete. Keep reasons: {keep_reasons[:500]}")
         
         # V3.1.59: AI log for PM decision
         upload_ai_log_to_weex(
@@ -1893,9 +1895,9 @@ If nothing should be closed, return:
             },
             output_data={
                 "closes_requested": len(closes),
-                "keep_reasons": keep_reasons[:200] if keep_reasons else "none",
+                "keep_reasons": keep_reasons[:800] if keep_reasons else "none",
             },
-            explanation=f"PM decided to close {len(closes)} position(s). {keep_reasons[:200]}"
+            explanation=f"PM decided to close {len(closes)} position(s). Kept: {keep_reasons[:800]}"
         )
         
     except json.JSONDecodeError as e:
