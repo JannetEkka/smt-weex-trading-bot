@@ -896,12 +896,13 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     jitter = random.uniform(0, delay * 0.1)
     return delay + jitter
 
-# V3.1.70 PREDATOR REVIVAL: Back to prelim discipline. Tight SLs, fast exits, high conviction only.
+# V3.1.72: REALISTIC TPs - match actual hold windows. Profit lock (1.0%/40%) is primary exit.
+# TP on WEEX is safety net for runners. Must be hittable within max_hold.
 # Prelims: 1.5% SL -> 566% ROI. Finals: 3% SL -> -70% drawdown. The data speaks.
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.025, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 2.5, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.035, "trailing_stop": 0.015, "time_limit": 360, "tp_pct": 3.5, "sl_pct": 1.8, "max_hold_hours": 4, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.018, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 1.8, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.02, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 2.0, "sl_pct": 1.5, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.02, "trailing_stop": 0.015, "time_limit": 360, "tp_pct": 2.0, "sl_pct": 1.8, "max_hold_hours": 4, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
 }
 # Trading Pairs with correct tiers
 TRADING_PAIRS = {
@@ -2840,12 +2841,12 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     # V3.1.66b: REALISTIC TP - tier-based, no F&G scaling
     # F&G scaling caused 9% TPs in capitulation (unrealistic, never hit)
     # TP is now strictly tier-based with a sane floor
-    base_tp = tier_config["tp_pct"]  # V3.1.70: T1=3%, T2=3.5%, T3=4%
+    base_tp = tier_config["tp_pct"]  # V3.1.72c: T1=1.8%, T2=2.0%, T3=2.0% (realistic for hold window)
     tp_floor = sl_pct_raw * 1.2  # Minimum 1.2x SL for positive expectancy
     tp_pct_raw = max(base_tp, tp_floor)
-    # Hard cap per tier (no exceptions)
-    _tier_tp_caps = {1: 4.0, 2: 5.0, 3: 5.0}  # V3.1.72: Widen back (was 3/3.5/4 - too tight, never hit). PM Rule 3 handles actual exits.
-    _tp_cap = _tier_tp_caps.get(tier, 5.0)  # V3.1.72: fallback matches T2/T3
+    # Hard cap per tier - must be hittable within max_hold_hours
+    _tier_tp_caps = {1: 2.5, 2: 3.0, 3: 2.5}  # V3.1.72c: Realistic caps. T3 4h can't hit 5%.
+    _tp_cap = _tier_tp_caps.get(tier, 2.5)  # V3.1.72c: conservative fallback
     tp_pct_raw = min(tp_pct_raw, _tp_cap)
     print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% (Tier {tier} cap={_tp_cap}%, floor=SL*1.2={tp_floor:.2f}%)")
     

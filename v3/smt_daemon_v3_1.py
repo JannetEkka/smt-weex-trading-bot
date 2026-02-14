@@ -1724,7 +1724,7 @@ EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move
 
 RULE 3 - LET WINNERS RUN:
 PROFIT LOCK RULE (V3.1.64): If a position peaked > 1.0% and faded > 40% from peak (still green), CLOSE IT to lock profit. At 18x leverage, 1% captured = 18% ROE. Do NOT let winners become losers. Banking small wins repeatedly beats waiting for huge TPs.
-Closing at +0.5% when TP is at +4% means we capture $15 instead of $120.
+Closing at +0.5% when TP is at +2% means we capture $15 instead of $60.
 Only close a WINNING position if it has been held past max_hold_hours.
 
 RULE 3b - TRAJECTORY-BASED EXIT (V3.1.59):
@@ -1760,7 +1760,7 @@ A position at 0% can rally to +5% in the next hour. Only the SL should close bre
 
 RULE 7 - TIME-BASED PATIENCE:
 Do NOT close positions just because they have been open 2-4 hours.
-Our TP targets are 2.5-5%. These moves take TIME (2-6h for alts, 6-24h for BTC).
+Our TP targets are 1.8-2.5%. These moves take TIME (2-4h for alts, 4-12h for BTC).
 Only close if: max_hold_hours exceeded AND position is negative.
 
 RULE 8 - WEEKEND/LOW LIQUIDITY (check if Saturday or Sunday):
@@ -2530,7 +2530,7 @@ def run_daemon():
     logger.info("V3.1.72 Changes:")
     logger.info("  - WATCHDOG FIX: per-pair progress marks (was only marking after full signal check)")
     logger.info("  - SLOT RECYCLING: PM Rule 9 at 5 positions (was 7), Rule 14 stale breakeven close")
-    logger.info("  - TP CAPS WIDENED: T1=4%, T2=5%, T3=5% (was 3/3.5/4% - never hit)")
+    logger.info("  - REALISTIC TPs: T1=1.8%(cap2.5), T2=2.0%(cap3.0), T3=2.0%(cap2.5) - hittable within hold window")
     logger.info("  - PM LOGS: full keep_reasons to Weex (was truncated at 200 chars)")
     logger.info("  - V3.1.64 PROFIT LOCK RESTORED: peak>=1.0%, fade>40% = close (V3.1.73 broke this)")
     logger.info("  - V3.1.64 FEAR SHIELD: skip regime exit for profitable positions when F&G<20")
