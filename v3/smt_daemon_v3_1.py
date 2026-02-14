@@ -1318,7 +1318,7 @@ def monitor_positions():
                 if len(_pnl_history[symbol]) > _PNL_HISTORY_MAX:
                     _pnl_history[symbol] = _pnl_history[symbol][-_PNL_HISTORY_MAX:]
                 # V3.1.64 PROFIT LOCK EXIT - Aggressive peak capture
-                # At 18x leverage: 1% price move = 18% ROE. Lock profits early.
+                # At 20x leverage: 1% price move = 20% ROE. Lock profits early.
                 # Don't wait for 15% TP when you can bank 1% repeatedly.
                 fade_pct = peak_pnl_pct - pnl_pct if peak_pnl_pct > 0 else 0
                 
@@ -1722,7 +1722,7 @@ Max 5 positions in the same direction normally. If 6+ LONGs or 6+ SHORTs, close 
 EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move all alts together.
 
 RULE 3 - LET WINNERS RUN:
-PROFIT LOCK RULE (V3.1.64): If a position peaked > 1.0% and faded > 40% from peak (still green), CLOSE IT to lock profit. At 18x leverage, 1% captured = 18% ROE. Do NOT let winners become losers. Banking small wins repeatedly beats waiting for huge TPs.
+PROFIT LOCK RULE (V3.1.64): If a position peaked > 1.0% and faded > 40% from peak (still green), CLOSE IT to lock profit. At 20x leverage, 1% captured = 20% ROE. Do NOT let winners become losers. Banking small wins repeatedly beats waiting for huge TPs.
 Closing at +0.5% when TP is at +6% means we capture $15 instead of $180.
 Only close a WINNING position if it has been held past max_hold_hours.
 

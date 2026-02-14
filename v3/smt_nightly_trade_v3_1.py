@@ -98,7 +98,7 @@ WHALE_CACHE = APICache()
 
 # Rate limit tracking
 LAST_GEMINI_CALL = 0
-GEMINI_CALL_DELAY = 5  # seconds between calls
+GEMINI_CALL_DELAY = 8  # V3.1.75: 8s between calls (was 5, caused empty responses)
 
 def rate_limit_gemini():
     """Enforce delay between Gemini API calls"""
@@ -875,7 +875,7 @@ MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.1.64: SNIPER++ - higher conviction for endg
 # V3.1.21: GEMINI API RATE LIMITER
 # ============================================================
 _last_gemini_call = 0
-_gemini_call_interval = 4.0  # V3.1.68: 4s between Gemini calls (was 2s, caused empty responses)
+_gemini_call_interval = 8.0  # V3.1.75: 8s between Gemini calls (4s caused 5/8 empty responses)
 
 def _rate_limit_gemini():
     """Ensure minimum interval between Gemini API calls"""
@@ -916,8 +916,8 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.1.7-MultiPersonaAgreement"
-MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.7"
+PIPELINE_VERSION = "SMT-v3.1.75-20xFlat-GeminiFix"
+MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.75"
 
 # Known step sizes
 KNOWN_STEP_SIZES = {
@@ -1565,10 +1565,10 @@ class SentimentPersona:
         self._cache[pair] = (time.time(), result)
     
     def _analyze_with_retry(self, pair: str, pair_info: Dict, competition_status: Dict) -> Dict:
-        """Single API call combining grounding + analysis (V3.1.21)"""
+        """V3.1.75: Robust Gemini sentiment with 3-retry + non-grounding fallback"""
         from google.genai.types import GenerateContentConfig, GoogleSearch, Tool
-        
-        # V3.1.21: COMBINED PROMPT - One API call instead of two!
+        import time as _time
+
         combined_prompt = f"""Search for "{pair} cryptocurrency price action last 24 hours" and analyze:
 
 You are a SHORT-TERM crypto trader making a 1-4 hour trade decision for {pair}.
@@ -1578,51 +1578,80 @@ FOCUS ON: Last 1-4 hours price action, support/resistance breaks, volume on red 
 
 Based ONLY on short-term price action and momentum:
 - If price is breaking DOWN through support or volume is spiking on RED candles = BEARISH
-- If price is breaking UP through resistance or volume is spiking on GREEN candles = BULLISH  
+- If price is breaking UP through resistance or volume is spiking on GREEN candles = BULLISH
 - If choppy/sideways with no clear direction = NEUTRAL
 
 Respond with JSON only:
 {{"sentiment": "BULLISH" or "BEARISH" or "NEUTRAL", "confidence": 0.0-1.0, "key_factor": "short-term reason only", "market_context": "brief summary of what you found"}}"""
-        
+
         grounding_config = GenerateContentConfig(
             tools=[Tool(google_search=GoogleSearch())],
             temperature=0.2,
-            
         )
-        
-        response = _gemini_full_call("gemini-2.5-flash", combined_prompt, grounding_config, timeout=75)
-        
-        # V3.1.68: Validate Gemini response - retry once on empty
-        if not response or not hasattr(response, 'text') or not response.text:
-            print(f"  [SENTIMENT] Empty response from Gemini for {pair}, retrying in 5s...")
-            import time as _time
-            _time.sleep(5)
+
+        # V3.1.75: 3 retries with exponential backoff on empty responses
+        max_empty_retries = 3
+        for attempt in range(max_empty_retries):
             try:
-                response = _gemini_full_call("gemini-2.5-flash", combined_prompt, grounding_config, timeout=75)
-            except Exception:
-                pass
-            if not response or not hasattr(response, 'text') or not response.text:
-                print(f"  [SENTIMENT] Still empty after retry for {pair}")
-                return self._fallback_result(pair, "Empty Gemini response after retry")
-        
-        clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
-        
-        if not clean_text:
-            print(f"  [SENTIMENT] Empty text after cleanup for {pair}")
-            return self._fallback_result(pair, "Empty response text")
-        
-        data = json.loads(clean_text)
-        
-        signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
-        
-        return {
-            "persona": self.name,
-            "signal": signal,
-            "confidence": data.get("confidence", 0.5),
-            "reasoning": data.get("key_factor", "Market sentiment analysis"),
-            "sentiment": data["sentiment"],
-            "market_context": data.get("market_context", "")[:800],
-        }
+                response = _gemini_full_call("gemini-2.5-flash", combined_prompt, grounding_config, timeout=90)
+                if response and hasattr(response, 'text') and response.text:
+                    clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+                    if clean_text:
+                        data = json.loads(clean_text)
+                        signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
+                        return {
+                            "persona": self.name,
+                            "signal": signal,
+                            "confidence": data.get("confidence", 0.5),
+                            "reasoning": data.get("key_factor", "Market sentiment analysis"),
+                            "sentiment": data["sentiment"],
+                            "market_context": data.get("market_context", "")[:800],
+                        }
+            except json.JSONDecodeError as je:
+                print(f"  [SENTIMENT] JSON parse error for {pair}: {je}")
+            except Exception as e:
+                print(f"  [SENTIMENT] Grounding attempt {attempt+1} error for {pair}: {e}")
+
+            if attempt < max_empty_retries - 1:
+                backoff = 5 * (attempt + 1)  # 5s, 10s
+                print(f"  [SENTIMENT] Empty/error from Gemini for {pair}, retry {attempt+1}/{max_empty_retries} in {backoff}s...")
+                _time.sleep(backoff)
+
+        # V3.1.75: FALLBACK - try WITHOUT grounding (no Google Search)
+        # Grounding is the #1 cause of empty responses (search fails silently)
+        print(f"  [SENTIMENT] Grounding failed {max_empty_retries}x for {pair}, trying WITHOUT grounding...")
+        try:
+            fallback_prompt = f"""You are a crypto trading analyst. Based on your knowledge of {pair} cryptocurrency:
+
+Analyze the LIKELY current short-term (1-4 hour) price action for {pair}.
+Consider: recent trend direction, typical volatility, market cycle position.
+
+Respond with JSON only:
+{{"sentiment": "BULLISH" or "BEARISH" or "NEUTRAL", "confidence": 0.0-1.0, "key_factor": "short-term reason only", "market_context": "analysis based on recent trends"}}"""
+
+            no_ground_config = GenerateContentConfig(temperature=0.3)
+            response = _gemini_full_call("gemini-2.5-flash", fallback_prompt, no_ground_config, timeout=60)
+
+            if response and hasattr(response, 'text') and response.text:
+                clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+                if clean_text:
+                    data = json.loads(clean_text)
+                    signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
+                    conf = min(data.get("confidence", 0.4), 0.6)  # Cap at 60% without grounding
+                    print(f"  [SENTIMENT] Non-grounding fallback succeeded for {pair}: {signal} ({conf:.0%})")
+                    return {
+                        "persona": self.name,
+                        "signal": signal,
+                        "confidence": conf,
+                        "reasoning": f"(no-grounding fallback) {data.get('key_factor', 'Model analysis')}",
+                        "sentiment": data["sentiment"],
+                        "market_context": data.get("market_context", "")[:800],
+                    }
+        except Exception as e:
+            print(f"  [SENTIMENT] Non-grounding fallback also failed for {pair}: {e}")
+
+        print(f"  [SENTIMENT] All attempts failed for {pair}, returning NEUTRAL")
+        return self._fallback_result(pair, "All Gemini attempts failed (grounding + fallback)")
     
     def _fallback_result(self, pair: str, error_msg: str) -> Dict:
         """Return neutral result on error"""
@@ -2209,8 +2238,16 @@ Respond with JSON ONLY (no markdown, no backticks):
                 temperature=0.1,
             )
             
-            response = _gemini_full_call("gemini-2.5-flash", prompt, config, timeout=75)
-            
+            response = _gemini_full_call("gemini-2.5-flash", prompt, config, timeout=90)
+
+            # V3.1.75: Retry once on empty Judge response
+            if not response or not hasattr(response, 'text') or not response.text:
+                print(f"  [JUDGE] Empty Gemini response for {pair}, retrying in 8s...")
+                import time as _jtime
+                _jtime.sleep(8)
+                _rate_limit_gemini()
+                response = _gemini_full_call("gemini-2.5-flash", prompt, config, timeout=90)
+
             clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
             data = json.loads(clean_text)
             
@@ -2778,7 +2815,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         conf_bracket = "ULTRA" if trade_confidence >= 0.90 else "HIGH" if trade_confidence >= 0.80 else "NORMAL"
         print(f"  [LEVERAGE] Tier {tier} ({current_regime}, {conf_bracket} {trade_confidence:.0%}): Using {safe_leverage}x")
     except Exception as e:
-        safe_leverage = 18  # V3.1.62: Aggressive fallback
+        safe_leverage = 20  # V3.1.75: 20x flat - user mandate
         print(f"  [LEVERAGE] Fallback to {safe_leverage}x: {e}")
     notional_usdt = position_usdt * safe_leverage
     raw_size = notional_usdt / current_price
