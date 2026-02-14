@@ -1708,11 +1708,11 @@ class FlowPersona:
             # Log for debugging
             print(f"  [FLOW] Taker ratio: {taker_ratio:.2f} | Extreme sell: {extreme_selling} | Heavy sell: {heavy_selling}")
             
-            # V3.1.44: Cap SHORT confidence during deep capitulation (F&G < 10)
-            # Shorting the literal bottom of the fear index = missing the god candle
+            # V3.1.75 FIX: Cap SHORT confidence in capitulation (F&G < 15)
+            # Shorting into extreme fear = missing the bounce. F&G=9 IS capitulation, not just F&G=5.
             fg_data = get_fear_greed_index()
             fg_val = fg_data.get("value", 50)
-            capitulation_short_cap = fg_val < 5  # V3.1.55: was 10, too aggressive - only cap at extreme extremes
+            capitulation_short_cap = fg_val < 15  # V3.1.75: was 5, way too low - cap at F&G<15 (real capitulation)
             
             if extreme_selling:
                 # V3.1.17: MASSIVE SELL PRESSURE - ignore depth entirely
@@ -1734,17 +1734,24 @@ class FlowPersona:
                     signals.append(("SHORT", 0.3, "Ask depth confirms"))
                 # IGNORE bid depth when heavy selling
             elif extreme_buying:
-                # V3.1.36: Let extreme buying signal through regardless of regime
-                # Judge V3.1.35 already has regime-aware weights that discount counter-trend
-                # Double-discounting was killing all LONG signals in BEARISH
-                if is_bearish:
-                    print(f"  [FLOW] BEARISH regime: Extreme buying {taker_ratio:.2f} (letting signal through)")
-                signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
+                # V3.1.75: Cap LONG confidence in extreme greed (mirror of SHORT cap in fear)
+                euphoria_long_cap = fg_val > 85
+                if euphoria_long_cap:
+                    signals.append(("LONG", 0.55, f"EXTREME taker buying: {taker_ratio:.2f} (CAPPED: F&G={fg_val} euphoria)"))
+                    print(f"  [FLOW] EUPHORIA CAP: Extreme buy 0.85->0.55 (F&G={fg_val})")
+                else:
+                    if is_bearish:
+                        print(f"  [FLOW] BEARISH regime: Extreme buying {taker_ratio:.2f} (letting signal through)")
+                    signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
             elif heavy_buying:
-                # V3.1.36: Let heavy buying signal through regardless of regime
-                if is_bearish:
-                    print(f"  [FLOW] BEARISH regime: Heavy buying {taker_ratio:.2f} (letting signal through)")
-                signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
+                euphoria_long_cap = fg_val > 85
+                if euphoria_long_cap:
+                    signals.append(("LONG", 0.40, f"Heavy taker buying: {taker_ratio:.2f} (CAPPED: F&G={fg_val} euphoria)"))
+                    print(f"  [FLOW] EUPHORIA CAP: Heavy buy 0.70->0.40 (F&G={fg_val})")
+                else:
+                    if is_bearish:
+                        print(f"  [FLOW] BEARISH regime: Heavy buying {taker_ratio:.2f} (letting signal through)")
+                    signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
                 if depth["bid_strength"] > 1.3:
                     signals.append(("LONG", 0.3, "Bid depth confirms"))
             else:
@@ -2160,7 +2167,7 @@ class JudgePersona:
         
         prompt = f"""You are the AI Judge for a crypto futures trading bot in a live competition (real money).
 Your job: analyze all signals and decide the SINGLE BEST action for {pair} right now.
-TRADE WINDOW: 1-4 hours. We check positions every 15 minutes. TP targets are 3-4% (54-72% ROE at 18x).
+TRADE WINDOW: 1-4 hours. We check positions every 15 minutes. TP targets are 3-4% (60-80% ROE at 20x).
 
 === MARKET REGIME ===
 Regime: {regime.get('regime', 'NEUTRAL')}
@@ -2217,14 +2224,16 @@ PATTERN RECOGNITION:
 TRADE HISTORY CONTEXT:
 {trade_history_summary}
 
-FEAR & GREED:
-- Extreme fear does NOT automatically mean buy. If FLOW confirms selling, the dump is real.
-- Extreme greed does NOT automatically mean sell. If FLOW confirms buying, the rally is real.
-- Contrarian trades need FLOW confirmation. Without it, go with the trend.
+FEAR & GREED (CONTRARIAN - THIS IS A HARD RULE):
+- F&G < 15 (CAPITULATION): ONLY suggest LONG. Extreme fear = panic selling = bounces are violent. Shorting capitulation is suicide. Code will block any SHORT you suggest.
+- F&G < 30 (FEAR): Strongly favor LONG. Fear = accumulation zone. Only SHORT if WHALE+FLOW both strongly confirm selling.
+- F&G > 85 (EUPHORIA): ONLY suggest SHORT. Extreme greed = blow-off top incoming. Buying euphoria is suicide. Code will block any LONG you suggest.
+- F&G > 70 (GREED): Strongly favor SHORT. Greed = distribution zone. Only LONG if WHALE+FLOW both strongly confirm buying.
+- F&G 30-70 (NEUTRAL ZONE): Use WHALE+FLOW signals normally, no directional bias.
 
 FUNDING RATE: Negative = shorts paying longs (bullish lean). Positive = longs paying shorts (bearish lean). Not a trade signal alone, but tips the balance when other signals are close.
 
-IMPORTANT: Say LONG or SHORT if you see a good setup. Do not say WAIT to be "safe." We are in a competition and need to take quality trades. Only WAIT when there is genuinely no edge.
+IMPORTANT: Say LONG or SHORT if you see a good setup. Do not say WAIT to be "safe." We are in a competition and need to take quality trades. Only WAIT when WHALE and FLOW directly contradict each other.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences explaining your decision"}}"""
@@ -2256,33 +2265,48 @@ Respond with JSON ONLY (no markdown, no backticks):
             confidence = min(0.95, max(0.0, float(raw_conf))) if raw_conf is not None else 0.0
             reasoning = data.get("reasoning") or "Gemini Judge decision"
             
-            # V3.1.64 ANTI-WAIT V2: Two-layer override
+            # V3.1.75 FIX #6: ANTI-WAIT V3 - respects F&G context
             # Layer 1: If 2+ personas agree on direction at >= 70% each, force that direction
-            # Layer 2: Fall back to reasoning word-count (V3.1.63 method)
+            # Layer 2: Reasoning word-count fallback
+            # GUARD: Never force SHORT in extreme fear or LONG in extreme greed
+            _fg_for_antiwait = regime.get("fear_greed", 50) if regime else 50
             if decision == "WAIT" and confidence >= 0.75:
-                # Layer 1: Persona consensus override
                 _long_voters = [v for v in persona_votes if v["signal"] == "LONG" and v["confidence"] >= 0.70]
                 _short_voters = [v for v in persona_votes if v["signal"] == "SHORT" and v["confidence"] >= 0.70]
-                
+
+                # F&G guard: block nonsensical forced overrides
+                if _fg_for_antiwait < 20:
+                    _short_voters = []  # Never force SHORT in extreme fear
+                    if _long_voters:
+                        print(f"  [JUDGE] ANTI-WAIT F&G guard: F&G={_fg_for_antiwait}, only allowing LONG override")
+                elif _fg_for_antiwait > 80:
+                    _long_voters = []  # Never force LONG in extreme greed
+                    if _short_voters:
+                        print(f"  [JUDGE] ANTI-WAIT F&G guard: F&G={_fg_for_antiwait}, only allowing SHORT override")
+
                 if len(_long_voters) >= 2 and len(_short_voters) == 0:
                     decision = "LONG"
                     _voter_names = [v["persona"] for v in _long_voters]
-                    print(f"  [JUDGE] V3.1.64 ANTI-WAIT: WAIT->LONG (consensus: {_voter_names}, conf={confidence:.0%})")
+                    print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->LONG (consensus: {_voter_names}, conf={confidence:.0%})")
                 elif len(_short_voters) >= 2 and len(_long_voters) == 0:
                     decision = "SHORT"
                     _voter_names = [v["persona"] for v in _short_voters]
-                    print(f"  [JUDGE] V3.1.64 ANTI-WAIT: WAIT->SHORT (consensus: {_voter_names}, conf={confidence:.0%})")
+                    print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->SHORT (consensus: {_voter_names}, conf={confidence:.0%})")
                 else:
-                    # Layer 2: Reasoning text analysis (fallback)
+                    # Layer 2: Reasoning text analysis (fallback) - also F&G guarded
                     reasoning_lower = reasoning.lower() if reasoning else ""
                     long_words = sum(1 for w in ["long", "buy", "bullish", "accumulation", "oversold", "bounce", "support"] if w in reasoning_lower)
                     short_words = sum(1 for w in ["short", "sell", "bearish", "distribution", "overbought", "dump", "resistance"] if w in reasoning_lower)
+                    if _fg_for_antiwait < 20:
+                        short_words = 0  # Block SHORT reasoning override in extreme fear
+                    elif _fg_for_antiwait > 80:
+                        long_words = 0  # Block LONG reasoning override in extreme greed
                     if long_words >= 2 and short_words == 0:
                         decision = "LONG"
-                        print(f"  [JUDGE] V3.1.64 ANTI-WAIT: WAIT->LONG (reasoning: {long_words} long words, conf={confidence:.0%})")
+                        print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->LONG (reasoning: {long_words} long words, conf={confidence:.0%})")
                     elif short_words >= 2 and long_words == 0:
                         decision = "SHORT"
-                        print(f"  [JUDGE] V3.1.64 ANTI-WAIT: WAIT->SHORT (reasoning: {short_words} short words, conf={confidence:.0%})")
+                        print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->SHORT (reasoning: {short_words} short words, conf={confidence:.0%})")
             raw_tp = data.get("tp_pct")
             tp_pct = float(raw_tp) if raw_tp is not None else tier_config["tp_pct"]
             raw_sl = data.get("sl_pct")
