@@ -1344,38 +1344,42 @@ def monitor_positions():
                 })
                 if len(_pnl_history[symbol]) > _PNL_HISTORY_MAX:
                     _pnl_history[symbol] = _pnl_history[symbol][-_PNL_HISTORY_MAX:]
-                # V3.1.75 FIX #5: PROFIT LOCK - less aggressive, let winners reach TP
-                # At 20x leverage: TP 2.5% = 50% ROE. Closing at 0.6% = 12% ROE = 4x less.
-                # Only lock when peak was substantial AND fade is severe.
+                # V3.1.75b: PROFIT LOCK OVERHAUL - trust exchange TP/SL orders
+                #
+                # THE MATH: $4,600 balance, 20x, 30% sizing = $27,600 notional
+                #   TP hit at 2.5% = $690 profit (one trade covers $500 target)
+                #   Profit lock at 0.75% = $207 profit (need 3 trades for same $500)
+                #   Profit lock COSTS 3x more trades to hit same target. Remove it.
+                #
+                # WEEX has TP/SL orders placed on the exchange. Let them trigger.
+                # Only intervene for:
+                #   1. THESIS BROKEN: peaked green, now negative = trade failed, close before SL
+                #   2. TP OVERRUN: peaked past TP target but exchange order didn't fill = close on fade
+                #
                 fade_pct = peak_pnl_pct - pnl_pct if peak_pnl_pct > 0 else 0
+                _tier_tp_target = get_tier_config(tier).get("tp_pct", 2.5)
 
-                # Rule 0: PROFIT LOCK - peak >= 1.5% (was 1.0%), faded 50%+ (was 40%), still green > 0.5%
-                # Example: peaked 2.0%, now at 0.9% (faded 55%) -> CLOSE and bank 0.9%
-                if not should_exit and peak_pnl_pct >= 1.5 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0.5:
+                # Rule 1: THESIS BROKEN - peaked >= 1.0% but now negative
+                # Trade was working, now it's not. Close before SL to save capital.
+                if not should_exit and peak_pnl_pct >= 1.0 and pnl_pct <= 0:
                     should_exit = True
-                    exit_reason = f"V3.1.75_profit_lock T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%, locking gains)"
-                    print(f"  [PROFIT LOCK] {symbol}: {exit_reason}")
+                    exit_reason = f"V3.1.75_thesis_broken T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (went negative)"
+                    print(f"  [THESIS BROKEN] {symbol}: {exit_reason}")
 
-                # Rule 1: Very high peak, severe fade -> lock profits
-                # If peaked > 2.0% and dropped more than 50% from peak
-                elif not should_exit and peak_pnl_pct >= 2.0 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0:
+                # Rule 2: TP OVERRUN - peaked PAST the TP target, fading back
+                # Exchange TP order should have triggered but didn't (slippage/gap).
+                # Close now to capture what's left.
+                elif not should_exit and peak_pnl_pct >= _tier_tp_target and pnl_pct < _tier_tp_target * 0.60 and pnl_pct > 0:
                     should_exit = True
-                    exit_reason = f"V3.1.75_peak_fade_high T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
-                    print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
+                    exit_reason = f"V3.1.75_tp_overrun T{tier}: peaked {peak_pnl_pct:.2f}% (past TP {_tier_tp_target}%), now {pnl_pct:.2f}% (TP missed, locking)"
+                    print(f"  [TP OVERRUN] {symbol}: {exit_reason}")
 
-                # Rule 2: Moderate peak, catastrophic fade (>75%) -> lock whatever remains
-                # If peaked > 1.5% and dropped more than 75% from peak (almost gave it all back)
-                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct < peak_pnl_pct * 0.25 and pnl_pct > 0:
+                # Rule 3: CATASTROPHIC REVERSAL - peaked >= 2.0% (strong winner) now nearly flat
+                # This trade was a clear winner that completely reversed. Something changed fundamentally.
+                elif not should_exit and peak_pnl_pct >= 2.0 and pnl_pct < 0.3:
                     should_exit = True
-                    exit_reason = f"V3.1.75_peak_fade_mod T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
-                    print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
-                
-                # Rule 3: Any peak that went negative -> thesis broken
-                # If peaked > 0.8% but now negative (lowered from 1.0%)
-                elif not should_exit and peak_pnl_pct >= 0.8 and pnl_pct <= 0:
-                    should_exit = True
-                    exit_reason = f"V3.1.64_peak_to_loss T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}%"
-                    print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
+                    exit_reason = f"V3.1.75_catastrophic_reversal T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (gave it all back)"
+                    print(f"  [CATASTROPHIC] {symbol}: {exit_reason}")
                 
 
                 # 1. Max hold time exceeded (tier-specific)
@@ -1750,10 +1754,11 @@ EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move
 CRITICAL (V3.1.75): In F&G < 15, close any SHORT positions — shorting into capitulation is suicidal.
 In F&G > 85 (Euphoria), close any LONG positions — buying euphoria is suicidal.
 
-RULE 3 - LET WINNERS RUN:
-PROFIT LOCK RULE (V3.1.75): If a position peaked > 1.5% and faded > 50% from peak (still green above 0.5%), CLOSE IT to lock profit. At 20x leverage, 1.5% captured = 30% ROE.
-Do NOT close winners that are simply pulling back normally. A 1.0% -> 0.7% pullback is healthy.
-Only close a WINNING position early if it has severely faded from a significant peak.
+RULE 3 - LET WINNERS REACH TP:
+DO NOT close winning positions early. WEEX has TP orders at 2.5-3.5%. Let them trigger.
+At 20x leverage: TP hit at 2.5% = $690 profit. Closing at 0.75% = $207. That's 3x less.
+A trade at +1.5% pulling back to +0.7% is 60% of the way to TP — that's a NORMAL pullback, not a close signal.
+Only close a winner if: (a) it peaked green then went NEGATIVE (thesis broken), or (b) it peaked PAST TP but exchange order didn't fill (TP overrun).
 
 RULE 3b - TRAJECTORY-BASED EXIT (V3.1.59):
 If a position's PnL trajectory shows 5+ readings of steady decline from a peak > 1.0%
