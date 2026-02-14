@@ -1332,16 +1332,16 @@ def monitor_positions():
                 # Don't wait for 15% TP when you can bank 1% repeatedly.
                 fade_pct = peak_pnl_pct - pnl_pct if peak_pnl_pct > 0 else 0
                 
-                # Rule 0: PROFIT LOCK - peak >= 1.5%, faded 50%+, still green
-                # V3.1.74: Widened (was peak>=1.0%, fade>40%) - let winners run closer to TP
-                if not should_exit and peak_pnl_pct >= 1.5 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0.15:
+                # Rule 0 (NEW): PROFIT LOCK - peak >= 1.0%, faded 40%+, still green
+                # Example: peaked 1.5%, now at 0.85% (faded 43%) -> CLOSE and bank 0.85%
+                if not should_exit and peak_pnl_pct >= 1.0 and pnl_pct < peak_pnl_pct * 0.60 and pnl_pct > 0.15:
                     should_exit = True
                     exit_reason = f"V3.1.64_profit_lock T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%, locking gains)"
                     print(f"  [PROFIT LOCK] {symbol}: {exit_reason}")
-                
-                # Rule 1: Very high peak, deep fade -> lock profits
-                # V3.1.74: If peaked > 2.0% and dropped more than 40% from peak
-                elif not should_exit and peak_pnl_pct >= 2.0 and pnl_pct < peak_pnl_pct * 0.60 and pnl_pct > 0:
+
+                # Rule 1: High peak, deep fade -> lock profits
+                # If peaked > 1.5% and dropped more than 50% from peak
+                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0:
                     should_exit = True
                     exit_reason = f"V3.1.64_peak_fade_high T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
                     print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
@@ -1738,7 +1738,7 @@ Max 5 positions in the same direction normally. If 6+ LONGs or 6+ SHORTs, close 
 EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move all alts together.
 
 RULE 3 - LET WINNERS RUN:
-PROFIT LOCK RULE (V3.1.74): If a position peaked > 1.5% and faded > 50% from peak (still green), CLOSE IT to lock profit. At 18x leverage, 1% captured = 18% ROE. Do NOT let winners become losers. Banking small wins repeatedly beats waiting for huge TPs.
+PROFIT LOCK RULE (V3.1.64): If a position peaked > 1.0% and faded > 40% from peak (still green), CLOSE IT to lock profit. At 18x leverage, 1% captured = 18% ROE. Do NOT let winners become losers. Banking small wins repeatedly beats waiting for huge TPs.
 Closing at +0.5% when TP is at +6% means we capture $15 instead of $180.
 Only close a WINNING position if it has been held past max_hold_hours.
 
@@ -2534,7 +2534,7 @@ def run_daemon():
     logger.info("  - BTC FEAR SHIELD: Block BTC SHORTs when F&G<20 (contrarian BUY only for slow coins)")
     logger.info("  - WATCHDOG FIX: per-pair progress marks + PM/regime marks (was only after full loops)")
     logger.info("  - WATCHDOG TIMEOUT: 900s (was 600s, signal check+PM needs ~8min)")
-    logger.info("  - PROFIT LOCK WIDENED: peak>=1.5%, fade>50% (was peak>=1.0%, fade>40%) - let winners run to TP")
+    logger.info("  - PROFIT LOCK: peak>=1.0%, fade>40% = close (bank small wins)")
     logger.info("  - OPPOSITE FLIP FIX: >= threshold (was > which blocked 85% vs 85% flips)")
     logger.info("  - GRACE PERIOD: 90min in extreme fear F&G<20 (was always 30min in code)")
     logger.info("  - TIER CONFIG: T1=2.0% TP, T2=2.5% TP, T3=2.0% TP - recovery-optimized")
