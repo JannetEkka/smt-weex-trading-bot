@@ -891,6 +891,18 @@ def check_trading_signals():
                 else:
                     logger.info(f"SESSION [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} >= {session_min_conf:.0%}, proceeding {opportunity['pair']}")
                 
+                # V3.1.75: FEAR SHIELD ALL - Block ALL SHORTs when F&G < 20
+                _opp_signal = opportunity["decision"]["decision"]
+                if is_extreme_fear and _opp_signal == "SHORT":
+                    logger.warning(f"FEAR SHIELD: F&G={opp_fear_greed}, blocking SHORT on {opportunity['pair']} — contrarian BUY only in extreme fear")
+                    upload_ai_log_to_weex(
+                        stage=f"V3.1.75 FEAR SHIELD: SHORT {opportunity['pair']} blocked",
+                        input_data={"fear_greed": opp_fear_greed, "signal": "SHORT", "pair": opportunity['pair']},
+                        output_data={"action": "BLOCKED", "reason": f"F&G={opp_fear_greed} < 20, no shorts allowed"},
+                        explanation=f"Fear Shield blocked SHORT on {opportunity['pair']}. F&G={opp_fear_greed} = extreme fear. Shorting at market bottoms gets destroyed by relief bounces. Contrarian BUY thesis only."
+                    )
+                    continue
+
                 # V3.1.66: REGIME VETO - code-level block on counter-regime trades
                 # get_market_regime_for_exit is defined in this file, no import needed
                 try:
@@ -899,7 +911,6 @@ def check_trading_signals():
                     logger.warning(f"REGIME VETO: regime check failed ({_re}), allowing trade")
                     _regime_now = {"regime": "NEUTRAL"}
                 _regime_label = _regime_now.get("regime", "NEUTRAL")
-                _opp_signal = opportunity["decision"]["decision"]
                 _regime_vetoed = False
                 if _regime_label == "BEARISH" and _opp_signal == "LONG":
                     # Exception: allow if WHALE strongly says LONG (contrarian accumulation)
@@ -2512,17 +2523,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.69 - SNIPER MODE: inter-cycle cooldown, Gemini rate limit fix, tighter TP")
+    logger.info("SMT Daemon V3.1.75 - FEAR SHIELD + RE-TIER FIX")
     logger.info("=" * 60)
-    logger.info("V3.1.67 SNIPER MODE (RECOVERED):")
-    logger.info("  - WHALE: CryptOracle for ALL 8 pairs (Etherscan removed)")
-    logger.info("  - Judge: WHALE+FLOW co-primary signals (was FLOW-only)")
-    logger.info("  - V3.1.64 PROFIT LOCK: peak>=1.0%, fade>40% = close (bank small wins)")
-    logger.info("  - V3.1.64 FEAR SHIELD: skip regime exit for profitable positions when F&G<20")
-    logger.info("  - V3.1.64 VOL-ADJUSTED SL: 1.5x wider SL when F&G<15")
-    logger.info("  - V3.1.64 HARD CAP: MAX_POSITIONS strictly enforced, no capitulation override")
-    logger.info("  - Max 3 positions, 80% confidence floor")
-    logger.info("  - Anti-WAIT override + trade history to Judge")
+    logger.info("V3.1.75 FIXES:")
+    logger.info("  - FEAR SHIELD ALL: Block ALL SHORTs when F&G < 20 (not just BTC)")
+    logger.info("  - RE-TIER: T1=BTC/ETH/BNB, T2=SOL/LTC/XRP (12h/2.5%TP), T3=DOGE/ADA")
+    logger.info("  - OPPOSITE FLIP: strict > (not >=) to prevent zero-confidence flips")
+    logger.info("  - BASE_SLOTS=3, grace=30min, force_exit=-2.0% (prelim discipline)")
+    logger.info("  - Max 3 positions, 85% confidence floor")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]

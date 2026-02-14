@@ -900,7 +900,7 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
 # Prelims: 1.5% SL -> 566% ROI. Finals: 3% SL -> -70% drawdown. The data speaks.
 TIER_CONFIG = {
     1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.025, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 2.5, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.025, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 2.5, "sl_pct": 1.5, "max_hold_hours": 12, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
     3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.035, "trailing_stop": 0.015, "time_limit": 360, "tp_pct": 3.5, "sl_pct": 1.8, "max_hold_hours": 4, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
 }
 # Trading Pairs with correct tiers
@@ -908,10 +908,10 @@ TRADING_PAIRS = {
     "BTC": {"symbol": "cmt_btcusdt", "tier": 1, "has_whale_data": True},
     "ETH": {"symbol": "cmt_ethusdt", "tier": 1, "has_whale_data": True},
     "BNB": {"symbol": "cmt_bnbusdt", "tier": 1, "has_whale_data": True},
-    "LTC": {"symbol": "cmt_ltcusdt", "tier": 1, "has_whale_data": True},
+    "LTC": {"symbol": "cmt_ltcusdt", "tier": 2, "has_whale_data": True},
     "SOL": {"symbol": "cmt_solusdt", "tier": 2, "has_whale_data": True},
     "DOGE": {"symbol": "cmt_dogeusdt", "tier": 3, "has_whale_data": True},
-    "XRP": {"symbol": "cmt_xrpusdt", "tier": 3, "has_whale_data": True},
+    "XRP": {"symbol": "cmt_xrpusdt", "tier": 2, "has_whale_data": True},
     "ADA": {"symbol": "cmt_adausdt", "tier": 3, "has_whale_data": True},
 }
 
