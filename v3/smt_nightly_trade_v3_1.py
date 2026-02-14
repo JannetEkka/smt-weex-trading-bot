@@ -916,8 +916,8 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.1.75-20xFlat-GeminiFix"
-MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.75"
+PIPELINE_VERSION = "SMT-v3.1.76-UltraSniper-DisciplineRestoration"
+MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.76"
 
 # Known step sizes
 KNOWN_STEP_SIZES = {
