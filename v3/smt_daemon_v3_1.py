@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.26 - HYBRID REGIME + RL DATA COLLECTION
+SMT Trading Daemon V3.1.76 - ULTRA SNIPER + DISCIPLINE RESTORATION
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -935,21 +935,27 @@ def check_trading_signals():
                     session_name = "ACTIVE"
                     session_min_conf = 0.70  # Normal hours
                 
-                # V3.1.64a: REMOVED extreme fear floor override
-                # 85% confidence floor is absolute - no exceptions
-                if is_extreme_fear:
-                    logger.info(f"EXTREME FEAR: F&G={opp_fear_greed}, but 85% floor stays for {opportunity['pair']}")
-                
+                # V3.1.75 FIX #4: Lower confidence floor for CONTRARIAN trades in extreme F&G
+                # Extreme fear = best LONG opportunities. Extreme greed = best SHORT opportunities.
+                # Blocking them with high confidence floors defeats the contrarian strategy.
+                _opp_signal_check = opportunity["decision"]["decision"]
+                if opp_fear_greed < 20 and _opp_signal_check == "LONG":
+                    session_min_conf = min(session_min_conf, 0.65)  # LONGs in extreme fear get lower bar
+                    logger.info(f"CONTRARIAN BOOST: F&G={opp_fear_greed}, lowering LONG floor to 65% for {opportunity['pair']}")
+                elif opp_fear_greed > 80 and _opp_signal_check == "SHORT":
+                    session_min_conf = min(session_min_conf, 0.65)  # SHORTs in extreme greed get lower bar
+                    logger.info(f"CONTRARIAN BOOST: F&G={opp_fear_greed}, lowering SHORT floor to 65% for {opportunity['pair']}")
+
                 if opp_confidence < session_min_conf:
                     logger.warning(f"SESSION FILTER [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} < {session_min_conf:.0%}, skipping {opportunity['pair']}")
                     continue
                 else:
                     logger.info(f"SESSION [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} >= {session_min_conf:.0%}, proceeding {opportunity['pair']}")
                 
-                # V3.1.75: REGIME VETO - only active in NORMAL conditions
-                # DISABLED in extreme fear (F&G<20): contrarian buys ARE the strategy,
-                # vetoing LONGs in BEARISH+extreme fear contradicts our edge
-                # Only block on SPIKE events (sudden 1h moves) which are genuine danger
+                # V3.1.75: REGIME VETO + F&G SANITY CHECK
+                # Rule 1: F&G < 15 = CAPITULATION = LONG ONLY (no shorts into bounces)
+                # Rule 2: F&G > 85 = EUPHORIA = SHORT ONLY (no longs into tops)
+                # Rule 3: Regime-based veto with WHALE+FLOW override (not WHALE alone)
                 try:
                     _regime_now = get_market_regime_for_exit()
                 except Exception as _re:
@@ -959,25 +965,56 @@ def check_trading_signals():
                 _opp_signal = opportunity["decision"]["decision"]
                 _regime_vetoed = False
 
-                # V3.1.75: Skip regime veto entirely in extreme fear - contrarian mode
-                _fg_for_veto = opportunity["decision"].get("fear_greed", 50)
-                if _fg_for_veto < 20:
-                    logger.info(f"REGIME VETO SKIP: F&G={_fg_for_veto} (extreme fear), allowing {_opp_signal} on {opportunity['pair']}")
-                else:
-                    # Only veto on SPIKE events (sudden 1h moves)
-                    if _regime_label in ("SPIKE_UP",) and _opp_signal == "SHORT":
+                # V3.1.75 FIX #1: F&G HARD BLOCK - common sense, no exceptions
+                if opp_fear_greed < 15 and _opp_signal == "SHORT":
+                    _regime_vetoed = True
+                    logger.warning(f"F&G VETO: F&G={opp_fear_greed} < 15 (CAPITULATION), blocking SHORT on {opportunity['pair']}. Shorting into extreme fear is suicidal.")
+                elif opp_fear_greed > 85 and _opp_signal == "LONG":
+                    _regime_vetoed = True
+                    logger.warning(f"F&G VETO: F&G={opp_fear_greed} > 85 (EUPHORIA), blocking LONG on {opportunity['pair']}. Buying into extreme greed is suicidal.")
+
+                # V3.1.75 FIX #7: Regime veto requires WHALE+FLOW agreement to override (not WHALE alone)
+                if not _regime_vetoed and _regime_label == "BEARISH" and _opp_signal == "LONG":
+                    _whale_vote_check = next((v for v in opportunity["decision"].get("persona_votes", []) if v.get("persona") == "WHALE"), None)
+                    _flow_vote_check = next((v for v in opportunity["decision"].get("persona_votes", []) if v.get("persona") == "FLOW"), None)
+                    _whale_conf_check = _whale_vote_check.get("confidence", 0) if _whale_vote_check else 0
+                    _whale_dir_check = _whale_vote_check.get("signal", "NEUTRAL") if _whale_vote_check else "NEUTRAL"
+                    _flow_dir_check = _flow_vote_check.get("signal", "NEUTRAL") if _flow_vote_check else "NEUTRAL"
+                    _flow_conf_check = _flow_vote_check.get("confidence", 0) if _flow_vote_check else 0
+                    if _whale_dir_check == "LONG" and _whale_conf_check >= 0.70 and _flow_dir_check == "LONG" and _flow_conf_check >= 0.60:
+                        logger.info(f"REGIME VETO OVERRIDE: BEARISH but WHALE+FLOW both LONG (W={_whale_conf_check:.0%}, F={_flow_conf_check:.0%}), allowing {opportunity['pair']}")
+                    elif _whale_dir_check == "LONG" and _whale_conf_check >= 0.85:
+                        logger.info(f"REGIME VETO OVERRIDE: BEARISH but WHALE very strong LONG@{_whale_conf_check:.0%}, allowing {opportunity['pair']}")
+                    else:
                         _regime_vetoed = True
-                        logger.warning(f"REGIME VETO: SPIKE_UP, blocking SHORT on {opportunity['pair']}")
-                    elif _regime_label in ("SPIKE_DOWN",) and _opp_signal == "LONG":
+                        logger.warning(f"REGIME VETO: {_regime_label} market, blocking LONG on {opportunity['pair']} (whale={_whale_dir_check}@{_whale_conf_check:.0%}, flow={_flow_dir_check}@{_flow_conf_check:.0%})")
+                elif not _regime_vetoed and _regime_label == "BULLISH" and _opp_signal == "SHORT":
+                    _whale_vote_check = next((v for v in opportunity["decision"].get("persona_votes", []) if v.get("persona") == "WHALE"), None)
+                    _flow_vote_check = next((v for v in opportunity["decision"].get("persona_votes", []) if v.get("persona") == "FLOW"), None)
+                    _whale_conf_check = _whale_vote_check.get("confidence", 0) if _whale_vote_check else 0
+                    _whale_dir_check = _whale_vote_check.get("signal", "NEUTRAL") if _whale_vote_check else "NEUTRAL"
+                    _flow_dir_check = _flow_vote_check.get("signal", "NEUTRAL") if _flow_vote_check else "NEUTRAL"
+                    _flow_conf_check = _flow_vote_check.get("confidence", 0) if _flow_vote_check else 0
+                    if _whale_dir_check == "SHORT" and _whale_conf_check >= 0.70 and _flow_dir_check == "SHORT" and _flow_conf_check >= 0.60:
+                        logger.info(f"REGIME VETO OVERRIDE: BULLISH but WHALE+FLOW both SHORT (W={_whale_conf_check:.0%}, F={_flow_conf_check:.0%}), allowing {opportunity['pair']}")
+                    elif _whale_dir_check == "SHORT" and _whale_conf_check >= 0.85:
+                        logger.info(f"REGIME VETO OVERRIDE: BULLISH but WHALE very strong SHORT@{_whale_conf_check:.0%}, allowing {opportunity['pair']}")
+                    else:
                         _regime_vetoed = True
-                        logger.warning(f"REGIME VETO: SPIKE_DOWN, blocking LONG on {opportunity['pair']}")
+                        logger.warning(f"REGIME VETO: {_regime_label} market, blocking SHORT on {opportunity['pair']} (whale={_whale_dir_check}@{_whale_conf_check:.0%}, flow={_flow_dir_check}@{_flow_conf_check:.0%})")
+                elif not _regime_vetoed and _regime_label in ("SPIKE_UP",) and _opp_signal == "SHORT":
+                    _regime_vetoed = True
+                    logger.warning(f"REGIME VETO: SPIKE_UP, blocking SHORT on {opportunity['pair']}")
+                elif not _regime_vetoed and _regime_label in ("SPIKE_DOWN",) and _opp_signal == "LONG":
+                    _regime_vetoed = True
+                    logger.warning(f"REGIME VETO: SPIKE_DOWN, blocking LONG on {opportunity['pair']}")
 
                 if _regime_vetoed:
                     upload_ai_log_to_weex(
                         stage=f"V3.1.75 REGIME VETO: {_opp_signal} {opportunity['pair']} blocked",
-                        input_data={"regime": _regime_label, "signal": _opp_signal, "pair": opportunity['pair']},
-                        output_data={"action": "VETOED", "reason": f"SPIKE event in {_regime_label}"},
-                        explanation=f"V3.1.75: Only SPIKE events trigger regime veto. Blocked {_opp_signal} on {opportunity['pair']} during {_regime_label}."
+                        input_data={"regime": _regime_label, "signal": _opp_signal, "pair": opportunity['pair'], "fear_greed": opp_fear_greed},
+                        output_data={"action": "VETOED", "reason": f"F&G={opp_fear_greed}, regime={_regime_label}"},
+                        explanation=f"V3.1.75 sanity filter: blocked {_opp_signal} on {opportunity['pair']}. F&G={opp_fear_greed}, regime={_regime_label}. Contrarian logic: no shorts in capitulation, no longs in euphoria."
                     )
                     continue
 
@@ -1362,22 +1399,42 @@ def monitor_positions():
                 })
                 if len(_pnl_history[symbol]) > _PNL_HISTORY_MAX:
                     _pnl_history[symbol] = _pnl_history[symbol][-_PNL_HISTORY_MAX:]
-                # V3.1.75: PROFIT LOCK - less aggressive, let winners breathe
-                # Previous version closed at 1% peak with 40% fade - way too tight
+                # V3.1.75b: PROFIT LOCK OVERHAUL - trust exchange TP/SL orders
+                #
+                # THE MATH: $4,600 balance, 20x, 30% sizing = $27,600 notional
+                #   TP hit at 2.5% = $690 profit (one trade covers $500 target)
+                #   Profit lock at 0.75% = $207 profit (need 3 trades for same $500)
+                #   Profit lock COSTS 3x more trades to hit same target. Remove it.
+                #
+                # WEEX has TP/SL orders placed on the exchange. Let them trigger.
+                # Only intervene for:
+                #   1. THESIS BROKEN: peaked green, now negative = trade failed, close before SL
+                #   2. TP OVERRUN: peaked past TP target but exchange order didn't fill = close on fade
+                #
                 fade_pct = peak_pnl_pct - pnl_pct if peak_pnl_pct > 0 else 0
+                _tier_tp_target = get_tier_config(tier).get("tp_pct", 2.5)
 
-                # Rule 1: High peak, deep fade -> lock profits
-                # If peaked > 2.0% and dropped more than 50% from peak
-                if not should_exit and peak_pnl_pct >= 2.0 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0:
+                # Rule 1: THESIS BROKEN - peaked >= 1.0% but now negative
+                # Trade was working, now it's not. Close before SL to save capital.
+                if not should_exit and peak_pnl_pct >= 1.0 and pnl_pct <= 0:
                     should_exit = True
-                    exit_reason = f"V3.1.75_peak_fade T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
-                    print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
+                    exit_reason = f"V3.1.75_thesis_broken T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (went negative)"
+                    print(f"  [THESIS BROKEN] {symbol}: {exit_reason}")
 
-                # Rule 2: Any significant peak that went negative -> thesis broken
-                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct <= 0:
+                # Rule 2: TP OVERRUN - peaked PAST the TP target, fading back
+                # Exchange TP order should have triggered but didn't (slippage/gap).
+                # Close now to capture what's left.
+                elif not should_exit and peak_pnl_pct >= _tier_tp_target and pnl_pct < _tier_tp_target * 0.60 and pnl_pct > 0:
                     should_exit = True
-                    exit_reason = f"V3.1.75_peak_to_loss T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}%"
-                    print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
+                    exit_reason = f"V3.1.75_tp_overrun T{tier}: peaked {peak_pnl_pct:.2f}% (past TP {_tier_tp_target}%), now {pnl_pct:.2f}% (TP missed, locking)"
+                    print(f"  [TP OVERRUN] {symbol}: {exit_reason}")
+
+                # Rule 3: CATASTROPHIC REVERSAL - peaked >= 2.0% (strong winner) now nearly flat
+                # This trade was a clear winner that completely reversed. Something changed fundamentally.
+                elif not should_exit and peak_pnl_pct >= 2.0 and pnl_pct < 0.3:
+                    should_exit = True
+                    exit_reason = f"V3.1.75_catastrophic_reversal T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (gave it all back)"
+                    print(f"  [CATASTROPHIC] {symbol}: {exit_reason}")
                 
 
                 # 1. Max hold time exceeded (tier-specific)
@@ -1754,11 +1811,14 @@ RULE 2 - DIRECTIONAL CONCENTRATION LIMIT:
 Max 5 positions in the same direction normally. If 6+ LONGs or 6+ SHORTs, close the WEAKEST ones
 (lowest PnL% or highest loss) until we have max 5.
 EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move all alts together.
+CRITICAL (V3.1.75): In F&G < 15, close any SHORT positions — shorting into capitulation is suicidal.
+In F&G > 85 (Euphoria), close any LONG positions — buying euphoria is suicidal.
 
-RULE 3 - LET WINNERS RUN:
-PROFIT LOCK RULE (V3.1.64): If a position peaked > 1.0% and faded > 40% from peak (still green), CLOSE IT to lock profit. At 18x leverage, 1% captured = 18% ROE. Do NOT let winners become losers. Banking small wins repeatedly beats waiting for huge TPs.
-Closing at +0.5% when TP is at +6% means we capture $15 instead of $180.
-Only close a WINNING position if it has been held past max_hold_hours.
+RULE 3 - LET WINNERS REACH TP:
+DO NOT close winning positions early. WEEX has TP orders at 2.5-3.5%. Let them trigger.
+At 20x leverage: TP hit at 2.5% = $690 profit. Closing at 0.75% = $207. That's 3x less.
+A trade at +1.5% pulling back to +0.7% is 60% of the way to TP — that's a NORMAL pullback, not a close signal.
+Only close a winner if: (a) it peaked green then went NEGATIVE (thesis broken), or (b) it peaked PAST TP but exchange order didn't fill (TP overrun).
 
 RULE 3b - TRAJECTORY-BASED EXIT (V3.1.59):
 If a position's PnL trajectory shows 5+ readings of steady decline from a peak > 1.0%
@@ -1793,7 +1853,7 @@ A position at 0% can rally to +5% in the next hour. Only the SL should close bre
 
 RULE 7 - TIME-BASED PATIENCE:
 Do NOT close positions just because they have been open 2-4 hours.
-Our TP targets are 2-2.5%. These moves take TIME (4-12h for alts, 12-24h for BTC).
+Our TP targets are 2.5-3.5% (50-70% ROE at 20x). These moves take 1-4h typically.
 Only close if: max_hold_hours exceeded AND position is negative.
 
 RULE 8 - WEEKEND/LOW LIQUIDITY (check if Saturday or Sunday):
@@ -2546,17 +2606,15 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.75 - DISCIPLINE RESTORATION")
+    logger.info("SMT Daemon V3.1.76 - ULTRA SNIPER: 92% confidence, 3 max positions, trust exchange TP")
     logger.info("=" * 60)
-    logger.info("V3.1.75 Changes:")
-    logger.info("  - REGIME VETO: Only on SPIKE events (was blocking contrarian trades in fear)")
-    logger.info("  - SIZING: 12% base, max 20% (was 40%/50% - suicidal)")
-    logger.info("  - LEVERAGE: T1=15x T2=12x T3=10x (was 18-20x everything)")
-    logger.info("  - PROFIT LOCK: peak>=2.0% fade>50% (was 1.0%/40% too tight)")
-    logger.info("  - SLOTS: 5 positions (was 3)")
-    logger.info("  - WATCHDOG: 20min internal, 15min external")
-    logger.info("  - R:R: T1=3/1.5% T2=3.5/1.5% T3=3/1.8%")
-    logger.info("  - Max 5 positions, 85% confidence floor")
+    logger.info("V3.1.76 DISCIPLINE RESTORATION:")
+    logger.info("  - STOP OVERTRADING: 92% confidence floor (was 85%). Bob is #1 with 22 trades, we had 206.")
+    logger.info("  - CONCENTRATE CAPITAL: Max 3 positions (was 5). Bigger trades, bigger wins.")
+    logger.info("  - PROFIT LOCK FIX: Trust exchange TP orders. Stop killing winners at +0.7%.")
+    logger.info("  - FLAT 20x LEVERAGE: No more random reductions. Full power every trade.")
+    logger.info("  - CONTRARIAN F&G: Extreme Fear = LONG only, Extreme Greed = SHORT only.")
+    logger.info("  - TARGET: $4,292 → $13,000+ in 7 days via compounding.")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
@@ -2564,8 +2622,8 @@ def run_daemon():
         runner = RUNNER_CONFIG.get(tier, {})
         runner_str = f"Runner: +{runner.get('trigger_pct', 0)}% -> close 50%" if runner.get("enabled") else "No Runner"
         logger.info(f"  Tier {tier}: {', '.join(pairs)}")
-        logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['max_hold_hours']}h | {runner_str}")
-    logger.info("Cooldown Override: 85%+ confidence bypasses cooldown")
+        logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
+    logger.info("Cooldown Override: 92%+ confidence bypasses cooldown")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup

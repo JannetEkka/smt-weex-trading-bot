@@ -98,7 +98,7 @@ WHALE_CACHE = APICache()
 
 # Rate limit tracking
 LAST_GEMINI_CALL = 0
-GEMINI_CALL_DELAY = 5  # seconds between calls
+GEMINI_CALL_DELAY = 8  # V3.1.75: 8s between calls (was 5, caused empty responses)
 
 def rate_limit_gemini():
     """Enforce delay between Gemini API calls"""
@@ -870,11 +870,11 @@ STARTING_BALANCE = 10000.0  # V3.1.42: Finals - started with 10K
 FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 
 # Trading Parameters - V3.1.16 UPDATES
-MAX_LEVERAGE = 15  # V3.1.75: Capped from 20 - lower leverage = survive longer
-MAX_OPEN_POSITIONS = 5
-MAX_SINGLE_POSITION_PCT = 0.20  # V3.1.75: 20% max (was 50% - suicidal)
-MIN_SINGLE_POSITION_PCT = 0.07  # V3.1.75: 7% min (was 20% - way too large)
-MIN_CONFIDENCE_TO_TRADE = 0.85  # Keep 85% floor - only high conviction trades
+MAX_LEVERAGE = 20
+MAX_OPEN_POSITIONS = 3  # V3.1.76: CONCENTRATE CAPITAL - 5 positions spread too thin. Bob is #1 with fewer, bigger trades.
+MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
+MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
+MIN_CONFIDENCE_TO_TRADE = 0.92  # V3.1.76: ULTRA SNIPER - 206 trades killed us in fees ($1,795). Bob is #1 with 22 trades. Trade LESS, win MORE.
 
 # ============================================================
 # V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
@@ -888,7 +888,7 @@ MIN_CONFIDENCE_TO_TRADE = 0.85  # Keep 85% floor - only high conviction trades
 # V3.1.21: GEMINI API RATE LIMITER
 # ============================================================
 _last_gemini_call = 0
-_gemini_call_interval = 4.0  # V3.1.68: 4s between Gemini calls (was 2s, caused empty responses)
+_gemini_call_interval = 8.0  # V3.1.75: 8s between Gemini calls (4s caused 5/8 empty responses)
 
 def _rate_limit_gemini():
     """Ensure minimum interval between Gemini API calls"""
@@ -930,8 +930,8 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.1.7-MultiPersonaAgreement"
-MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.7"
+PIPELINE_VERSION = "SMT-v3.1.76-UltraSniper-DisciplineRestoration"
+MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.76"
 
 # Known step sizes
 KNOWN_STEP_SIZES = {
@@ -1579,10 +1579,10 @@ class SentimentPersona:
         self._cache[pair] = (time.time(), result)
     
     def _analyze_with_retry(self, pair: str, pair_info: Dict, competition_status: Dict) -> Dict:
-        """Single API call combining grounding + analysis (V3.1.21)"""
+        """V3.1.75: Robust Gemini sentiment with 3-retry + non-grounding fallback"""
         from google.genai.types import GenerateContentConfig, GoogleSearch, Tool
-        
-        # V3.1.21: COMBINED PROMPT - One API call instead of two!
+        import time as _time
+
         combined_prompt = f"""Search for "{pair} cryptocurrency price action last 24 hours" and analyze:
 
 You are a SHORT-TERM crypto trader making a 1-4 hour trade decision for {pair}.
@@ -1592,51 +1592,80 @@ FOCUS ON: Last 1-4 hours price action, support/resistance breaks, volume on red 
 
 Based ONLY on short-term price action and momentum:
 - If price is breaking DOWN through support or volume is spiking on RED candles = BEARISH
-- If price is breaking UP through resistance or volume is spiking on GREEN candles = BULLISH  
+- If price is breaking UP through resistance or volume is spiking on GREEN candles = BULLISH
 - If choppy/sideways with no clear direction = NEUTRAL
 
 Respond with JSON only:
 {{"sentiment": "BULLISH" or "BEARISH" or "NEUTRAL", "confidence": 0.0-1.0, "key_factor": "short-term reason only", "market_context": "brief summary of what you found"}}"""
-        
+
         grounding_config = GenerateContentConfig(
             tools=[Tool(google_search=GoogleSearch())],
             temperature=0.2,
-            
         )
-        
-        response = _gemini_full_call("gemini-2.5-flash", combined_prompt, grounding_config, timeout=75)
-        
-        # V3.1.68: Validate Gemini response - retry once on empty
-        if not response or not hasattr(response, 'text') or not response.text:
-            print(f"  [SENTIMENT] Empty response from Gemini for {pair}, retrying in 5s...")
-            import time as _time
-            _time.sleep(5)
+
+        # V3.1.75: 3 retries with exponential backoff on empty responses
+        max_empty_retries = 3
+        for attempt in range(max_empty_retries):
             try:
-                response = _gemini_full_call("gemini-2.5-flash", combined_prompt, grounding_config, timeout=75)
-            except Exception:
-                pass
-            if not response or not hasattr(response, 'text') or not response.text:
-                print(f"  [SENTIMENT] Still empty after retry for {pair}")
-                return self._fallback_result(pair, "Empty Gemini response after retry")
-        
-        clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
-        
-        if not clean_text:
-            print(f"  [SENTIMENT] Empty text after cleanup for {pair}")
-            return self._fallback_result(pair, "Empty response text")
-        
-        data = json.loads(clean_text)
-        
-        signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
-        
-        return {
-            "persona": self.name,
-            "signal": signal,
-            "confidence": data.get("confidence", 0.5),
-            "reasoning": data.get("key_factor", "Market sentiment analysis"),
-            "sentiment": data["sentiment"],
-            "market_context": data.get("market_context", "")[:800],
-        }
+                response = _gemini_full_call("gemini-2.5-flash", combined_prompt, grounding_config, timeout=90)
+                if response and hasattr(response, 'text') and response.text:
+                    clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+                    if clean_text:
+                        data = json.loads(clean_text)
+                        signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
+                        return {
+                            "persona": self.name,
+                            "signal": signal,
+                            "confidence": data.get("confidence", 0.5),
+                            "reasoning": data.get("key_factor", "Market sentiment analysis"),
+                            "sentiment": data["sentiment"],
+                            "market_context": data.get("market_context", "")[:800],
+                        }
+            except json.JSONDecodeError as je:
+                print(f"  [SENTIMENT] JSON parse error for {pair}: {je}")
+            except Exception as e:
+                print(f"  [SENTIMENT] Grounding attempt {attempt+1} error for {pair}: {e}")
+
+            if attempt < max_empty_retries - 1:
+                backoff = 5 * (attempt + 1)  # 5s, 10s
+                print(f"  [SENTIMENT] Empty/error from Gemini for {pair}, retry {attempt+1}/{max_empty_retries} in {backoff}s...")
+                _time.sleep(backoff)
+
+        # V3.1.75: FALLBACK - try WITHOUT grounding (no Google Search)
+        # Grounding is the #1 cause of empty responses (search fails silently)
+        print(f"  [SENTIMENT] Grounding failed {max_empty_retries}x for {pair}, trying WITHOUT grounding...")
+        try:
+            fallback_prompt = f"""You are a crypto trading analyst. Based on your knowledge of {pair} cryptocurrency:
+
+Analyze the LIKELY current short-term (1-4 hour) price action for {pair}.
+Consider: recent trend direction, typical volatility, market cycle position.
+
+Respond with JSON only:
+{{"sentiment": "BULLISH" or "BEARISH" or "NEUTRAL", "confidence": 0.0-1.0, "key_factor": "short-term reason only", "market_context": "analysis based on recent trends"}}"""
+
+            no_ground_config = GenerateContentConfig(temperature=0.3)
+            response = _gemini_full_call("gemini-2.5-flash", fallback_prompt, no_ground_config, timeout=60)
+
+            if response and hasattr(response, 'text') and response.text:
+                clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+                if clean_text:
+                    data = json.loads(clean_text)
+                    signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
+                    conf = min(data.get("confidence", 0.4), 0.6)  # Cap at 60% without grounding
+                    print(f"  [SENTIMENT] Non-grounding fallback succeeded for {pair}: {signal} ({conf:.0%})")
+                    return {
+                        "persona": self.name,
+                        "signal": signal,
+                        "confidence": conf,
+                        "reasoning": f"(no-grounding fallback) {data.get('key_factor', 'Model analysis')}",
+                        "sentiment": data["sentiment"],
+                        "market_context": data.get("market_context", "")[:800],
+                    }
+        except Exception as e:
+            print(f"  [SENTIMENT] Non-grounding fallback also failed for {pair}: {e}")
+
+        print(f"  [SENTIMENT] All attempts failed for {pair}, returning NEUTRAL")
+        return self._fallback_result(pair, "All Gemini attempts failed (grounding + fallback)")
     
     def _fallback_result(self, pair: str, error_msg: str) -> Dict:
         """Return neutral result on error"""
@@ -1693,11 +1722,11 @@ class FlowPersona:
             # Log for debugging
             print(f"  [FLOW] Taker ratio: {taker_ratio:.2f} | Extreme sell: {extreme_selling} | Heavy sell: {heavy_selling}")
             
-            # V3.1.44: Cap SHORT confidence during deep capitulation (F&G < 10)
-            # Shorting the literal bottom of the fear index = missing the god candle
+            # V3.1.75 FIX: Cap SHORT confidence in capitulation (F&G < 15)
+            # Shorting into extreme fear = missing the bounce. F&G=9 IS capitulation, not just F&G=5.
             fg_data = get_fear_greed_index()
             fg_val = fg_data.get("value", 50)
-            capitulation_short_cap = fg_val < 5  # V3.1.55: was 10, too aggressive - only cap at extreme extremes
+            capitulation_short_cap = fg_val < 15  # V3.1.75: was 5, way too low - cap at F&G<15 (real capitulation)
             
             if extreme_selling:
                 # V3.1.17: MASSIVE SELL PRESSURE - ignore depth entirely
@@ -1719,17 +1748,24 @@ class FlowPersona:
                     signals.append(("SHORT", 0.3, "Ask depth confirms"))
                 # IGNORE bid depth when heavy selling
             elif extreme_buying:
-                # V3.1.36: Let extreme buying signal through regardless of regime
-                # Judge V3.1.35 already has regime-aware weights that discount counter-trend
-                # Double-discounting was killing all LONG signals in BEARISH
-                if is_bearish:
-                    print(f"  [FLOW] BEARISH regime: Extreme buying {taker_ratio:.2f} (letting signal through)")
-                signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
+                # V3.1.75: Cap LONG confidence in extreme greed (mirror of SHORT cap in fear)
+                euphoria_long_cap = fg_val > 85
+                if euphoria_long_cap:
+                    signals.append(("LONG", 0.55, f"EXTREME taker buying: {taker_ratio:.2f} (CAPPED: F&G={fg_val} euphoria)"))
+                    print(f"  [FLOW] EUPHORIA CAP: Extreme buy 0.85->0.55 (F&G={fg_val})")
+                else:
+                    if is_bearish:
+                        print(f"  [FLOW] BEARISH regime: Extreme buying {taker_ratio:.2f} (letting signal through)")
+                    signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
             elif heavy_buying:
-                # V3.1.36: Let heavy buying signal through regardless of regime
-                if is_bearish:
-                    print(f"  [FLOW] BEARISH regime: Heavy buying {taker_ratio:.2f} (letting signal through)")
-                signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
+                euphoria_long_cap = fg_val > 85
+                if euphoria_long_cap:
+                    signals.append(("LONG", 0.40, f"Heavy taker buying: {taker_ratio:.2f} (CAPPED: F&G={fg_val} euphoria)"))
+                    print(f"  [FLOW] EUPHORIA CAP: Heavy buy 0.70->0.40 (F&G={fg_val})")
+                else:
+                    if is_bearish:
+                        print(f"  [FLOW] BEARISH regime: Heavy buying {taker_ratio:.2f} (letting signal through)")
+                    signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
                 if depth["bid_strength"] > 1.3:
                     signals.append(("LONG", 0.3, "Bid depth confirms"))
             else:
@@ -2145,6 +2181,7 @@ class JudgePersona:
         
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
 Your job: analyze all signals and decide the SINGLE BEST action for {pair} right now.
+TRADE WINDOW: 1-4 hours. We check positions every 15 minutes. TP targets are 3-4% (60-80% ROE at 20x).
 
 === MARKET REGIME ===
 Regime: {regime.get('regime', 'NEUTRAL')}
@@ -2186,14 +2223,17 @@ HOW TO DECIDE:
 - If WHALE and FLOW directly contradict (opposite directions, both >60%): WAIT.
 - If neither co-primary signal exceeds 60%: WAIT. No clear edge.
 
-FEAR & GREED:
-- Extreme fear does NOT automatically mean buy. If FLOW confirms selling, the dump is real.
-- Extreme greed does NOT automatically mean sell. If FLOW confirms buying, the rally is real.
+FEAR & GREED (CONTRARIAN - THIS IS A HARD RULE):
+- F&G < 15 (CAPITULATION): ONLY suggest LONG. Extreme fear = panic selling = bounces are violent. Shorting capitulation is suicide. Code will block any SHORT you suggest.
+- F&G < 30 (FEAR): Strongly favor LONG. Fear = accumulation zone. Only SHORT if WHALE+FLOW both strongly confirm selling.
+- F&G > 85 (EUPHORIA): ONLY suggest SHORT. Extreme greed = blow-off top incoming. Buying euphoria is suicide. Code will block any LONG you suggest.
+- F&G > 70 (GREED): Strongly favor SHORT. Greed = distribution zone. Only LONG if WHALE+FLOW both strongly confirm buying.
+- F&G 30-70 (NEUTRAL ZONE): Use WHALE+FLOW signals normally, no directional bias.
 
 TRADE HISTORY CONTEXT:
 {trade_history_summary}
 
-QUALITY OVER QUANTITY: Only trade when there is a clear edge from the co-primary signals. WAIT is a valid and important decision when signals are mixed or weak. Bad trades cost more than missed trades.
+IMPORTANT: Say LONG or SHORT if you see a good setup. Do not say WAIT to be "safe." We are in a competition and need to take quality trades. Only WAIT when WHALE and FLOW directly contradict each other.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences explaining your decision"}}"""
@@ -2207,8 +2247,16 @@ Respond with JSON ONLY (no markdown, no backticks):
                 temperature=0.1,
             )
             
-            response = _gemini_full_call("gemini-2.5-flash", prompt, config, timeout=75)
-            
+            response = _gemini_full_call("gemini-2.5-flash", prompt, config, timeout=90)
+
+            # V3.1.75: Retry once on empty Judge response
+            if not response or not hasattr(response, 'text') or not response.text:
+                print(f"  [JUDGE] Empty Gemini response for {pair}, retrying in 8s...")
+                import time as _jtime
+                _jtime.sleep(8)
+                _rate_limit_gemini()
+                response = _gemini_full_call("gemini-2.5-flash", prompt, config, timeout=90)
+
             clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
             data = json.loads(clean_text)
             
@@ -2217,19 +2265,48 @@ Respond with JSON ONLY (no markdown, no backticks):
             confidence = min(0.95, max(0.0, float(raw_conf))) if raw_conf is not None else 0.0
             reasoning = data.get("reasoning") or "Gemini Judge decision"
             
-            # V3.1.75: ANTI-WAIT - ONLY Layer 1 (persona consensus), removed dangerous Layer 2 (word matching)
-            # Layer 2 was converting WAITs to trades based on counting words like "bullish" in reasoning - reckless
-            if decision == "WAIT" and confidence >= 0.80:
-                # Only override if CO-PRIMARY signals (WHALE+FLOW) both agree at high confidence
-                _long_coprimary = [v for v in persona_votes if v["persona"] in ("WHALE", "FLOW") and v["signal"] == "LONG" and v["confidence"] >= 0.70]
-                _short_coprimary = [v for v in persona_votes if v["persona"] in ("WHALE", "FLOW") and v["signal"] == "SHORT" and v["confidence"] >= 0.70]
+            # V3.1.75 FIX #6: ANTI-WAIT V3 - respects F&G context
+            # Layer 1: If 2+ personas agree on direction at >= 70% each, force that direction
+            # Layer 2: Reasoning word-count fallback
+            # GUARD: Never force SHORT in extreme fear or LONG in extreme greed
+            _fg_for_antiwait = regime.get("fear_greed", 50) if regime else 50
+            if decision == "WAIT" and confidence >= 0.75:
+                _long_voters = [v for v in persona_votes if v["signal"] == "LONG" and v["confidence"] >= 0.70]
+                _short_voters = [v for v in persona_votes if v["signal"] == "SHORT" and v["confidence"] >= 0.70]
 
-                if len(_long_coprimary) == 2:
+                # F&G guard: block nonsensical forced overrides
+                if _fg_for_antiwait < 20:
+                    _short_voters = []  # Never force SHORT in extreme fear
+                    if _long_voters:
+                        print(f"  [JUDGE] ANTI-WAIT F&G guard: F&G={_fg_for_antiwait}, only allowing LONG override")
+                elif _fg_for_antiwait > 80:
+                    _long_voters = []  # Never force LONG in extreme greed
+                    if _short_voters:
+                        print(f"  [JUDGE] ANTI-WAIT F&G guard: F&G={_fg_for_antiwait}, only allowing SHORT override")
+
+                if len(_long_voters) >= 2 and len(_short_voters) == 0:
                     decision = "LONG"
-                    print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->LONG (WHALE+FLOW consensus, conf={confidence:.0%})")
-                elif len(_short_coprimary) == 2:
+                    _voter_names = [v["persona"] for v in _long_voters]
+                    print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->LONG (consensus: {_voter_names}, conf={confidence:.0%})")
+                elif len(_short_voters) >= 2 and len(_long_voters) == 0:
                     decision = "SHORT"
-                    print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->SHORT (WHALE+FLOW consensus, conf={confidence:.0%})")
+                    _voter_names = [v["persona"] for v in _short_voters]
+                    print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->SHORT (consensus: {_voter_names}, conf={confidence:.0%})")
+                else:
+                    # Layer 2: Reasoning text analysis (fallback) - also F&G guarded
+                    reasoning_lower = reasoning.lower() if reasoning else ""
+                    long_words = sum(1 for w in ["long", "buy", "bullish", "accumulation", "oversold", "bounce", "support"] if w in reasoning_lower)
+                    short_words = sum(1 for w in ["short", "sell", "bearish", "distribution", "overbought", "dump", "resistance"] if w in reasoning_lower)
+                    if _fg_for_antiwait < 20:
+                        short_words = 0  # Block SHORT reasoning override in extreme fear
+                    elif _fg_for_antiwait > 80:
+                        long_words = 0  # Block LONG reasoning override in extreme greed
+                    if long_words >= 2 and short_words == 0:
+                        decision = "LONG"
+                        print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->LONG (reasoning: {long_words} long words, conf={confidence:.0%})")
+                    elif short_words >= 2 and long_words == 0:
+                        decision = "SHORT"
+                        print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->SHORT (reasoning: {short_words} short words, conf={confidence:.0%})")
             raw_tp = data.get("tp_pct")
             tp_pct = float(raw_tp) if raw_tp is not None else tier_config["tp_pct"]
             raw_sl = data.get("sl_pct")
@@ -2762,7 +2839,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         conf_bracket = "ULTRA" if trade_confidence >= 0.90 else "HIGH" if trade_confidence >= 0.80 else "NORMAL"
         print(f"  [LEVERAGE] Tier {tier} ({current_regime}, {conf_bracket} {trade_confidence:.0%}): Using {safe_leverage}x")
     except Exception as e:
-        safe_leverage = 18  # V3.1.62: Aggressive fallback
+        safe_leverage = 20  # V3.1.75: 20x flat - user mandate
         print(f"  [LEVERAGE] Fallback to {safe_leverage}x: {e}")
     notional_usdt = position_usdt * safe_leverage
     raw_size = notional_usdt / current_price
