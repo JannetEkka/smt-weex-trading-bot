@@ -870,11 +870,11 @@ STARTING_BALANCE = 10000.0  # V3.1.42: Finals - started with 10K
 FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 
 # Trading Parameters - V3.1.16 UPDATES
-MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 5  # V3.1.71: RECOVERY - 5 positions for final push - fewer, bigger, better positions
-MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
-MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
-MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.1.64: SNIPER++ - higher conviction for endgame
+MAX_LEVERAGE = 15  # V3.1.75: Capped from 20 - lower leverage = survive longer
+MAX_OPEN_POSITIONS = 5
+MAX_SINGLE_POSITION_PCT = 0.20  # V3.1.75: 20% max (was 50% - suicidal)
+MIN_SINGLE_POSITION_PCT = 0.07  # V3.1.75: 7% min (was 20% - way too large)
+MIN_CONFIDENCE_TO_TRADE = 0.85  # Keep 85% floor - only high conviction trades
 
 # ============================================================
 # V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
@@ -909,12 +909,13 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     jitter = random.uniform(0, delay * 0.1)
     return delay + jitter
 
-# V3.1.74 RECOVERY TREND: Optimized TPs for fear bounce recovery. Let trends develop.
-# Tighter TPs = capture the bounce. Longer holds = don't cut winners. Wider force exit = survive volatility.
+# V3.1.75: DISCIPLINE RESTORATION - sane R:R ratios, lower leverage, wider TPs
+# TP must be >= 1.5x SL for positive expectancy after fees
+# Leverage reduced: T1=15x T2=12x T3=10x (was 20x everything)
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.020, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 2.0, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.025, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 2.5, "sl_pct": 1.5, "max_hold_hours": 12, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.020, "trailing_stop": 0.015, "time_limit": 480, "tp_pct": 2.0, "sl_pct": 1.8, "max_hold_hours": 8, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
+    1: {"name": "Blue Chip", "leverage": 15, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 6, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    2: {"name": "Mid Cap", "leverage": 12, "stop_loss": 0.015, "take_profit": 0.035, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 3.5, "sl_pct": 1.5, "max_hold_hours": 12, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    3: {"name": "Small Cap", "leverage": 10, "stop_loss": 0.018, "take_profit": 0.03, "trailing_stop": 0.015, "time_limit": 480, "tp_pct": 3.0, "sl_pct": 1.8, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
 }
 # Trading Pairs with correct tiers
 TRADING_PAIRS = {
@@ -2142,9 +2143,8 @@ class JudgePersona:
         except Exception:
             trade_history_summary = "Trade history unavailable."
         
-        prompt = f"""You are the AI Judge for a crypto futures trading bot in a live competition (real money).
+        prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
 Your job: analyze all signals and decide the SINGLE BEST action for {pair} right now.
-TRADE WINDOW: 1-4 hours. We check positions every 15 minutes. TP targets are 3-4% (54-72% ROE at 18x).
 
 === MARKET REGIME ===
 Regime: {regime.get('regime', 'NEUTRAL')}
@@ -2167,48 +2167,33 @@ Days remaining: {days_left}
 PnL: ${pnl:.0f} ({pnl_pct:+.1f}%)
 Available balance: ${balance:.0f}
 
-=== DECISION GUIDELINES (V3.1.62 AGGRESSIVE RECOVERY) ===
-
-CRITICAL CONTEXT: We are LAST PLACE in the competition. Started with $10,000, now at ~$4,600.
-We need to recover $5,400+ in 12 days. We CANNOT afford to play it safe.
-- Every WAIT is a missed opportunity. Only WAIT when signals truly conflict.
-- High-conviction trades should be taken AGGRESSIVELY.
-- We need BIG winners, not small safe trades.
+=== DECISION GUIDELINES (V3.1.75 DISCIPLINED TRADING) ===
 
 YOUR ONLY JOB: Decide LONG, SHORT, or WAIT based on signal quality. Position limits, TP/SL, and slot management are handled by code -- ignore them entirely.
-BIAS TOWARD ACTION: If 2+ personas agree on direction, TRADE IT. Do not second-guess with WAIT.
 
-SIGNAL RELIABILITY (V3.1.63 SNIPER):
+SIGNAL RELIABILITY:
   CO-PRIMARY (equal weight, these drive your decision):
-    1. WHALE (Cryptoracle community intelligence) -- smart money / crowd wisdom for ALL pairs. Our unique edge.
+    1. WHALE (Cryptoracle community intelligence) -- smart money / crowd wisdom. Our unique edge.
     2. FLOW (order book taker ratio) -- actual money moving right now.
   SECONDARY (confirmation only, never override WHALE+FLOW):
     3. SENTIMENT (web search price action) -- context, not a trading signal.
     4. TECHNICAL (RSI/SMA/momentum) -- lagging indicator, confirmation only.
 
 HOW TO DECIDE:
-- If WHALE + FLOW agree: TRADE IT at 85%+ confidence. This is the strongest possible signal.
-- If WHALE is strong (>65% conf) but FLOW is weak/neutral: trust WHALE direction. Cryptoracle sees what orderbooks don't.
+- If WHALE + FLOW agree: TRADE IT at 85%+ confidence. Strongest possible signal.
+- If WHALE is strong (>65% conf) but FLOW is weak/neutral: trust WHALE direction.
 - If FLOW is strong (>75% conf) but WHALE is weak/neutral: trust FLOW. Money is moving.
-- If WHALE and FLOW directly contradict (opposite directions, both >60%): this is the ONLY valid WAIT scenario.
-- NEVER WAIT when 2+ signals agree on direction. We are LAST PLACE in competition.
-
-PATTERN RECOGNITION:
-- WHALE buying + FLOW selling = ACCUMULATION (smart money loading while retail sells) -> LONG
-- WHALE selling + FLOW buying = DISTRIBUTION (smart money dumping into retail buying) -> SHORT
-- Both buying = STRONG LONG. Both selling = STRONG SHORT.
-
-TRADE HISTORY CONTEXT:
-{trade_history_summary}
+- If WHALE and FLOW directly contradict (opposite directions, both >60%): WAIT.
+- If neither co-primary signal exceeds 60%: WAIT. No clear edge.
 
 FEAR & GREED:
 - Extreme fear does NOT automatically mean buy. If FLOW confirms selling, the dump is real.
 - Extreme greed does NOT automatically mean sell. If FLOW confirms buying, the rally is real.
-- Contrarian trades need FLOW confirmation. Without it, go with the trend.
 
-FUNDING RATE: Negative = shorts paying longs (bullish lean). Positive = longs paying shorts (bearish lean). Not a trade signal alone, but tips the balance when other signals are close.
+TRADE HISTORY CONTEXT:
+{trade_history_summary}
 
-IMPORTANT: Say LONG or SHORT if you see a good setup. Do not say WAIT to be "safe." We are in a competition and need to take quality trades. Only WAIT when there is genuinely no edge.
+QUALITY OVER QUANTITY: Only trade when there is a clear edge from the co-primary signals. WAIT is a valid and important decision when signals are mixed or weak. Bad trades cost more than missed trades.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences explaining your decision"}}"""
@@ -2232,33 +2217,19 @@ Respond with JSON ONLY (no markdown, no backticks):
             confidence = min(0.95, max(0.0, float(raw_conf))) if raw_conf is not None else 0.0
             reasoning = data.get("reasoning") or "Gemini Judge decision"
             
-            # V3.1.64 ANTI-WAIT V2: Two-layer override
-            # Layer 1: If 2+ personas agree on direction at >= 70% each, force that direction
-            # Layer 2: Fall back to reasoning word-count (V3.1.63 method)
-            if decision == "WAIT" and confidence >= 0.75:
-                # Layer 1: Persona consensus override
-                _long_voters = [v for v in persona_votes if v["signal"] == "LONG" and v["confidence"] >= 0.70]
-                _short_voters = [v for v in persona_votes if v["signal"] == "SHORT" and v["confidence"] >= 0.70]
-                
-                if len(_long_voters) >= 2 and len(_short_voters) == 0:
+            # V3.1.75: ANTI-WAIT - ONLY Layer 1 (persona consensus), removed dangerous Layer 2 (word matching)
+            # Layer 2 was converting WAITs to trades based on counting words like "bullish" in reasoning - reckless
+            if decision == "WAIT" and confidence >= 0.80:
+                # Only override if CO-PRIMARY signals (WHALE+FLOW) both agree at high confidence
+                _long_coprimary = [v for v in persona_votes if v["persona"] in ("WHALE", "FLOW") and v["signal"] == "LONG" and v["confidence"] >= 0.70]
+                _short_coprimary = [v for v in persona_votes if v["persona"] in ("WHALE", "FLOW") and v["signal"] == "SHORT" and v["confidence"] >= 0.70]
+
+                if len(_long_coprimary) == 2:
                     decision = "LONG"
-                    _voter_names = [v["persona"] for v in _long_voters]
-                    print(f"  [JUDGE] V3.1.64 ANTI-WAIT: WAIT->LONG (consensus: {_voter_names}, conf={confidence:.0%})")
-                elif len(_short_voters) >= 2 and len(_long_voters) == 0:
+                    print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->LONG (WHALE+FLOW consensus, conf={confidence:.0%})")
+                elif len(_short_coprimary) == 2:
                     decision = "SHORT"
-                    _voter_names = [v["persona"] for v in _short_voters]
-                    print(f"  [JUDGE] V3.1.64 ANTI-WAIT: WAIT->SHORT (consensus: {_voter_names}, conf={confidence:.0%})")
-                else:
-                    # Layer 2: Reasoning text analysis (fallback)
-                    reasoning_lower = reasoning.lower() if reasoning else ""
-                    long_words = sum(1 for w in ["long", "buy", "bullish", "accumulation", "oversold", "bounce", "support"] if w in reasoning_lower)
-                    short_words = sum(1 for w in ["short", "sell", "bearish", "distribution", "overbought", "dump", "resistance"] if w in reasoning_lower)
-                    if long_words >= 2 and short_words == 0:
-                        decision = "LONG"
-                        print(f"  [JUDGE] V3.1.64 ANTI-WAIT: WAIT->LONG (reasoning: {long_words} long words, conf={confidence:.0%})")
-                    elif short_words >= 2 and long_words == 0:
-                        decision = "SHORT"
-                        print(f"  [JUDGE] V3.1.64 ANTI-WAIT: WAIT->SHORT (reasoning: {short_words} short words, conf={confidence:.0%})")
+                    print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->SHORT (WHALE+FLOW consensus, conf={confidence:.0%})")
             raw_tp = data.get("tp_pct")
             tp_pct = float(raw_tp) if raw_tp is not None else tier_config["tp_pct"]
             raw_sl = data.get("sl_pct")
@@ -2308,18 +2279,18 @@ Respond with JSON ONLY (no markdown, no backticks):
                     and whale_vote.get("confidence", 0) >= 0.60):
                     flow_whale_aligned = True
 
-            base_size = balance * 0.40  # V3.1.62: AGGRESSIVE 40% base
+            # V3.1.75: Conservative sizing - survive to trade another day
+            # 12% base, scale up slightly for ultra-high conviction
+            base_size = balance * 0.12
             if confidence >= 0.90 and flow_whale_aligned:
-                position_usdt = base_size * 1.25  # 50% of balance - ULTRA
-                print(f"  [SIZING] ULTRA: 90%+ conf + FLOW/WHALE aligned -> 50%")
+                position_usdt = base_size * 1.5  # 18% of balance - ULTRA
+                print(f"  [SIZING] ULTRA: 90%+ conf + FLOW/WHALE aligned -> 18%")
             elif confidence > 0.85:
-                position_usdt = base_size * 1.15  # 46% of balance
-            elif confidence > 0.75:
-                position_usdt = base_size * 1.05  # 42% of balance
+                position_usdt = base_size * 1.25  # 15% of balance
             else:
-                position_usdt = base_size * 1.0  # 40% of balance
-            
-            # V3.1.62: Balance protection - only at true emergency
+                position_usdt = base_size * 1.0  # 12% of balance
+
+            # Balance protection
             if balance < 200:
                 position_usdt *= 0.5
                 print(f"  [JUDGE] EMERGENCY BALANCE: size halved")
@@ -2853,12 +2824,12 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     # V3.1.66b: REALISTIC TP - tier-based, no F&G scaling
     # F&G scaling caused 9% TPs in capitulation (unrealistic, never hit)
     # TP is now strictly tier-based with a sane floor
-    base_tp = tier_config["tp_pct"]  # V3.1.70: T1=3%, T2=3.5%, T3=4%
-    tp_floor = sl_pct_raw * 1.2  # Minimum 1.2x SL for positive expectancy
+    base_tp = tier_config["tp_pct"]  # V3.1.75: T1=3%, T2=3.5%, T3=3%
+    tp_floor = sl_pct_raw * 1.5  # V3.1.75: Minimum 1.5x SL (was 1.2x - not enough edge after fees)
     tp_pct_raw = max(base_tp, tp_floor)
-    # Hard cap per tier (no exceptions)
-    _tier_tp_caps = {1: 3.0, 2: 3.5, 3: 4.0}  # V3.1.70: 1-4h window (was 4/5/6)
-    _tp_cap = _tier_tp_caps.get(tier, 4.0)  # V3.1.70: fallback matches T3
+    # Hard cap per tier
+    _tier_tp_caps = {1: 4.0, 2: 4.5, 3: 4.0}  # V3.1.75: Allow wider TPs for bigger wins
+    _tp_cap = _tier_tp_caps.get(tier, 4.0)
     tp_pct_raw = min(tp_pct_raw, _tp_cap)
     print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% (Tier {tier} cap={_tp_cap}%, floor=SL*1.2={tp_floor:.2f}%)")
     
@@ -2960,28 +2931,13 @@ COOLDOWN_MULTIPLIERS = {
 # When position hits 50% of TP, close half and let rest run
 # Only for Tier 1 and Tier 2 - Tier 3 is scalp only
 
+# V3.1.75: Runners DISABLED - with 3-3.5% TPs, runner triggers at higher levels make no sense
+# Previous runners triggered at 3-4% (above TP!) so they never actually fired
+# Re-enable when TP targets are widened again
 RUNNER_CONFIG = {
-    1: {  # BTC, ETH, BNB, LTC - trigger at 2x TP = 4%
-        "enabled": True,
-        "trigger_pct": 4.0,
-        "close_pct": 50,     # V3.1.73: Close 50%, let 50% ride
-        "move_sl_to_entry": True,
-        "remove_tp": False,
-    },
-    2: {  # SOL - trigger at ~1.5x TP = 3.5%
-        "enabled": True,
-        "trigger_pct": 3.5,
-        "close_pct": 50,
-        "move_sl_to_entry": True,
-        "remove_tp": False,
-    },
-    3: {  # DOGE, XRP, ADA - trigger at 1.5x TP = 3%
-        "enabled": True,
-        "trigger_pct": 3.0,
-        "close_pct": 50,
-        "move_sl_to_entry": True,
-        "remove_tp": False,
-    },
+    1: {"enabled": False, "trigger_pct": 4.0, "close_pct": 40, "move_sl_to_entry": True, "remove_tp": False},
+    2: {"enabled": False, "trigger_pct": 3.5, "close_pct": 40, "move_sl_to_entry": True, "remove_tp": False},
+    3: {"enabled": False, "trigger_pct": 3.0, "close_pct": 40, "move_sl_to_entry": True, "remove_tp": False},
 }
 
 

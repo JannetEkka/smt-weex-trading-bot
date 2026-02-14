@@ -366,8 +366,8 @@ def _mark_progress():
         _last_progress_time = time.time()
 
 def _internal_watchdog():
-    """Background thread that kills the process if it hangs > 15 minutes."""
-    HANG_TIMEOUT = 900  # V3.1.74: 15 minutes (was 600s, signal check takes ~6min + PM takes ~2min)
+    """Background thread that kills the process if it hangs > 10 minutes."""
+    HANG_TIMEOUT = 1200  # V3.1.75: 20 minutes (was 10min, killed daemon mid-cycle during 8-pair analysis)
     while True:
         time.sleep(60)
         with _progress_lock:
@@ -496,7 +496,7 @@ def check_trading_signals():
             if tracker.active_trades.get(symbol, {}).get('runner_triggered', False):
                 risk_free_count += 1
         
-        BASE_SLOTS = 5  # V3.1.73: 5 positions for recovery trend, synced with nightly
+        BASE_SLOTS = 5  # V3.1.75: Match MAX_OPEN_POSITIONS - 3 was starving the bot of diversification
         MAX_BONUS_SLOTS = 0  # V3.1.64a: DISABLED - hard cap is absolute
         bonus_slots = min(risk_free_count, MAX_BONUS_SLOTS)
         effective_max_positions = BASE_SLOTS + bonus_slots
@@ -946,8 +946,10 @@ def check_trading_signals():
                 else:
                     logger.info(f"SESSION [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} >= {session_min_conf:.0%}, proceeding {opportunity['pair']}")
                 
-                # V3.1.66: REGIME VETO - code-level block on counter-regime trades
-                # get_market_regime_for_exit is defined in this file, no import needed
+                # V3.1.75: REGIME VETO - only active in NORMAL conditions
+                # DISABLED in extreme fear (F&G<20): contrarian buys ARE the strategy,
+                # vetoing LONGs in BEARISH+extreme fear contradicts our edge
+                # Only block on SPIKE events (sudden 1h moves) which are genuine danger
                 try:
                     _regime_now = get_market_regime_for_exit()
                 except Exception as _re:
@@ -956,38 +958,26 @@ def check_trading_signals():
                 _regime_label = _regime_now.get("regime", "NEUTRAL")
                 _opp_signal = opportunity["decision"]["decision"]
                 _regime_vetoed = False
-                if _regime_label == "BEARISH" and _opp_signal == "LONG":
-                    # Exception: allow if WHALE strongly says LONG (contrarian accumulation)
-                    _whale_vote_check = next((v for v in opportunity["decision"].get("persona_votes", []) if v.get("persona") == "WHALE"), None)
-                    _whale_conf_check = _whale_vote_check.get("confidence", 0) if _whale_vote_check else 0
-                    _whale_dir_check = _whale_vote_check.get("signal", "NEUTRAL") if _whale_vote_check else "NEUTRAL"
-                    if _whale_dir_check == "LONG" and _whale_conf_check >= 0.75:
-                        logger.info(f"REGIME VETO OVERRIDE: BEARISH but WHALE says LONG@{_whale_conf_check:.0%}, allowing {opportunity['pair']}")
-                    else:
+
+                # V3.1.75: Skip regime veto entirely in extreme fear - contrarian mode
+                _fg_for_veto = opportunity["decision"].get("fear_greed", 50)
+                if _fg_for_veto < 20:
+                    logger.info(f"REGIME VETO SKIP: F&G={_fg_for_veto} (extreme fear), allowing {_opp_signal} on {opportunity['pair']}")
+                else:
+                    # Only veto on SPIKE events (sudden 1h moves)
+                    if _regime_label in ("SPIKE_UP",) and _opp_signal == "SHORT":
                         _regime_vetoed = True
-                        logger.warning(f"REGIME VETO: {_regime_label} market, blocking LONG on {opportunity['pair']} (whale={_whale_dir_check}@{_whale_conf_check:.0%})")
-                elif _regime_label == "BULLISH" and _opp_signal == "SHORT":
-                    _whale_vote_check = next((v for v in opportunity["decision"].get("persona_votes", []) if v.get("persona") == "WHALE"), None)
-                    _whale_conf_check = _whale_vote_check.get("confidence", 0) if _whale_vote_check else 0
-                    _whale_dir_check = _whale_vote_check.get("signal", "NEUTRAL") if _whale_vote_check else "NEUTRAL"
-                    if _whale_dir_check == "SHORT" and _whale_conf_check >= 0.75:
-                        logger.info(f"REGIME VETO OVERRIDE: BULLISH but WHALE says SHORT@{_whale_conf_check:.0%}, allowing {opportunity['pair']}")
-                    else:
+                        logger.warning(f"REGIME VETO: SPIKE_UP, blocking SHORT on {opportunity['pair']}")
+                    elif _regime_label in ("SPIKE_DOWN",) and _opp_signal == "LONG":
                         _regime_vetoed = True
-                        logger.warning(f"REGIME VETO: {_regime_label} market, blocking SHORT on {opportunity['pair']} (whale={_whale_dir_check}@{_whale_conf_check:.0%})")
-                elif _regime_label in ("SPIKE_UP",) and _opp_signal == "SHORT":
-                    _regime_vetoed = True
-                    logger.warning(f"REGIME VETO: SPIKE_UP, blocking SHORT on {opportunity['pair']}")
-                elif _regime_label in ("SPIKE_DOWN",) and _opp_signal == "LONG":
-                    _regime_vetoed = True
-                    logger.warning(f"REGIME VETO: SPIKE_DOWN, blocking LONG on {opportunity['pair']}")
-                
+                        logger.warning(f"REGIME VETO: SPIKE_DOWN, blocking LONG on {opportunity['pair']}")
+
                 if _regime_vetoed:
                     upload_ai_log_to_weex(
-                        stage=f"V3.1.65 REGIME VETO: {_opp_signal} {opportunity['pair']} blocked",
+                        stage=f"V3.1.75 REGIME VETO: {_opp_signal} {opportunity['pair']} blocked",
                         input_data={"regime": _regime_label, "signal": _opp_signal, "pair": opportunity['pair']},
-                        output_data={"action": "VETOED", "reason": f"counter-regime trade in {_regime_label}"},
-                        explanation=f"Code-level regime filter blocked {_opp_signal} on {opportunity['pair']} in {_regime_label} market. Judge ignored regime but code enforces it."
+                        output_data={"action": "VETOED", "reason": f"SPIKE event in {_regime_label}"},
+                        explanation=f"V3.1.75: Only SPIKE events trigger regime veto. Blocked {_opp_signal} on {opportunity['pair']} during {_regime_label}."
                     )
                     continue
 
@@ -1372,39 +1362,21 @@ def monitor_positions():
                 })
                 if len(_pnl_history[symbol]) > _PNL_HISTORY_MAX:
                     _pnl_history[symbol] = _pnl_history[symbol][-_PNL_HISTORY_MAX:]
-                # V3.1.73 PROFIT LOCK EXIT - Widened to let winners run closer to TP
-                # Old V3.1.64: peak>=1.0%, fade>40% -> was banking $80 on $16K positions after fees
-                # New: peak>=1.5%, fade>50% -> lets winners approach TP before locking
-                # At 2% TP, a trade needs to reach 1.5%+ before lock even activates
+                # V3.1.75: PROFIT LOCK - less aggressive, let winners breathe
+                # Previous version closed at 1% peak with 40% fade - way too tight
                 fade_pct = peak_pnl_pct - pnl_pct if peak_pnl_pct > 0 else 0
 
-                # Rule 0: PROFIT LOCK - peak >= 1.5%, faded 50%+, still meaningfully green
-                # Example: peaked 2.0%, now at 0.95% (faded 53%) -> CLOSE and bank 0.95%
-                # Won't fire until position has been well into profit territory
-                if not should_exit and peak_pnl_pct >= 1.5 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0.3:
-                    should_exit = True
-                    exit_reason = f"V3.1.73_profit_lock T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%, locking gains)"
-                    print(f"  [PROFIT LOCK] {symbol}: {exit_reason}")
-
                 # Rule 1: High peak, deep fade -> lock profits
-                # If peaked > 1.5% and dropped more than 50% from peak
-                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0:
+                # If peaked > 2.0% and dropped more than 50% from peak
+                if not should_exit and peak_pnl_pct >= 2.0 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0:
                     should_exit = True
-                    exit_reason = f"V3.1.73_peak_fade_high T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
+                    exit_reason = f"V3.1.75_peak_fade T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
                     print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
 
-                # Rule 2: Moderate peak, catastrophic fade -> salvage what's left
-                # If peaked > 1.2% and dropped more than 75% from peak
-                elif not should_exit and peak_pnl_pct >= 1.2 and pnl_pct < peak_pnl_pct * 0.25 and pnl_pct > 0:
+                # Rule 2: Any significant peak that went negative -> thesis broken
+                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct <= 0:
                     should_exit = True
-                    exit_reason = f"V3.1.73_peak_fade_mod T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
-                    print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
-
-                # Rule 3: Good peak that went negative -> thesis broken
-                # If peaked > 1.0% but now negative
-                elif not should_exit and peak_pnl_pct >= 1.0 and pnl_pct <= 0:
-                    should_exit = True
-                    exit_reason = f"V3.1.73_peak_to_loss T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}%"
+                    exit_reason = f"V3.1.75_peak_to_loss T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}%"
                     print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
                 
 
@@ -1742,11 +1714,10 @@ def gemini_portfolio_review():
         )
         
         prompt = f"""You are the AI Portfolio Manager for a crypto futures trading bot in a LIVE competition with REAL money.
-CRITICAL: We are LAST PLACE (37th/37). Started $10,000, now ~$4,600. Need aggressive recovery.
-- Do NOT close winning positions early. We need every dollar of profit.
-- Close losers FAST to free capital for better trades.
-- We cannot afford to be patient with stale positions. Cut and redeploy.
-You have learned from 40+ iterations of rules. Apply ALL of these rules strictly.
+Your job is DISCIPLINED portfolio management. Apply the rules strictly and without emotion.
+- Let WINNERS run to their TP targets. Do NOT close winning positions early.
+- Cut LOSERS that are fighting the trend or held past their max time.
+- Be PATIENT with positions that are near breakeven - they need time to develop.
 
 === PORTFOLIO (ALL OPEN POSITIONS) ===
 {positions_text_enhanced}
@@ -2575,21 +2546,17 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.74 - BTC FEAR SHIELD + WATCHDOG FIX + RECOVERY TREND")
+    logger.info("SMT Daemon V3.1.75 - DISCIPLINE RESTORATION")
     logger.info("=" * 60)
-    logger.info("V3.1.74 Changes:")
-    logger.info("  - BTC FEAR SHIELD: Block BTC SHORTs when F&G<20 (contrarian BUY only for slow coins)")
-    logger.info("  - WATCHDOG FIX: per-pair progress marks + PM/regime marks (was only after full loops)")
-    logger.info("  - WATCHDOG TIMEOUT: 900s (was 600s, signal check+PM needs ~8min)")
-    logger.info("  - PROFIT LOCK: peak>=1.0%, fade>40% = close (bank small wins)")
-    logger.info("  - OPPOSITE FLIP FIX: >= threshold (was > which blocked 85% vs 85% flips)")
-    logger.info("  - GRACE PERIOD: 90min in extreme fear F&G<20 (was always 30min in code)")
-    logger.info("  - TIER CONFIG: T1=2.0% TP, T2=2.5% TP, T3=2.0% TP - recovery-optimized")
-    logger.info("  - HOLD TIMES: T2=12h, T3=8h (was T2=8h, T3=4h) - let trends develop")
-    logger.info("  - FORCE EXIT: -2.5% (was -2.0%) - wider stop for recovery volatility")
-    logger.info("  - V3.1.64 FEAR SHIELD: skip regime exit for profitable positions when F&G<20")
+    logger.info("V3.1.75 Changes:")
+    logger.info("  - REGIME VETO: Only on SPIKE events (was blocking contrarian trades in fear)")
+    logger.info("  - SIZING: 12% base, max 20% (was 40%/50% - suicidal)")
+    logger.info("  - LEVERAGE: T1=15x T2=12x T3=10x (was 18-20x everything)")
+    logger.info("  - PROFIT LOCK: peak>=2.0% fade>50% (was 1.0%/40% too tight)")
+    logger.info("  - SLOTS: 5 positions (was 3)")
+    logger.info("  - WATCHDOG: 20min internal, 15min external")
+    logger.info("  - R:R: T1=3/1.5% T2=3.5/1.5% T3=3/1.8%")
     logger.info("  - Max 5 positions, 85% confidence floor")
-    logger.info("  - Anti-WAIT override + trade history to Judge")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
