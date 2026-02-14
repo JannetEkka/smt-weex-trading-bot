@@ -839,18 +839,57 @@ def check_trading_signals():
                 confidence = opportunity["decision"]["confidence"]
                 
                 # Check if we still have slots
-                # V3.1.56: Opposite trades bypass slot check
                 trade_type_check = opportunity.get("trade_type", "none")
-                if trade_type_check == "opposite":
-                    logger.info(f"OPPOSITE TRADE: {opportunity['pair']} (no slot bypass in V3.1.64a)")
+
+                # V3.1.73: Opposite trades bypass slot check by closing existing position first
+                # Only if existing position is profitable (avoids realizing losses + fees)
+                if trade_type_check == "opposite" and trades_executed >= available_slots:
+                    opp_symbol = opportunity["pair_info"]["symbol"]
+                    opp_signal = opportunity["decision"]["decision"]
+                    existing_side = "SHORT" if opp_signal == "LONG" else "LONG"
+
+                    # Find existing position PnL
+                    existing_pos = None
+                    for _p in open_positions:
+                        if _p.get("symbol") == opp_symbol and _p.get("side", "").upper() == existing_side:
+                            existing_pos = _p
+                            break
+
+                    existing_pnl = float(existing_pos.get("unrealized_pnl", 0)) if existing_pos else 0
+
+                    if existing_pnl > 0:
+                        # Close profitable existing position to free slot for opposite trade
+                        logger.info(f"OPPOSITE SWAP: Closing {opp_symbol} {existing_side} (PnL ${existing_pnl:+.1f}) to flip to {opp_signal}")
+                        close_result = close_position_manually(
+                            symbol=opp_symbol,
+                            side=existing_side,
+                            size=existing_pos.get("size", 0)
+                        )
+                        tracker.close_trade(opp_symbol, {
+                            "reason": f"opposite_swap_{opp_signal.lower()}",
+                            "pnl": existing_pnl,
+                            "final_pnl_pct": 0,  # Will be filled by RL
+                        })
+                        upload_ai_log_to_weex(
+                            stage=f"V3.1.73 OPPOSITE SWAP: {opp_symbol.replace('cmt_','').upper()} {existing_side} -> {opp_signal}",
+                            input_data={"symbol": opp_symbol, "old_side": existing_side, "new_signal": opp_signal, "old_pnl": existing_pnl},
+                            output_data={"action": "SWAP", "confidence": confidence},
+                            explanation=f"Closed profitable {existing_side} (PnL ${existing_pnl:+.1f}) to flip to {opp_signal} at {confidence:.0%} confidence."
+                        )
+                        state.trades_closed += 1
+                        available_slots += 1  # Freed a slot
+                    else:
+                        logger.info(f"OPPOSITE TRADE: {opportunity['pair']} {existing_side} losing ${existing_pnl:.1f}, won't realize loss (tighten SL instead)")
+                        # TODO: could tighten SL on losing position instead
+                        continue
+
                 if trades_executed >= available_slots:
                     # V3.1.26: High confidence override - can use extra slots
                     if confidence >= CONFIDENCE_OVERRIDE_THRESHOLD and confidence_slots_used < MAX_CONFIDENCE_SLOTS:
                         logger.info(f"CONFIDENCE OVERRIDE: {confidence:.0%} >= 85% - using conviction slot {confidence_slots_used + 1}/{MAX_CONFIDENCE_SLOTS}")
                         confidence_slots_used += 1
                     else:
-                        # V3.1.66: SWAP DISABLED - realizing losses + fees kills equity
-                        logger.info(f"Max positions reached, skipping {opportunity['pair']} (swap disabled)")
+                        logger.info(f"Max positions reached, skipping {opportunity['pair']}")
                         break
                 
                 # V3.1.41: DIRECTIONAL LIMIT CHECK

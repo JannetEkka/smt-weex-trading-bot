@@ -2917,11 +2917,29 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 # TRADE TRACKER (with Cooldown for Losing Trades)
 # ============================================================
 
-# Cooldown periods by tier (prevents revenge trading)
+# V3.1.73: Fee-aware cooldowns - calibrated to fee structure
+# Round-trip taker fee ~0.12% on notional (0.06% per side)
+# At 20x leverage = ~2.4% ROE round-trip cost
+# Cooldown must ensure enough time for market to move 3x+ fees (0.36%+)
+# After losses: longer cooldown (trend reversal, need clarity)
+# After wins/profit lock: no cooldown (trend confirmed, re-entry OK)
+# After timeout: short cooldown (direction unknown)
 COOLDOWN_HOURS = {
-    1: 2,   # V3.1.34: SURVIVAL - 2h cooldown for faster re-entry
-    2: 2,   # V3.1.34: SURVIVAL - 2h cooldown  
-    3: 1,   # V3.1.34: SURVIVAL - 1h cooldown for fast movers
+    1: 2,   # T1 base: BTC/ETH ~0.25%/hr, need 1.5h min for fee coverage
+    2: 1.5, # T2 base: SOL ~0.4%/hr, need 1h min for fee coverage
+    3: 1,   # T3 base: DOGE/XRP/ADA ~0.3%/hr, need 1.2h min
+}
+
+# V3.1.73: Cooldown multipliers by exit reason
+COOLDOWN_MULTIPLIERS = {
+    "sl_hit": 2.0,       # SL hit = clear trend reversal, need 2x cooldown
+    "force_stop": 2.0,   # Force exit = bad trade, need time
+    "early_exit": 1.5,   # Early exit at loss = trend fading
+    "max_hold": 0.5,     # Timeout = direction unclear, short cooldown
+    "profit_lock": 0.0,  # Won! No cooldown, re-enter on next signal
+    "tp_hit": 0.0,       # Full TP hit, re-enter ASAP
+    "regime_exit": 1.0,  # Regime change, standard cooldown
+    "default": 1.0,      # Unknown reason, standard cooldown
 }
 
 # ============================================================
@@ -3015,13 +3033,47 @@ class TradeTracker:
             pnl_pct = close_data.get("final_pnl_pct", 0) if close_data else 0
             reason = close_data.get("reason", "") if close_data else ""
             
-            # Add cooldown if closed at a loss or force-exited
-            if pnl_pct < 0 or "early_exit" in reason or "force_stop" in reason or "max_hold" in reason:
-                tier = trade.get("tier", 2)
-                cooldown_hours = COOLDOWN_HOURS.get(tier, 12)
+            # V3.1.73: Fee-aware cooldown based on exit reason
+            # Determine cooldown multiplier from exit reason
+            tier = trade.get("tier", 2)
+            base_cooldown = COOLDOWN_HOURS.get(tier, 2)
+
+            # Classify exit reason for cooldown multiplier
+            if "force_stop" in reason or "force_exit" in reason:
+                cd_mult = COOLDOWN_MULTIPLIERS["force_stop"]
+                cd_type = "SL/FORCE"
+            elif "early_exit" in reason:
+                cd_mult = COOLDOWN_MULTIPLIERS["early_exit"]
+                cd_type = "EARLY_EXIT"
+            elif "max_hold" in reason:
+                cd_mult = COOLDOWN_MULTIPLIERS["max_hold"]
+                cd_type = "TIMEOUT"
+            elif "profit_lock" in reason or "peak_fade" in reason:
+                cd_mult = COOLDOWN_MULTIPLIERS["profit_lock"]
+                cd_type = "PROFIT_LOCK"
+            elif "regime_exit" in reason:
+                cd_mult = COOLDOWN_MULTIPLIERS["regime_exit"]
+                cd_type = "REGIME"
+            elif pnl_pct > 0:
+                cd_mult = COOLDOWN_MULTIPLIERS["tp_hit"]
+                cd_type = "WIN"
+            elif pnl_pct < 0:
+                cd_mult = COOLDOWN_MULTIPLIERS["sl_hit"]
+                cd_type = "LOSS"
+            else:
+                cd_mult = COOLDOWN_MULTIPLIERS["default"]
+                cd_type = "DEFAULT"
+
+            cooldown_hours = base_cooldown * cd_mult
+            if cooldown_hours > 0:
                 cooldown_until = datetime.now(timezone.utc) + timedelta(hours=cooldown_hours)
                 self.cooldowns[symbol] = cooldown_until.isoformat()
-                print(f"  [COOLDOWN] {symbol} on cooldown for {cooldown_hours}h until {cooldown_until.strftime('%Y-%m-%d %H:%M UTC')}")
+                print(f"  [COOLDOWN] {symbol} {cd_type}: {cooldown_hours:.1f}h (base {base_cooldown}h x{cd_mult}) until {cooldown_until.strftime('%H:%M UTC')}")
+            else:
+                # No cooldown for wins/profit locks - can re-enter immediately
+                if symbol in self.cooldowns:
+                    del self.cooldowns[symbol]
+                print(f"  [COOLDOWN] {symbol} {cd_type}: no cooldown (trend confirmed, re-entry OK)")
             
             self.save_state()
     
