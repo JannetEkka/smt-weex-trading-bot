@@ -859,8 +859,8 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
 MAX_OPEN_POSITIONS = 5  # V3.1.71: RECOVERY - 5 positions for final push - fewer, bigger, better positions
-MAX_SINGLE_POSITION_PCT = 0.35  # V3.1.73: 35% max per trade (was 50% for 3 slots, adjusted for 5 slots)
-MIN_SINGLE_POSITION_PCT = 0.15  # V3.1.73: 15% min per trade (was 20%, adjusted for 5 slots)
+MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
+MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
 MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.1.64: SNIPER++ - higher conviction for endgame
 
 # ============================================================
@@ -896,13 +896,13 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     jitter = random.uniform(0, delay * 0.1)
     return delay + jitter
 
-# V3.1.73 RECOVERY PUSH: Wider TPs to capture full trend moves instead of re-entering.
-# Recent data: BTC +3.0%, ETH +3.0%, DOGE +3.1% - all exceeded old T1 2.5% TP.
-# Keep tight SLs (prelim discipline) but let winners run further.
+# V3.1.72: REALISTIC TPs - match actual hold windows. Profit lock (1.0%/40%) is primary exit.
+# TP on WEEX is safety net for runners. Must be hittable within max_hold.
+# Prelims: 1.5% SL -> 566% ROI. Finals: 3% SL -> -70% drawdown. The data speaks.
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.035, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 3.5, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.04, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 4.0, "sl_pct": 1.5, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.045, "trailing_stop": 0.015, "time_limit": 360, "tp_pct": 4.5, "sl_pct": 1.8, "max_hold_hours": 4, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.018, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 1.8, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.02, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 2.0, "sl_pct": 1.5, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.02, "trailing_stop": 0.015, "time_limit": 360, "tp_pct": 2.0, "sl_pct": 1.8, "max_hold_hours": 4, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
 }
 # Trading Pairs with correct tiers
 TRADING_PAIRS = {
@@ -1684,7 +1684,7 @@ class FlowPersona:
             # Shorting the literal bottom of the fear index = missing the god candle
             fg_data = get_fear_greed_index()
             fg_val = fg_data.get("value", 50)
-            capitulation_short_cap = fg_val < 20  # V3.1.72: Cap shorts during extreme fear. F&G<20 = recovery mode, focus on longs
+            capitulation_short_cap = fg_val < 5  # V3.1.55: was 10, too aggressive - only cap at extreme extremes
             
             if extreme_selling:
                 # V3.1.17: MASSIVE SELL PRESSURE - ignore depth entirely
@@ -1855,192 +1855,85 @@ class FlowPersona:
 # ============================================================
 
 class TechnicalPersona:
-    """V3.1.72: Enhanced technical analysis with per-pair price structure.
-
-    Adds: ADX (trending vs choppy), higher-highs/lower-lows detection,
-    range position (top/bottom of recent range), per-pair 4h trend,
-    and late-entry detection per pair (not just BTC).
-    """
-
+    """Simple technical indicators (RSI, SMA, momentum)."""
+    
     def __init__(self):
         self.name = "TECHNICAL"
-        self.weight = 1.2
-
+        self.weight = 1.2  # V3.1.7: Increased from 0.8
+    
     def analyze(self, pair: str, pair_info: Dict) -> Dict:
         symbol = pair_info["symbol"]
-
+        
         try:
-            candles_1h = self._get_candles(symbol, "1H", 50)
-            candles_4h = self._get_candles(symbol, "4H", 20)
-
-            if len(candles_1h) < 20:
+            candles = self._get_candles(symbol, "1H", 50)
+            
+            if len(candles) < 20:
                 return {
                     "persona": self.name,
                     "signal": "NEUTRAL",
                     "confidence": 0.0,
                     "reasoning": "Insufficient data",
                 }
-
-            closes = [c["close"] for c in candles_1h]
-            highs = [c["high"] for c in candles_1h]
-            lows = [c["low"] for c in candles_1h]
-
+            
+            closes = [c["close"] for c in candles]
+            
             rsi = self._calculate_rsi(closes, 14)
             sma_20 = np.mean(closes[-20:])
             sma_50 = np.mean(closes[-50:]) if len(closes) >= 50 else sma_20
             current_price = closes[-1]
-
-            momentum_5h = (closes[-1] - closes[-5]) / closes[-5] * 100 if closes[-5] > 0 else 0
-
-            # V3.1.72: ADX - is this pair trending or chopping?
-            adx = self._calculate_adx(highs, lows, closes, 14)
-            is_trending = adx > 25
-            is_choppy = adx < 20
-
-            # V3.1.72: Price structure - higher highs/lower lows (last 10 candles)
-            structure = self._detect_price_structure(highs[-10:], lows[-10:])
-
-            # V3.1.72: Range position - where is price within recent 20-candle range?
-            range_high = max(highs[-20:])
-            range_low = min(lows[-20:])
-            range_span = range_high - range_low
-            range_position = ((current_price - range_low) / range_span * 100) if range_span > 0 else 50
-
-            # V3.1.72: 4h trend for higher timeframe context
-            trend_4h = "NEUTRAL"
-            change_4h = 0
-            if len(candles_4h) >= 5:
-                closes_4h = [c["close"] for c in candles_4h]
-                change_4h = ((closes_4h[-1] - closes_4h[-5]) / closes_4h[-5]) * 100 if closes_4h[-5] > 0 else 0
-                if change_4h > 1.5:
-                    trend_4h = "BULLISH"
-                elif change_4h < -1.5:
-                    trend_4h = "BEARISH"
-
-            # V3.1.72: Per-pair freshness - did this pair already move?
-            change_1h = ((closes[-1] - closes[-2]) / closes[-2]) * 100 if len(closes) >= 2 and closes[-2] > 0 else 0
-            pair_4h_change = change_4h
-
+            
+            momentum = (closes[-1] - closes[-5]) / closes[-5] * 100 if closes[-5] > 0 else 0
+            
             signals = []
-            extra_context = []
-
-            # RSI signals
+            
             if rsi < 30:
                 signals.append(("LONG", 0.7, f"RSI oversold: {rsi:.1f}"))
             elif rsi > 70:
                 signals.append(("SHORT", 0.7, f"RSI overbought: {rsi:.1f}"))
-
-            # SMA trend
+            
             if current_price > sma_20 > sma_50:
                 signals.append(("LONG", 0.5, "Price above SMAs (uptrend)"))
             elif current_price < sma_20 < sma_50:
                 signals.append(("SHORT", 0.5, "Price below SMAs (downtrend)"))
-
-            # Momentum
-            if momentum_5h > 2:
-                signals.append(("LONG", 0.4, f"Strong momentum: +{momentum_5h:.1f}%"))
-            elif momentum_5h < -2:
-                signals.append(("SHORT", 0.4, f"Weak momentum: {momentum_5h:.1f}%"))
-
-            # V3.1.72: Price structure signals
-            if structure == "UPTREND":
-                signals.append(("LONG", 0.5, "Higher highs & higher lows"))
-            elif structure == "DOWNTREND":
-                signals.append(("SHORT", 0.5, "Lower highs & lower lows"))
-
-            # V3.1.72: Choppy market = reduce confidence (don't trade chop)
-            if is_choppy:
-                extra_context.append(f"CHOPPY (ADX={adx:.0f})")
-            elif is_trending:
-                extra_context.append(f"TRENDING (ADX={adx:.0f})")
-
-            # V3.1.72: Range position warnings
-            if range_position > 85:
-                extra_context.append(f"NEAR RANGE TOP ({range_position:.0f}%)")
-                # Penalize longs near the top
-                signals.append(("SHORT", 0.3, f"Near range top ({range_position:.0f}%)"))
-            elif range_position < 15:
-                extra_context.append(f"NEAR RANGE BOTTOM ({range_position:.0f}%)")
-                # Penalize shorts near the bottom
-                signals.append(("LONG", 0.3, f"Near range bottom ({range_position:.0f}%)"))
-
-            # V3.1.72: 4h trend alignment
-            if trend_4h == "BULLISH":
-                signals.append(("LONG", 0.3, f"4h trend bullish ({change_4h:+.1f}%)"))
-            elif trend_4h == "BEARISH":
-                signals.append(("SHORT", 0.3, f"4h trend bearish ({change_4h:+.1f}%)"))
-
-            # V3.1.72: Late entry detection PER PAIR (not just BTC)
-            late_entry_warning = None
-            if pair_4h_change > 2.0 and change_1h < -0.2:
-                late_entry_warning = f"LATE LONG: {pair} 4h={pair_4h_change:+.1f}% but 1h fading {change_1h:+.1f}%"
-            elif pair_4h_change < -2.0 and change_1h > 0.2:
-                late_entry_warning = f"LATE SHORT: {pair} 4h={pair_4h_change:+.1f}% but 1h recovering {change_1h:+.1f}%"
-
-            context_str = ", ".join(extra_context) if extra_context else ""
-
-            print(f"  [TECHNICAL] {pair}: ADX={adx:.0f} {'TREND' if is_trending else 'CHOP' if is_choppy else 'MIXED'} | Structure={structure} | Range={range_position:.0f}% | 4h={change_4h:+.1f}%")
-            if late_entry_warning:
-                print(f"  [TECHNICAL] {late_entry_warning}")
-
+            
+            if momentum > 2:
+                signals.append(("LONG", 0.4, f"Strong momentum: +{momentum:.1f}%"))
+            elif momentum < -2:
+                signals.append(("SHORT", 0.4, f"Weak momentum: {momentum:.1f}%"))
+            
             if not signals:
                 return {
                     "persona": self.name,
                     "signal": "NEUTRAL",
                     "confidence": 0.4,
-                    "reasoning": f"No clear technical signal. RSI: {rsi:.1f}. {context_str}",
-                    "price_structure": structure,
-                    "adx": adx,
-                    "range_position": range_position,
-                    "trend_4h": trend_4h,
-                    "late_entry_warning": late_entry_warning,
+                    "reasoning": f"No clear technical signal. RSI: {rsi:.1f}",
                 }
-
+            
             long_score = sum(s[1] for s in signals if s[0] == "LONG")
             short_score = sum(s[1] for s in signals if s[0] == "SHORT")
-
-            # V3.1.72: Choppy market penalty - reduce confidence
-            confidence_penalty = 0.7 if is_choppy else 1.0
-
+            
             if long_score > short_score:
-                conf = min(0.8, long_score) * confidence_penalty
                 return {
                     "persona": self.name,
                     "signal": "LONG",
-                    "confidence": conf,
-                    "reasoning": "; ".join(s[2] for s in signals if s[0] == "LONG") + (f" [{context_str}]" if context_str else ""),
-                    "price_structure": structure,
-                    "adx": adx,
-                    "range_position": range_position,
-                    "trend_4h": trend_4h,
-                    "late_entry_warning": late_entry_warning,
+                    "confidence": min(0.8, long_score),
+                    "reasoning": "; ".join(s[2] for s in signals if s[0] == "LONG"),
                 }
             elif short_score > long_score:
-                conf = min(0.8, short_score) * confidence_penalty
                 return {
                     "persona": self.name,
                     "signal": "SHORT",
-                    "confidence": conf,
-                    "reasoning": "; ".join(s[2] for s in signals if s[0] == "SHORT") + (f" [{context_str}]" if context_str else ""),
-                    "price_structure": structure,
-                    "adx": adx,
-                    "range_position": range_position,
-                    "trend_4h": trend_4h,
-                    "late_entry_warning": late_entry_warning,
+                    "confidence": min(0.8, short_score),
+                    "reasoning": "; ".join(s[2] for s in signals if s[0] == "SHORT"),
                 }
-
+            
             return {
                 "persona": self.name,
                 "signal": "NEUTRAL",
                 "confidence": 0.4,
-                "reasoning": f"Mixed technical signals. {context_str}",
-                "price_structure": structure,
-                "adx": adx,
-                "range_position": range_position,
-                "trend_4h": trend_4h,
-                "late_entry_warning": late_entry_warning,
+                "reasoning": "Mixed technical signals",
             }
-
+            
         except Exception as e:
             return {
                 "persona": self.name,
@@ -2048,72 +1941,6 @@ class TechnicalPersona:
                 "confidence": 0.0,
                 "reasoning": f"Technical analysis error: {str(e)}",
             }
-
-    def _calculate_adx(self, highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> float:
-        """Calculate Average Directional Index (ADX) - measures trend strength.
-        ADX > 25 = trending, ADX < 20 = choppy/ranging.
-        """
-        if len(highs) < period + 2:
-            return 20.0  # Default neutral
-
-        try:
-            highs_arr = np.array(highs, dtype=float)
-            lows_arr = np.array(lows, dtype=float)
-            closes_arr = np.array(closes, dtype=float)
-
-            # True Range
-            tr1 = highs_arr[1:] - lows_arr[1:]
-            tr2 = np.abs(highs_arr[1:] - closes_arr[:-1])
-            tr3 = np.abs(lows_arr[1:] - closes_arr[:-1])
-            tr = np.maximum(tr1, np.maximum(tr2, tr3))
-
-            # Directional Movement
-            up_move = highs_arr[1:] - highs_arr[:-1]
-            down_move = lows_arr[:-1] - lows_arr[1:]
-
-            plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
-            minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
-
-            # Smoothed averages (simple moving average for simplicity)
-            atr = np.mean(tr[-period:])
-            plus_di = (np.mean(plus_dm[-period:]) / atr * 100) if atr > 0 else 0
-            minus_di = (np.mean(minus_dm[-period:]) / atr * 100) if atr > 0 else 0
-
-            di_sum = plus_di + minus_di
-            dx = (abs(plus_di - minus_di) / di_sum * 100) if di_sum > 0 else 0
-
-            return dx  # Simplified ADX (single-period DX)
-        except Exception:
-            return 20.0
-
-    def _detect_price_structure(self, highs: List[float], lows: List[float]) -> str:
-        """Detect higher highs/higher lows (uptrend) or lower highs/lower lows (downtrend).
-        Uses last 10 candles, comparing first half vs second half swing points.
-        """
-        if len(highs) < 6:
-            return "UNKNOWN"
-
-        mid = len(highs) // 2
-        first_high = max(highs[:mid])
-        second_high = max(highs[mid:])
-        first_low = min(lows[:mid])
-        second_low = min(lows[mid:])
-
-        higher_highs = second_high > first_high
-        higher_lows = second_low > first_low
-        lower_highs = second_high < first_high
-        lower_lows = second_low < first_low
-
-        if higher_highs and higher_lows:
-            return "UPTREND"
-        elif lower_highs and lower_lows:
-            return "DOWNTREND"
-        elif higher_highs and lower_lows:
-            return "EXPANDING"  # Volatility expansion
-        elif lower_highs and higher_lows:
-            return "CONTRACTING"  # Squeeze/consolidation
-        else:
-            return "MIXED"
     
     def _get_candles(self, symbol: str, interval: str, limit: int) -> List[Dict]:
         try:
@@ -2356,19 +2183,16 @@ HOW TO DECIDE:
 
 PATTERN RECOGNITION:
 - WHALE buying + FLOW selling = ACCUMULATION (smart money loading while retail sells) -> LONG
-- WHALE selling + FLOW buying = CONFLICTING signals -> WAIT (do NOT assume distribution in extreme fear)
+- WHALE selling + FLOW buying = DISTRIBUTION (smart money dumping into retail buying) -> SHORT
 - Both buying = STRONG LONG. Both selling = STRONG SHORT.
-- If F&G < 20: WHALE selling is less reliable (fear distorts sentiment). Trust FLOW direction or WAIT.
 
 TRADE HISTORY CONTEXT:
 {trade_history_summary}
 
-FEAR & GREED (V3.1.72 RECOVERY MODE):
-- F&G < 20 (extreme fear) = RECOVERY MODE. ONLY open LONG positions. Shorts in capitulation catch god-candle bounces and destroy accounts.
-- F&G 20-40 (fear) = Prefer LONG. Shorts only if ALL signals agree (WHALE+FLOW+TECHNICAL).
-- F&G 40-60 (neutral) = Trade either direction based on signals.
-- F&G > 60 (greed) = Prefer SHORT. Take profits on longs faster.
-- In RECOVERY MODE (F&G < 20), if FLOW shows selling, it means retail is panic selling = ACCUMULATION opportunity for longs, NOT a short signal.
+FEAR & GREED:
+- Extreme fear does NOT automatically mean buy. If FLOW confirms selling, the dump is real.
+- Extreme greed does NOT automatically mean sell. If FLOW confirms buying, the rally is real.
+- Contrarian trades need FLOW confirmation. Without it, go with the trend.
 
 FUNDING RATE: Negative = shorts paying longs (bullish lean). Positive = longs paying shorts (bearish lean). Not a trade signal alone, but tips the balance when other signals are close.
 
@@ -2726,51 +2550,28 @@ class MultiPersonaAnalyzer:
         if final['decision'] in ("LONG", "SHORT"):
             print(f"  [JUDGE] TP: {final.get('take_profit_percent')}%, SL: {final.get('stop_loss_percent')}%, Max Hold: {final.get('hold_time_hours')}h")
         
-        # V3.1.72: PER-PAIR FRESHNESS FILTER - check actual pair, not just BTC
+        # V3.1.71: TREND FRESHNESS FILTER - don't enter late in a move
         if final['decision'] in ("LONG", "SHORT"):
-            # Get per-pair freshness from TechnicalPersona (already computed)
-            tech_vote = next((v for v in votes if v.get("persona") == "TECHNICAL"), {})
-            _late_warning = tech_vote.get("late_entry_warning")
-            _pair_structure = tech_vote.get("price_structure", "UNKNOWN")
-            decision = final['decision']
-
-            # Block late entries based on per-pair analysis
-            if _late_warning:
-                if "LATE LONG" in str(_late_warning) and decision == "LONG":
-                    print(f"  [FRESHNESS] BLOCKED: {_late_warning}")
-                    final['decision'] = 'WAIT'
-                    final['confidence'] = 0
-                elif "LATE SHORT" in str(_late_warning) and decision == "SHORT":
-                    print(f"  [FRESHNESS] BLOCKED: {_late_warning}")
-                    final['decision'] = 'WAIT'
-                    final['confidence'] = 0
-
-            # V3.1.72: Block counter-structure trades (don't SHORT in uptrend, don't LONG in downtrend)
-            if _pair_structure == "DOWNTREND" and decision == "LONG":
-                _adx = tech_vote.get("adx", 20)
-                if _adx > 25:  # Only block if trend is strong
-                    print(f"  [FRESHNESS] BLOCKED LONG in {pair} DOWNTREND (ADX={_adx:.0f}). Wait for reversal confirmation.")
-                    final['decision'] = 'WAIT'
-                    final['confidence'] = 0
-            elif _pair_structure == "UPTREND" and decision == "SHORT":
-                _adx = tech_vote.get("adx", 20)
-                if _adx > 25:
-                    print(f"  [FRESHNESS] BLOCKED SHORT in {pair} UPTREND (ADX={_adx:.0f}). Wait for reversal confirmation.")
-                    final['decision'] = 'WAIT'
-                    final['confidence'] = 0
-
-            # Also check BTC for cross-pair freshness (keep the macro check)
             _regime = get_enhanced_market_regime()
             btc_1h = _regime.get('change_1h', 0)
             btc_4h = _regime.get('change_4h', 0)
+            decision = final['decision']
+            # Late SHORT: 4h already dumped hard, 1h recovering = we missed the move
             if decision == "SHORT" and btc_4h < -1.5 and btc_1h > 0.2:
-                print(f"  [FRESHNESS] BLOCKED SHORT: BTC 4h={btc_4h:+.1f}% (dumped), 1h={btc_1h:+.1f}% (recovering).")
+                print(f"  [FRESHNESS] BLOCKED SHORT: 4h={btc_4h:+.1f}% (dumped), 1h={btc_1h:+.1f}% (recovering). Late entry.")
                 final['decision'] = 'WAIT'
                 final['confidence'] = 0
+            # Late LONG: 4h already pumped hard, 1h fading = we missed the move
             elif decision == "LONG" and btc_4h > 1.5 and btc_1h < -0.2:
-                print(f"  [FRESHNESS] BLOCKED LONG: BTC 4h={btc_4h:+.1f}% (pumped), 1h={btc_1h:+.1f}% (fading).")
+                print(f"  [FRESHNESS] BLOCKED LONG: 4h={btc_4h:+.1f}% (pumped), 1h={btc_1h:+.1f}% (fading). Late entry.")
                 final['decision'] = 'WAIT'
                 final['confidence'] = 0
+            # Fresh flip: 4h was down but 1h recovering = good LONG entry
+            elif decision == "LONG" and btc_4h < -0.5 and btc_1h > 0.3:
+                print(f"  [FRESHNESS] FRESH FLIP LONG: 4h={btc_4h:+.1f}%, 1h={btc_1h:+.1f}%. Good entry timing.")
+            # Fresh flip: 4h was up but 1h dumping = good SHORT entry
+            elif decision == "SHORT" and btc_4h > 0.5 and btc_1h < -0.3:
+                print(f"  [FRESHNESS] FRESH FLIP SHORT: 4h={btc_4h:+.1f}%, 1h={btc_1h:+.1f}%. Good entry timing.")
         
         return final
 
@@ -2978,7 +2779,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         conf_bracket = "ULTRA" if trade_confidence >= 0.90 else "HIGH" if trade_confidence >= 0.80 else "NORMAL"
         print(f"  [LEVERAGE] Tier {tier} ({current_regime}, {conf_bracket} {trade_confidence:.0%}): Using {safe_leverage}x")
     except Exception as e:
-        safe_leverage = 20  # V3.1.72: 20x leverage for all trades
+        safe_leverage = 18  # V3.1.62: Aggressive fallback
         print(f"  [LEVERAGE] Fallback to {safe_leverage}x: {e}")
     notional_usdt = position_usdt * safe_leverage
     raw_size = notional_usdt / current_price
@@ -3037,14 +2838,15 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         sl_pct_raw = tier_config["sl_pct"]
         print(f"  [ATR-SL] Error ({e}), using tier SL: {sl_pct_raw}%")
     
-    # V3.1.73: WIDER TP - capture full trend moves
-    # Old caps (3/3.5/4%) kept closing before trend was done, causing re-entries
-    base_tp = tier_config["tp_pct"]  # V3.1.73: T1=3.5%, T2=4.0%, T3=4.5%
+    # V3.1.66b: REALISTIC TP - tier-based, no F&G scaling
+    # F&G scaling caused 9% TPs in capitulation (unrealistic, never hit)
+    # TP is now strictly tier-based with a sane floor
+    base_tp = tier_config["tp_pct"]  # V3.1.72c: T1=1.8%, T2=2.0%, T3=2.0% (realistic for hold window)
     tp_floor = sl_pct_raw * 1.2  # Minimum 1.2x SL for positive expectancy
     tp_pct_raw = max(base_tp, tp_floor)
-    # Hard cap per tier (raised to match new wider TPs)
-    _tier_tp_caps = {1: 4.5, 2: 5.0, 3: 5.5}  # V3.1.73: room above base TP for ATR-adjusted entries
-    _tp_cap = _tier_tp_caps.get(tier, 5.5)
+    # Hard cap per tier - must be hittable within max_hold_hours
+    _tier_tp_caps = {1: 2.5, 2: 3.0, 3: 2.5}  # V3.1.72c: Realistic caps. T3 4h can't hit 5%.
+    _tp_cap = _tier_tp_caps.get(tier, 2.5)  # V3.1.72c: conservative fallback
     tp_pct_raw = min(tp_pct_raw, _tp_cap)
     print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% (Tier {tier} cap={_tp_cap}%, floor=SL*1.2={tp_floor:.2f}%)")
     
@@ -3129,23 +2931,23 @@ COOLDOWN_HOURS = {
 # Only for Tier 1 and Tier 2 - Tier 3 is scalp only
 
 RUNNER_CONFIG = {
-    1: {  # BTC, ETH, BNB, LTC - trigger at ~75% of 3.5% TP = 2.5%
-        "enabled": True,   # V3.1.73: Re-tuned for wider TPs
-        "trigger_pct": 2.5,  # Lock partial profit before full TP
+    1: {  # BTC, ETH, BNB, LTC - trigger at 50% of 8% TP = 4%
+        "enabled": True,   # V3.1.51: Re-enabled with staggered TP
+        "trigger_pct": 4.0,  # 50% of T1 TP (8%)
         "close_pct": 40,     # Close 40%, let 60% ride to full TP
         "move_sl_to_entry": True,  # Move SL to breakeven on remaining
         "remove_tp": False,  # Keep TP order for remaining size
     },
-    2: {  # SOL - trigger at ~75% of 4.0% TP = 3.0%
-        "enabled": True,   # V3.1.73: Re-tuned
-        "trigger_pct": 3.0,
+    2: {  # SOL - trigger at 50% of 7% TP = 3.5%
+        "enabled": True,   # V3.1.51: Re-enabled
+        "trigger_pct": 3.5,
         "close_pct": 40,
         "move_sl_to_entry": True,
         "remove_tp": False,
     },
-    3: {  # DOGE, XRP, ADA - trigger at ~75% of 4.5% TP = 3.5%
-        "enabled": True,   # V3.1.73: Re-tuned
-        "trigger_pct": 3.5,
+    3: {  # DOGE, XRP, ADA - trigger at 50% of 6% TP = 3%
+        "enabled": True,   # V3.1.51: Re-enabled
+        "trigger_pct": 3.0,
         "close_pct": 40,
         "move_sl_to_entry": True,
         "remove_tp": False,
@@ -3478,22 +3280,11 @@ def execute_runner_partial_close(symbol: str, side: str, current_size: float,
 
 
 def save_local_log(log_data: Dict, timestamp: str):
-    # Save to logs/ (operational logs)
     os.makedirs("logs", exist_ok=True)
     filename = f"logs/v3_1_1_{timestamp}.json"
     with open(filename, 'w') as f:
         json.dump(log_data, f, indent=2, default=str)
     print(f"  [LOG] Saved: {filename}")
-
-    # V3.1.73: Also save to ai_logs/ (competition compliance - was missing since prelims!)
-    try:
-        os.makedirs("ai_logs", exist_ok=True)
-        ai_filename = f"ai_logs/v3_{timestamp}.json"
-        with open(ai_filename, 'w') as f:
-            json.dump(log_data, f, indent=2, default=str)
-        print(f"  [AI LOG] Saved: {ai_filename}")
-    except Exception as e:
-        print(f"  [AI LOG] Save error: {e}")
 
 
 # ============================================================
