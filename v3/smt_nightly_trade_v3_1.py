@@ -861,7 +861,7 @@ MAX_LEVERAGE = 20
 MAX_OPEN_POSITIONS = 3  # V3.1.76: CONCENTRATE CAPITAL - 5 positions spread too thin. Bob is #1 with fewer, bigger trades.
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
-MIN_CONFIDENCE_TO_TRADE = 0.92  # V3.1.76: ULTRA SNIPER - 206 trades killed us in fees ($1,795). Bob is #1 with 22 trades. Trade LESS, win MORE.
+MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.1.76: 85% confidence + 3 max positions = natural trade throttle. No need to over-restrict.
 
 # ============================================================
 # V3.1.4: TIER-BASED PARAMETERS (UPDATED!)

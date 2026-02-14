@@ -2546,15 +2546,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.76 - ULTRA SNIPER: 92% confidence, 3 max positions, trust exchange TP")
+    logger.info("SMT Daemon V3.1.76 - DISCIPLINE RESTORATION: 3 max positions, trust exchange TP, flat 20x")
     logger.info("=" * 60)
     logger.info("V3.1.76 DISCIPLINE RESTORATION:")
-    logger.info("  - STOP OVERTRADING: 92% confidence floor (was 85%). Bob is #1 with 22 trades, we had 206.")
-    logger.info("  - CONCENTRATE CAPITAL: Max 3 positions (was 5). Bigger trades, bigger wins.")
+    logger.info("  - CONCENTRATE CAPITAL: Max 3 positions (was 5/8). Fewer slots = bigger trades = bigger wins.")
     logger.info("  - PROFIT LOCK FIX: Trust exchange TP orders. Stop killing winners at +0.7%.")
     logger.info("  - FLAT 20x LEVERAGE: No more random reductions. Full power every trade.")
     logger.info("  - CONTRARIAN F&G: Extreme Fear = LONG only, Extreme Greed = SHORT only.")
-    logger.info("  - TARGET: $4,292 → $13,000+ in 7 days via compounding.")
+    logger.info("  - 85% confidence + 3 slots = natural trade throttle. Less churn, less fees.")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
@@ -2563,7 +2562,7 @@ def run_daemon():
         runner_str = f"Runner: +{runner.get('trigger_pct', 0)}% -> close 50%" if runner.get("enabled") else "No Runner"
         logger.info(f"  Tier {tier}: {', '.join(pairs)}")
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
-    logger.info("Cooldown Override: 92%+ confidence bypasses cooldown")
+    logger.info("Cooldown Override: 85%+ confidence bypasses cooldown")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
