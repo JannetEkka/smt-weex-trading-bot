@@ -896,12 +896,13 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     jitter = random.uniform(0, delay * 0.1)
     return delay + jitter
 
-# V3.1.70 PREDATOR REVIVAL: Back to prelim discipline. Tight SLs, fast exits, high conviction only.
-# Prelims: 1.5% SL -> 566% ROI. Finals: 3% SL -> -70% drawdown. The data speaks.
+# V3.1.73 RECOVERY TREND: Market in V-recovery from extreme fear (F&G=9).
+# 4-5% daily moves = wider TPs achievable. Let winners run, cut losers fast.
+# Target: $12K equity in 9 days from $4.8K. Need consistent +$800/day.
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.025, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 2.5, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.035, "trailing_stop": 0.015, "time_limit": 360, "tp_pct": 3.5, "sl_pct": 1.8, "max_hold_hours": 4, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.020, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 2.0, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 6, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.025, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 2.5, "sl_pct": 1.5, "max_hold_hours": 12, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.020, "trailing_stop": 0.015, "time_limit": 480, "tp_pct": 2.0, "sl_pct": 1.8, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
 }
 # Trading Pairs with correct tiers
 TRADING_PAIRS = {
@@ -2930,24 +2931,24 @@ COOLDOWN_HOURS = {
 # Only for Tier 1 and Tier 2 - Tier 3 is scalp only
 
 RUNNER_CONFIG = {
-    1: {  # BTC, ETH, BNB, LTC - trigger at 50% of 8% TP = 4%
-        "enabled": True,   # V3.1.51: Re-enabled with staggered TP
-        "trigger_pct": 4.0,  # 50% of T1 TP (8%)
-        "close_pct": 40,     # Close 40%, let 60% ride to full TP
-        "move_sl_to_entry": True,  # Move SL to breakeven on remaining
-        "remove_tp": False,  # Keep TP order for remaining size
-    },
-    2: {  # SOL - trigger at 50% of 7% TP = 3.5%
-        "enabled": True,   # V3.1.51: Re-enabled
-        "trigger_pct": 3.5,
-        "close_pct": 40,
+    1: {  # BTC, ETH, BNB, LTC - trigger at 2x TP = 4%
+        "enabled": True,
+        "trigger_pct": 4.0,
+        "close_pct": 50,     # V3.1.73: Close 50%, let 50% ride
         "move_sl_to_entry": True,
         "remove_tp": False,
     },
-    3: {  # DOGE, XRP, ADA - trigger at 50% of 6% TP = 3%
-        "enabled": True,   # V3.1.51: Re-enabled
+    2: {  # SOL - trigger at ~1.5x TP = 3.5%
+        "enabled": True,
+        "trigger_pct": 3.5,
+        "close_pct": 50,
+        "move_sl_to_entry": True,
+        "remove_tp": False,
+    },
+    3: {  # DOGE, XRP, ADA - trigger at 1.5x TP = 3%
+        "enabled": True,
         "trigger_pct": 3.0,
-        "close_pct": 40,
+        "close_pct": 50,
         "move_sl_to_entry": True,
         "remove_tp": False,
     },
