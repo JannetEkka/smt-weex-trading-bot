@@ -719,6 +719,7 @@ def get_enhanced_market_regime() -> dict:
         "confidence": 0.5,
         "btc_24h": 0,
         "btc_4h": 0,
+        "btc_1h": 0,  # V3.1.74: for freshness filter
         "fear_greed": 50,
         "avg_funding": 0,
         "factors": [],
@@ -753,7 +754,19 @@ def get_enhanced_market_regime() -> dict:
             elif btc_4h > 1: score += 1; factors.append(f"4h up: {btc_4h:+.1f}%")
     except Exception as e:
         factors.append(f"BTC error: {e}")
-    
+
+    # V3.1.74: 1h BTC change for freshness filter
+    try:
+        url_1h = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol=cmt_btcusdt&granularity=1h&limit=2"
+        r_1h = requests.get(url_1h, timeout=10)
+        data_1h = r_1h.json()
+        if isinstance(data_1h, list) and len(data_1h) >= 2:
+            closes_1h = [float(c[4]) for c in data_1h]
+            btc_1h = ((closes_1h[0] - closes_1h[1]) / closes_1h[1]) * 100
+            result["btc_1h"] = btc_1h
+    except:
+        pass  # btc_1h stays 0
+
     # ===== Factor 3: Fear & Greed (CONTRARIAN) =====
     fg = get_fear_greed_index()
     result["fear_greed"] = fg["value"]
@@ -896,13 +909,12 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     jitter = random.uniform(0, delay * 0.1)
     return delay + jitter
 
-# V3.1.73 RECOVERY TREND: Market in V-recovery from extreme fear (F&G=9).
-# 4-5% daily moves = wider TPs achievable. Let winners run, cut losers fast.
-# Target: $12K equity in 9 days from $4.8K. Need consistent +$800/day.
+# V3.1.74 RECOVERY TREND: Optimized TPs for fear bounce recovery. Let trends develop.
+# Tighter TPs = capture the bounce. Longer holds = don't cut winners. Wider force exit = survive volatility.
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.020, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 2.0, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 6, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.025, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 2.5, "sl_pct": 1.5, "max_hold_hours": 12, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.020, "trailing_stop": 0.015, "time_limit": 480, "tp_pct": 2.0, "sl_pct": 1.8, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.020, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 2.0, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.025, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 2.5, "sl_pct": 1.5, "max_hold_hours": 12, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.020, "trailing_stop": 0.015, "time_limit": 480, "tp_pct": 2.0, "sl_pct": 1.8, "max_hold_hours": 8, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
 }
 # Trading Pairs with correct tiers
 TRADING_PAIRS = {
@@ -2553,8 +2565,8 @@ class MultiPersonaAnalyzer:
         # V3.1.71: TREND FRESHNESS FILTER - don't enter late in a move
         if final['decision'] in ("LONG", "SHORT"):
             _regime = get_enhanced_market_regime()
-            btc_1h = _regime.get('change_1h', 0)
-            btc_4h = _regime.get('change_4h', 0)
+            btc_1h = _regime.get('btc_1h', 0)  # V3.1.74: was 'change_1h' (wrong key, always 0)
+            btc_4h = _regime.get('btc_4h', 0)  # V3.1.74: was 'change_4h' (wrong key, always 0)
             decision = final['decision']
             # Late SHORT: 4h already dumped hard, 1h recovering = we missed the move
             if decision == "SHORT" and btc_4h < -1.5 and btc_1h > 0.2:

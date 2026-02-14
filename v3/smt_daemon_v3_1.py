@@ -366,8 +366,8 @@ def _mark_progress():
         _last_progress_time = time.time()
 
 def _internal_watchdog():
-    """Background thread that kills the process if it hangs > 10 minutes."""
-    HANG_TIMEOUT = 600  # 10 minutes without progress = hung
+    """Background thread that kills the process if it hangs > 15 minutes."""
+    HANG_TIMEOUT = 900  # V3.1.74: 15 minutes (was 600s, signal check takes ~6min + PM takes ~2min)
     while True:
         time.sleep(60)
         with _progress_lock:
@@ -538,6 +538,7 @@ def check_trading_signals():
         
         # V3.1.44: Disable hedging during Capitulation - pick a side, don't fight yourself
         # Fetch F&G early so we can use it for hedge decisions
+        _fg_value = 50  # V3.1.74: default F&G if fetch fails
         try:
             from smt_nightly_trade_v3_1 import get_fear_greed_index
             _fg_check = get_fear_greed_index()
@@ -602,7 +603,15 @@ def check_trading_signals():
                 
                 status_str = f" [{', '.join(status_parts)}]" if status_parts else ""
                 logger.info(f"  {pair} (T{tier}): {signal} ({confidence:.0%}){status_str}")
-                
+
+                # V3.1.74: EXTREME FEAR BTC SHIELD - BTC is too slow for shorts in fear bounces
+                # F&G < 20 = contrarian BUY signal. BTC shorts at 20x leverage lose on fear bounces.
+                # Altcoins (SOL, DOGE etc) are volatile enough for shorts to work.
+                if signal == "SHORT" and pair == "BTC" and _fg_value < 20:
+                    logger.info(f"    -> FEAR SHIELD: BTC SHORT blocked (F&G={_fg_value}). Contrarian BUY only for BTC in extreme fear.")
+                    signal = "WAIT"
+                    confidence = 0
+
 # Telegram alerts for ALL tradeable signals
 #                if signal in ("LONG", "SHORT") and confidence >= 0.75:
 #                    try:
@@ -647,7 +656,7 @@ def check_trading_signals():
                         # V3.1.53: OPPOSITE - tighten SHORT SL + open LONG
                         short_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:SHORT")
                         existing_conf = short_trade.get("confidence", 0.75) if short_trade else 0.75
-                        if confidence >= existing_conf:  # V3.1.73: >= allows flip on equal confidence (was > which blocked 85% vs 85%)
+                        if confidence >= existing_conf:  # V3.1.74: >= (was > which blocked 85% vs 85% flips)
                             can_trade_this = True
                             trade_type = "opposite"
                             logger.info(f"    -> OPPOSITE: LONG {confidence:.0%} >= SHORT {existing_conf:.0%}. Tighten SHORT SL + open LONG")
@@ -671,7 +680,7 @@ def check_trading_signals():
                         # V3.1.53: OPPOSITE - tighten LONG SL + open SHORT
                         long_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:LONG")
                         existing_conf = long_trade.get("confidence", 0.75) if long_trade else 0.75
-                        if confidence >= existing_conf:  # V3.1.73: >= allows flip on equal confidence
+                        if confidence >= existing_conf:  # V3.1.74: >= (was > which blocked 85% vs 85% flips)
                             can_trade_this = True
                             trade_type = "opposite"
                             logger.info(f"    -> OPPOSITE: SHORT {confidence:.0%} >= LONG {existing_conf:.0%}. Tighten LONG SL + open SHORT")
@@ -803,7 +812,8 @@ def check_trading_signals():
                     })
                 
                 time.sleep(2)
-                
+                _mark_progress()  # V3.1.74: per-pair progress mark (was only after full signal check)
+
             except Exception as e:
                 logger.error(f"Error analyzing {pair}: {e}")
         
@@ -1376,9 +1386,9 @@ def monitor_positions():
                     exit_reason = f"V3.1.73_profit_lock T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%, locking gains)"
                     print(f"  [PROFIT LOCK] {symbol}: {exit_reason}")
 
-                # Rule 1: High peak, severe fade -> lock profits
-                # If peaked > 2.0% and dropped more than 55% from peak
-                elif not should_exit and peak_pnl_pct >= 2.0 and pnl_pct < peak_pnl_pct * 0.45 and pnl_pct > 0:
+                # Rule 1: High peak, deep fade -> lock profits
+                # If peaked > 1.5% and dropped more than 50% from peak
+                elif not should_exit and peak_pnl_pct >= 1.5 and pnl_pct < peak_pnl_pct * 0.50 and pnl_pct > 0:
                     should_exit = True
                     exit_reason = f"V3.1.73_peak_fade_high T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (faded {fade_pct:.2f}%)"
                     print(f"  [PEAK EXIT] {symbol}: {exit_reason}")
@@ -1574,16 +1584,14 @@ def gemini_portfolio_review():
         if not positions:
             return
         
-        # V3.1.73: GRACE PERIOD - hide new positions from portfolio manager
-        # Normal: 30 min. Extreme Fear (F&G < 20): 90 min (capitulation reversals are choppy)
+        # V3.1.74: GRACE PERIOD - F&G-aware (90min in extreme fear, 30min normal)
         # Gemini ignores prompt-based grace periods, so we enforce in code
         try:
             from smt_nightly_trade_v3_1 import get_fear_greed_index
-            _fg_val = get_fear_greed_index().get("value", 50)
-        except Exception:
-            _fg_val = 50
-        grace_minutes = 90 if _fg_val < 20 else 30  # V3.1.73: extended for extreme fear
-
+            _pm_fg = get_fear_greed_index().get("value", 50)
+        except:
+            _pm_fg = 50
+        grace_limit = 90 if _pm_fg < 20 else 30  # V3.1.74: 90min in extreme fear (was always 30min)
         grace_positions = []
         for p in positions:
             sym = p.get('symbol', '')
@@ -1593,8 +1601,8 @@ def gemini_portfolio_review():
                     from datetime import datetime, timezone
                     opened_at = datetime.fromisoformat(trade['opened_at'].replace('Z', '+00:00'))
                     minutes_open = (datetime.now(timezone.utc) - opened_at).total_seconds() / 60
-                    if minutes_open < grace_minutes:
-                        logger.info(f'[PORTFOLIO] Grace period: {sym.replace("cmt_","").upper()} opened {minutes_open:.0f}m ago (limit {grace_minutes}m, F&G={_fg_val}), hiding from PM')
+                    if minutes_open < grace_limit:
+                        logger.info(f'[PORTFOLIO] Grace period: {sym.replace("cmt_","").upper()} opened {minutes_open:.0f}m ago (limit {grace_limit}m, F&G={_pm_fg}), hiding from PM')
                         continue
                 except:
                     pass
@@ -1814,7 +1822,7 @@ A position at 0% can rally to +5% in the next hour. Only the SL should close bre
 
 RULE 7 - TIME-BASED PATIENCE:
 Do NOT close positions just because they have been open 2-4 hours.
-Our TP targets are 5-8%. These moves take TIME (4-12h for alts, 12-48h for BTC).
+Our TP targets are 2-2.5%. These moves take TIME (4-12h for alts, 12-24h for BTC).
 Only close if: max_hold_hours exceeded AND position is negative.
 
 RULE 8 - WEEKEND/LOW LIQUIDITY (check if Saturday or Sunday):
@@ -2567,11 +2575,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.73 - RECOVERY TREND + WATCHDOG FIX + PROFIT LOCK WIDEN")
+    logger.info("SMT Daemon V3.1.74 - BTC FEAR SHIELD + WATCHDOG FIX + RECOVERY TREND")
     logger.info("=" * 60)
-    logger.info("V3.1.73 Changes:")
-    logger.info("  - WATCHDOG FIX: per-pair progress marks (was only marking after full signal check)")
-    logger.info("  - PROFIT LOCK WIDENED: peak>=1.5%, fade>50% (was peak>=1.0%, fade>40%) - let winners run to TP")
+    logger.info("V3.1.74 Changes:")
+    logger.info("  - BTC FEAR SHIELD: Block BTC SHORTs when F&G<20 (contrarian BUY only for slow coins)")
+    logger.info("  - WATCHDOG FIX: per-pair progress marks + PM/regime marks (was only after full loops)")
+    logger.info("  - WATCHDOG TIMEOUT: 900s (was 600s, signal check+PM needs ~8min)")
+    logger.info("  - PROFIT LOCK: peak>=1.0%, fade>40% = close (bank small wins)")
     logger.info("  - OPPOSITE FLIP FIX: >= threshold (was > which blocked 85% vs 85% flips)")
     logger.info("  - GRACE PERIOD: 90min in extreme fear F&G<20 (was always 30min in code)")
     logger.info("  - TIER CONFIG: T1=2.0% TP, T2=2.5% TP, T3=2.0% TP - recovery-optimized")
@@ -2587,7 +2597,7 @@ def run_daemon():
         runner = RUNNER_CONFIG.get(tier, {})
         runner_str = f"Runner: +{runner.get('trigger_pct', 0)}% -> close 50%" if runner.get("enabled") else "No Runner"
         logger.info(f"  Tier {tier}: {', '.join(pairs)}")
-        logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
+        logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['max_hold_hours']}h | {runner_str}")
     logger.info("Cooldown Override: 85%+ confidence bypasses cooldown")
     logger.info("=" * 60)
 
@@ -2637,8 +2647,11 @@ def run_daemon():
                 monitor_positions()
                 _mark_progress()
                 resolve_opposite_sides()  # V3.1.55: Close losing side when both exist
+                _mark_progress()  # V3.1.74: mark after resolve
                 regime_aware_exit_check()  # V3.1.9: Check for regime-fighting positions
+                _mark_progress()  # V3.1.74: mark after regime check
                 gemini_portfolio_review()  # V3.1.55: Gemini reviews portfolio with whale-aware rules
+                _mark_progress()  # V3.1.74: mark after PM review
                 last_position = now
             
             if now - last_cleanup >= CLEANUP_CHECK_INTERVAL:
