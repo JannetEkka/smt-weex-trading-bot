@@ -858,10 +858,10 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 5  # V3.1.71: RECOVERY - 5 positions for final push - fewer, bigger, better positions
+MAX_OPEN_POSITIONS = 3  # V3.1.76: CONCENTRATE CAPITAL - 5 positions spread too thin. Bob is #1 with fewer, bigger trades.
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
-MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.1.64: SNIPER++ - higher conviction for endgame
+MIN_CONFIDENCE_TO_TRADE = 0.92  # V3.1.76: ULTRA SNIPER - 206 trades killed us in fees ($1,795). Bob is #1 with 22 trades. Trade LESS, win MORE.
 
 # ============================================================
 # V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
