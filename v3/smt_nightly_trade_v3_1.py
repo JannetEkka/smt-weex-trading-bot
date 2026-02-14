@@ -896,12 +896,12 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     jitter = random.uniform(0, delay * 0.1)
     return delay + jitter
 
-# V3.1.70 PREDATOR REVIVAL: Back to prelim discipline. Tight SLs, fast exits, high conviction only.
-# Prelims: 1.5% SL -> 566% ROI. Finals: 3% SL -> -70% drawdown. The data speaks.
+# V3.1.74 RECOVERY TREND: Optimized TPs for fear bounce recovery. Let trends develop.
+# Tighter TPs = capture the bounce. Longer holds = don't cut winners. Wider force exit = survive volatility.
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.025, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 2.5, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.035, "trailing_stop": 0.015, "time_limit": 360, "tp_pct": 3.5, "sl_pct": 1.8, "max_hold_hours": 4, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.020, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 2.0, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.025, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 2.5, "sl_pct": 1.5, "max_hold_hours": 12, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.020, "trailing_stop": 0.015, "time_limit": 480, "tp_pct": 2.0, "sl_pct": 1.8, "max_hold_hours": 8, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.5},
 }
 # Trading Pairs with correct tiers
 TRADING_PAIRS = {
