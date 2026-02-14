@@ -1,6 +1,6 @@
 #!/bin/bash
-# V3.1.69 WATCHDOG - faster hang detection (5min vs 20min)
-TIMEOUT=300  # 5 minutes without log activity = hung
+# V3.1.75 WATCHDOG - 15min timeout (was 5min - killed daemon mid-cycle during 8-pair analysis)
+TIMEOUT=900  # 15 minutes without log activity = hung
 
 while true; do
     sleep 30  # Check every 30 seconds

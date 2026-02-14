@@ -1,37 +1,34 @@
 """
-Smart Leverage Manager V3.1.59 - Confidence-Tiered
-Leverage scales with signal confidence, NOT just tier.
-High confidence (90%+) gets more leverage. Low confidence stays conservative.
-Safety: SL always triggers well before liquidation distance.
+Smart Leverage Manager V3.1.75 - DISCIPLINE RESTORATION
+Lower leverage = survive longer = compound more wins.
+At 15x with 1.5% SL, loss per trade = 22.5% ROE (survivable).
+At 20x with 1.5% SL, loss per trade = 30% ROE (account killer).
 
 Liquidation distances:
-  18x = ~5.0% (SL at 2.5% = 2.5% buffer)
-  15x = ~6.0% (SL at 2.5% = 3.5% buffer)
-  12x = ~7.5% (SL at 2.0% = 5.5% buffer)
-  10x = ~9.0% (SL at 2.0% = 7.0% buffer)
+  15x = ~6.0% (SL at 1.5% = 4.5% buffer)
+  12x = ~7.5% (SL at 1.5% = 6.0% buffer)
+  10x = ~9.0% (SL at 1.8% = 7.2% buffer)
 """
 
-# V3.1.59: Confidence-tiered leverage matrix
-# Key: (tier, confidence_bracket) -> leverage
-# Confidence brackets: "ultra" (90%+), "high" (80-89%), "normal" (<80%)
+# V3.1.75: Conservative leverage - T1=15x max, T2=12x max, T3=10x max
 LEVERAGE_MATRIX = {
-    (1, "ultra"):  20,  # V3.1.62: AGGRESSIVE RECOVERY
-    (1, "high"):   20,
-    (1, "normal"): 18,
-    (2, "ultra"):  20,
-    (2, "high"):   20,
-    (2, "normal"): 18,
-    (3, "ultra"):  20,
-    (3, "high"):   18,
-    (3, "normal"): 15,
+    (1, "ultra"):  15,
+    (1, "high"):   15,
+    (1, "normal"): 12,
+    (2, "ultra"):  12,
+    (2, "high"):   12,
+    (2, "normal"): 10,
+    (3, "ultra"):  10,
+    (3, "high"):   10,
+    (3, "normal"): 8,
 }
 
 
 class LeverageManager:
     def __init__(self):
-        self.MIN_LEVERAGE = 8
-        self.MAX_LEVERAGE = 18  # V3.1.59: Up from 15, but only for ultra-conf
-        self.MAX_POSITION_PCT = 0.35  # V3.1.59: Up from 0.20
+        self.MIN_LEVERAGE = 5
+        self.MAX_LEVERAGE = 15  # V3.1.75: Hard cap at 15x (was 18x)
+        self.MAX_POSITION_PCT = 0.20  # V3.1.75: 20% max (was 0.35)
         self.MIN_LIQUIDATION_DISTANCE = 4  # 4% min buffer above SL
 
     def calculate_safe_leverage(self, pair_tier: int, volatility: float = 2.0,
