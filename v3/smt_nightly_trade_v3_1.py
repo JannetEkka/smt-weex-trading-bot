@@ -951,7 +951,7 @@ MAX_LEVERAGE = 20
 MAX_OPEN_POSITIONS = 3  # V3.1.76: CONCENTRATE CAPITAL - 5 positions spread too thin. Bob is #1 with fewer, bigger trades.
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
-MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.1.76: 85% confidence + 3 max positions = natural trade throttle. No need to over-restrict.
+MIN_CONFIDENCE_TO_TRADE = 0.75  # V3.1.77b: 85%->75%. Judge now gives honest confidence; 75% means good signal alignment.
 
 # ============================================================
 # V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
@@ -1291,7 +1291,10 @@ class WhalePersona:
         except TimeoutError:
             print("  [WHALE] Cryptoracle TIMEOUT (5s) - cloud server down, using Etherscan fallback")
         except Exception as e:
-            print(f"  [WHALE] Cryptoracle fetch error: {e} - using Etherscan fallback")
+            # V3.1.77b: Log actual error type and details for debugging
+            _err_type = type(e).__name__
+            _err_detail = str(e)[:200]
+            print(f"  [WHALE] Cryptoracle error [{_err_type}]: {_err_detail} - using Etherscan fallback")
         
         return self._cryptoracle_data or {}
     
@@ -1312,7 +1315,16 @@ class WhalePersona:
         
         # FALLBACK: Etherscan whale flow for BTC/ETH
         if pair.upper() in ("BTC", "ETH"):
-            print(f"  [WHALE] Cryptoracle down/empty for {pair}, falling back to Etherscan whale flow")
+            # V3.1.77b: Better error logging for Cryptoracle issues
+            if not cr_data:
+                _cr_reason = "API returned no data (down/timeout)"
+            elif cr_signal is None:
+                _cr_reason = f"API returned data for {list(cr_data.keys())} but {pair} missing"
+            elif cr_signal.get("signal") == "NEUTRAL":
+                _cr_reason = f"signal=NEUTRAL (conf={cr_signal.get('confidence', '?')}, net_sent={cr_signal.get('net_sentiment', '?')})"
+            else:
+                _cr_reason = f"unknown: signal={cr_signal}"
+            print(f"  [WHALE] Cryptoracle fallback for {pair}: {_cr_reason}")
             return self._analyze_with_etherscan(pair, pair_info, cr_signal)
         
         # Other pairs: no Cryptoracle = neutral hold (cannot fabricate signal)
