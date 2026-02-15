@@ -2752,7 +2752,7 @@ def run_daemon():
         runner_str = f"Runner: +{runner.get('trigger_pct', 0)}% -> close 50%" if runner.get("enabled") else "No Runner"
         logger.info(f"  Tier {tier}: {', '.join(pairs)}")
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
-    logger.info("Cooldown Override: 85%+ confidence bypasses cooldown")
+    logger.info("Cooldowns: display only (confidence threshold is the real gate)")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
@@ -2818,6 +2818,7 @@ def run_daemon():
                 last_health = now
             
             time.sleep(5)
+            _mark_progress()  # V3.1.77b: Mark every loop iteration so internal watchdog never fires during normal operation
             
         except KeyboardInterrupt:
             break
