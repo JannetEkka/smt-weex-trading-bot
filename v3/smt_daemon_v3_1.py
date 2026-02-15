@@ -252,7 +252,7 @@ try:
         # Logging
         save_local_log,
     )
-    logger.info("V3.1.9 imports successful (Market Trend Filter + Stricter Signals)")
+    logger.info("Trade module imports OK")
 except ImportError as e:
     logger.error(f"Import error: {e}")
     logger.error(traceback.format_exc())
@@ -261,7 +261,7 @@ except ImportError as e:
 # V3.1.29: Pyramiding system import
 try:
     from pyramiding_system import move_sl_to_breakeven, should_pyramid, execute_pyramid
-    logger.info("Pyramiding system loaded")
+    pass  # Pyramiding loaded
 except ImportError:
     logger.warning("Pyramiding system not available")
     move_sl_to_breakeven = lambda *args, **kwargs: False
@@ -435,7 +435,7 @@ def check_trading_signals():
     global _last_trade_opened_at
     run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     logger.info("=" * 60)
-    logger.info(f"V3.1.9 SIGNAL CHECK - {run_timestamp}")
+    logger.info(f"SIGNAL CHECK - {run_timestamp}")
     logger.info("=" * 60)
     
     state.signals_checked += 1
@@ -1418,8 +1418,7 @@ def monitor_positions():
                 # Trade was working, now it's not. Close before SL to save capital.
                 if not should_exit and peak_pnl_pct >= 1.0 and pnl_pct <= 0:
                     should_exit = True
-                    exit_reason = f"V3.1.75_thesis_broken T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (went negative)"
-                    print(f"  [THESIS BROKEN] {symbol}: {exit_reason}")
+                    exit_reason = f"thesis_broken T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (went negative)"
 
                 # Rule 2: TP OVERRUN - peaked PAST the TP target, fading back
                 # Exchange TP order should have triggered but didn't (slippage/gap).
@@ -2229,10 +2228,9 @@ def log_health():
     active = len(tracker.get_active_symbols())
     
     logger.info(
-        f"V3.1.9 HEALTH | Up: {uptime_str} | "
+        f"HEALTH | Up: {uptime_str} | "
         f"Signals: {state.signals_checked} | "
         f"Trades: {state.trades_opened}/{state.trades_closed} | "
-        f"Runners: {state.runners_triggered} | "
         f"Active: {active}"
     )
     
@@ -2752,7 +2750,7 @@ def run_daemon():
         runner_str = f"Runner: +{runner.get('trigger_pct', 0)}% -> close 50%" if runner.get("enabled") else "No Runner"
         logger.info(f"  Tier {tier}: {', '.join(pairs)}")
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
-    logger.info("Cooldown Override: 85%+ confidence bypasses cooldown")
+    logger.info("Cooldowns: display only (confidence threshold is the real gate)")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
@@ -2818,6 +2816,7 @@ def run_daemon():
                 last_health = now
             
             time.sleep(5)
+            _mark_progress()  # V3.1.77b: Mark every loop iteration so internal watchdog never fires during normal operation
             
         except KeyboardInterrupt:
             break
@@ -2827,7 +2826,7 @@ def run_daemon():
             state.errors += 1
             time.sleep(30)
     
-    logger.info("V3.1.9 Daemon shutdown")
+    logger.info("Daemon shutdown")
     logger.info(f"Stats: {json.dumps(state.to_dict(), indent=2)}")
 
 
