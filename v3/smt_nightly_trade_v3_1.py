@@ -183,8 +183,7 @@ def apply_regime_hysteresis(score: int, raw_regime: str, btc_4h_change: float = 
     # V3.1.23: Reduced lock from 30 min to 10 min
     if REGIME_STATE.get("regime_locked_until", 0) > now:
         remaining = (REGIME_STATE["regime_locked_until"] - now) / 60
-        print(f"  [HYSTERESIS] Locked to {current} for {remaining:.0f}m")
-        return current
+        return current  # Locked (silent — was spamming every 2 min)
     
     # V3.1.23: Strong signals (score >= 2 or <= -2) switch immediately
     if score <= -2 and current != "BEARISH":
@@ -236,7 +235,7 @@ SENTIMENT_CACHE_TTL = 900  # 15 minutes
 try:
     from hot_reload import get_confidence_threshold, should_pause, should_emergency_exit, is_direction_enabled, get_tp_sl_multipliers
     HOT_RELOAD_ENABLED = True
-    print("  [V3.1.21] Hot-reload enabled")
+    print("  [HOT-RELOAD] Enabled")
 
 except ImportError:
     HOT_RELOAD_ENABLED = False
@@ -2395,11 +2394,11 @@ Respond with JSON ONLY (no markdown, no backticks):
                 if len(_long_voters) >= 2 and len(_short_voters) == 0:
                     decision = "LONG"
                     _voter_names = [v["persona"] for v in _long_voters]
-                    print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->LONG (consensus: {_voter_names}, conf={confidence:.0%})")
+                    print(f"  [JUDGE] ANTI-WAIT: WAIT->LONG (consensus: {_voter_names}, conf={confidence:.0%})")
                 elif len(_short_voters) >= 2 and len(_long_voters) == 0:
                     decision = "SHORT"
                     _voter_names = [v["persona"] for v in _short_voters]
-                    print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->SHORT (consensus: {_voter_names}, conf={confidence:.0%})")
+                    print(f"  [JUDGE] ANTI-WAIT: WAIT->SHORT (consensus: {_voter_names}, conf={confidence:.0%})")
                 else:
                     # Layer 2: Reasoning text analysis (fallback) - also F&G guarded
                     reasoning_lower = reasoning.lower() if reasoning else ""
@@ -2411,10 +2410,10 @@ Respond with JSON ONLY (no markdown, no backticks):
                         long_words = 0  # Block LONG reasoning override in extreme greed
                     if long_words >= 2 and short_words == 0:
                         decision = "LONG"
-                        print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->LONG (reasoning: {long_words} long words, conf={confidence:.0%})")
+                        print(f"  [JUDGE] ANTI-WAIT: WAIT->LONG (reasoning: {long_words} long words, conf={confidence:.0%})")
                     elif short_words >= 2 and long_words == 0:
                         decision = "SHORT"
-                        print(f"  [JUDGE] V3.1.75 ANTI-WAIT: WAIT->SHORT (reasoning: {short_words} short words, conf={confidence:.0%})")
+                        print(f"  [JUDGE] ANTI-WAIT: WAIT->SHORT (reasoning: {short_words} short words, conf={confidence:.0%})")
             raw_tp = data.get("tp_pct")
             tp_pct = float(raw_tp) if raw_tp is not None else tier_config["tp_pct"]
             raw_sl = data.get("sl_pct")
@@ -2430,7 +2429,7 @@ Respond with JSON ONLY (no markdown, no backticks):
             tp_pct = max(1.5, min(10.0, tp_pct))
             sl_pct = max(1.5, min(7.0, sl_pct))
             
-            print(f"  [JUDGE] V3.1.39 Gemini: {decision} ({confidence:.0%})")
+            print(f"  [JUDGE] Gemini: {decision} ({confidence:.0%})")
             print(f"  [JUDGE] Reasoning: {reasoning[:150]}")
             
             if decision == "WAIT":
@@ -2889,9 +2888,7 @@ def upload_ai_log_to_weex(stage: str, input_data: Dict, output_data: Dict,
         msg = result.get("msg", "")
         
         if code == "00000":
-            # SUCCESS
-            order_str = f" (order: {order_id})" if order_id else ""
-            print(f"  [AI LOG OK] {stage}{order_str}", flush=True)
+            pass  # Success - silent (was flooding logs with [AI LOG OK] every call)
         else:
             # FAILURE - log detailed error
             print(f"  [AI LOG FAIL] {stage}", flush=True)
@@ -3231,12 +3228,9 @@ class TradeTracker:
             if cooldown_hours > 0:
                 cooldown_until = datetime.now(timezone.utc) + timedelta(hours=cooldown_hours)
                 self.cooldowns[symbol] = cooldown_until.isoformat()
-                print(f"  [COOLDOWN] {symbol} {cd_type}: {cooldown_hours:.1f}h (base {base_cooldown}h x{cd_mult}) until {cooldown_until.strftime('%H:%M UTC')}")
             else:
-                # No cooldown for wins/profit locks - can re-enter immediately
                 if symbol in self.cooldowns:
                     del self.cooldowns[symbol]
-                print(f"  [COOLDOWN] {symbol} {cd_type}: no cooldown (trend confirmed, re-entry OK)")
             
             self.save_state()
     
@@ -3249,7 +3243,6 @@ class TradeTracker:
             cooldown_until = datetime.fromisoformat(self.cooldowns[symbol].replace("Z", "+00:00"))
             if datetime.now(timezone.utc) < cooldown_until:
                 remaining = (cooldown_until - datetime.now(timezone.utc)).total_seconds() / 3600
-                print(f"  [COOLDOWN] {symbol} still on cooldown ({remaining:.1f}h remaining)")
                 return True
             else:
                 # Cooldown expired, remove it
@@ -3499,7 +3492,7 @@ def save_local_log(log_data: Dict, timestamp: str):
     filename = f"logs/v3_1_1_{timestamp}.json"
     with open(filename, 'w') as f:
         json.dump(log_data, f, indent=2, default=str)
-    print(f"  [LOG] Saved: {filename}")
+    pass  # Saved local log silently
 
 
 # ============================================================
@@ -3508,7 +3501,7 @@ def save_local_log(log_data: Dict, timestamp: str):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("SMT V3.1.1 - Tier-Based Multi-Persona Trading")
+    print("SMT V3.1.77 - Multi-Persona Trading")
     print("=" * 60)
     
     print("\nTier Configuration:")
