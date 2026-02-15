@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.78 - EQUITY TIERED + FLAT 20x
+SMT Trading Daemon V3.1.80 - CHOP FILTER + FALLBACK SLOTS
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -531,7 +531,8 @@ def check_trading_signals():
         }
         
         trade_opportunities = []
-        
+        chop_blocked_count = 0  # V3.1.80: Track how many slots freed by chop filter
+
         # Confidence thresholds
         COOLDOWN_OVERRIDE_CONFIDENCE = 0.85
         HEDGE_CONFIDENCE_THRESHOLD = 0.0  # Gemini decides hedging  # V4.0: Lower threshold for more opportunities  # V3.1.37: Lowered from 90% to allow hedging
@@ -612,6 +613,19 @@ def check_trading_signals():
                     signal = "WAIT"
                     confidence = 0
 
+                # V3.1.80: Track chop-blocked trades for fallback logic
+                if decision.get("chop_blocked"):
+                    chop_blocked_count += 1
+                    _chop_data = decision.get("chop_data", {})
+                    logger.info(f"    -> CHOP BLOCKED: {_chop_data.get('reason', 'choppy market')} (fallback slot available)")
+                    upload_ai_log_to_weex(
+                        stage=f"Chop Filter: {pair} {decision.get('chop_original_decision', 'TRADE')} blocked",
+                        input_data={"pair": pair, "symbol": symbol, "chop_data": _chop_data},
+                        output_data={"action": "CHOP_BLOCKED", "severity": _chop_data.get("severity", "unknown"),
+                                     "adx": _chop_data.get("adx", 0), "bb_width": _chop_data.get("bb_width_pct", 0)},
+                        explanation=f"Chop filter blocked {pair} entry. Market is sideways/range-bound: {_chop_data.get('reason', 'N/A')}. Slot freed for next trending candidate at 75%+ confidence."
+                    )
+
 # Telegram alerts for ALL tradeable signals
 #                if signal in ("LONG", "SHORT") and confidence >= 0.75:
 #                    try:
@@ -663,7 +677,7 @@ def check_trading_signals():
                         else:
                             logger.info(f"    -> Has SHORT at {existing_conf:.0%}, LONG {confidence:.0%} not stronger. Hold.")
                             upload_ai_log_to_weex(
-                                stage=f"V3.1.53 HOLD: {symbol.replace('cmt_','').upper()} SHORT kept",
+                                stage=f"Hold: {symbol.replace('cmt_','').upper()} SHORT kept",
                                 input_data={"symbol": symbol, "existing_side": "SHORT", "existing_conf": existing_conf, "new_signal": "LONG", "new_conf": confidence},
                                 output_data={"action": "HOLD", "reason": "existing_confidence_higher"},
                                 explanation=f"AI decided to maintain SHORT position. Existing SHORT confidence ({existing_conf:.0%}) > new LONG signal ({confidence:.0%}). No directional change warranted."
@@ -687,7 +701,7 @@ def check_trading_signals():
                         else:
                             logger.info(f"    -> Has LONG at {existing_conf:.0%}, SHORT {confidence:.0%} not stronger. Hold.")
                             upload_ai_log_to_weex(
-                                stage=f"V3.1.53 HOLD: {symbol.replace('cmt_','').upper()} LONG kept",
+                                stage=f"Hold: {symbol.replace('cmt_','').upper()} LONG kept",
                                 input_data={"symbol": symbol, "existing_side": "LONG", "existing_conf": existing_conf, "new_signal": "SHORT", "new_conf": confidence},
                                 output_data={"action": "HOLD", "reason": "existing_confidence_higher"},
                                 explanation=f"AI decided to maintain LONG position. Existing LONG confidence ({existing_conf:.0%}) > new SHORT signal ({confidence:.0%}). No directional change warranted."
@@ -733,7 +747,7 @@ def check_trading_signals():
                 
                 # Upload AI log with comprehensive explanation
                 upload_ai_log_to_weex(
-                    stage=f"V3.1.9 Analysis - {pair} (Tier {tier})",
+                    stage=f"Analysis - {pair} (Tier {tier})",
                     input_data={
                         "pair": pair,
                         "tier": tier,
@@ -854,7 +868,25 @@ def check_trading_signals():
             
             for opportunity in trade_opportunities:
                 confidence = opportunity["decision"]["confidence"]
-                
+
+                # V3.1.80: CHOP FALLBACK GATE
+                # Pairs with 75-79% confidence are "fallback_only" — they can only trade
+                # if a chop filter blocked a higher-confidence pair, freeing a slot.
+                is_fallback = opportunity["decision"].get("fallback_only", False)
+                if is_fallback:
+                    if chop_blocked_count > 0:
+                        logger.info(f"  CHOP FALLBACK: {opportunity['pair']} ({confidence:.0%}) promoted - chop freed {chop_blocked_count} slot(s)")
+                        chop_blocked_count -= 1  # Consume one freed slot
+                        upload_ai_log_to_weex(
+                            stage=f"Chop Fallback: {opportunity['pair']} promoted",
+                            input_data={"pair": opportunity['pair'], "confidence": confidence, "chop_slots_available": chop_blocked_count + 1},
+                            output_data={"action": "FALLBACK_PROMOTED", "confidence": confidence},
+                            explanation=f"Chop filter blocked a higher-confidence but choppy pair. {opportunity['pair']} at {confidence:.0%} confidence is trending and promoted to fill the freed slot."
+                        )
+                    else:
+                        logger.info(f"  FALLBACK SKIP: {opportunity['pair']} ({confidence:.0%}) - no chop slots available, needs {0.80:.0%}+")
+                        continue
+
                 # Check if we still have slots
                 trade_type_check = opportunity.get("trade_type", "none")
 
@@ -888,7 +920,7 @@ def check_trading_signals():
                             "final_pnl_pct": 0,  # Will be filled by RL
                         })
                         upload_ai_log_to_weex(
-                            stage=f"V3.1.73 OPPOSITE SWAP: {opp_symbol.replace('cmt_','').upper()} {existing_side} -> {opp_signal}",
+                            stage=f"Opposite Swap: {opp_symbol.replace('cmt_','').upper()} {existing_side} -> {opp_signal}",
                             input_data={"symbol": opp_symbol, "old_side": existing_side, "new_signal": opp_signal, "old_pnl": existing_pnl},
                             output_data={"action": "SWAP", "confidence": confidence},
                             explanation=f"Closed profitable {existing_side} (PnL ${existing_pnl:+.1f}) to flip to {opp_signal} at {confidence:.0%} confidence."
@@ -1018,10 +1050,10 @@ def check_trading_signals():
 
                 if _regime_vetoed:
                     upload_ai_log_to_weex(
-                        stage=f"V3.1.75 REGIME VETO: {_opp_signal} {opportunity['pair']} blocked",
+                        stage=f"Regime Veto: {_opp_signal} {opportunity['pair']} blocked",
                         input_data={"regime": _regime_label, "signal": _opp_signal, "pair": opportunity['pair'], "fear_greed": opp_fear_greed},
                         output_data={"action": "VETOED", "reason": f"F&G={opp_fear_greed}, regime={_regime_label}"},
-                        explanation=f"V3.1.75 sanity filter: blocked {_opp_signal} on {opportunity['pair']}. F&G={opp_fear_greed}, regime={_regime_label}. Contrarian logic: no shorts in capitulation, no longs in euphoria."
+                        explanation=f"Sanity filter: blocked {_opp_signal} on {opportunity['pair']}. F&G={opp_fear_greed}, regime={_regime_label}. Contrarian logic: no shorts in capitulation, no longs in euphoria."
                     )
                     continue
 
@@ -1133,7 +1165,7 @@ def check_trading_signals():
                             
                             # Upload AI log for SL tightening
                             upload_ai_log_to_weex(
-                                stage=f"V3.1.53 Directional Shift: {pair} {opp_side}->SL tightened",
+                                stage=f"Directional Shift: {pair} {opp_side}->SL tightened",
                                 input_data={
                                     "symbol": sym,
                                     "existing_side": opp_side,
@@ -1292,7 +1324,7 @@ def monitor_positions():
                             hours_open = (datetime.now(timezone.utc) - opened_at).total_seconds() / 3600
                         
                         upload_ai_log_to_weex(
-                            stage=f"V3.1.36 {exit_type}: {side} {symbol_clean}",
+                            stage=f"{exit_type}: {side} {symbol_clean}",
                             input_data={
                                 "symbol": symbol,
                                 "side": side,
@@ -1459,7 +1491,7 @@ def monitor_positions():
                     state.trades_closed += 1
                     
                     upload_ai_log_to_weex(
-                        stage=f"V3.1.9 Smart Exit - {symbol_clean}",
+                        stage=f"Smart Exit - {symbol_clean}",
                         input_data={"symbol": symbol, "tier": tier, "hours_open": hours_open},
                         output_data={"reason": exit_reason, "pnl_pct": pnl_pct},
                         explanation=f"Tier {tier} smart exit: {exit_reason}. PnL: {pnl_pct:+.2f}%"
@@ -1665,7 +1697,7 @@ def cleanup_dust_positions():
                     oid = result.get("order_id")
                     
                     upload_ai_log_to_weex(
-                        stage=f"V3.1.53 Position Optimization: Close dust {side} {symbol_clean}",
+                        stage=f"Position Optimization: Close dust {side} {symbol_clean}",
                         input_data={"symbol": symbol, "side": side, "margin": margin, "size": size},
                         output_data={"action": "CLOSE_DUST", "order_id": oid},
                         explanation=f"AI closing negligible {side} {symbol_clean} position (margin: ${margin:.2f}). Position too small to generate meaningful returns. Freeing slot for higher-conviction trades.",
@@ -1843,7 +1875,7 @@ def gemini_portfolio_review():
 
         # V3.1.59: AI log for PM review start
         upload_ai_log_to_weex(
-            stage=f"V3.1.59 Portfolio Review Start",
+            stage=f"Portfolio Review Start",
             input_data={
                 "positions": len(positions),
                 "equity": round(equity, 2),
@@ -2038,7 +2070,7 @@ If nothing should be closed, return:
                         
                         # Upload AI log
                         upload_ai_log_to_weex(
-                            stage=f"V3.1.40 Portfolio Manager: Close {close_side} {sym_clean}",
+                            stage=f"Portfolio Manager: Close {close_side} {sym_clean}",
                             input_data={
                                 "symbol": sym,
                                 "side": close_side,
@@ -2079,7 +2111,7 @@ If nothing should be closed, return:
         
         # V3.1.59: AI log for PM decision
         upload_ai_log_to_weex(
-            stage=f"V3.1.59 Portfolio Review Decision",
+            stage=f"Portfolio Review Decision",
             input_data={
                 "positions_reviewed": len(positions),
                 "equity": round(equity, 2),
@@ -2165,7 +2197,7 @@ def quick_cleanup_check():
                         hours_open = (datetime.now(timezone.utc) - opened_at).total_seconds() / 3600
                     
                     upload_ai_log_to_weex(
-                        stage=f"V3.1.36 {exit_type}: {side} {symbol_clean}",
+                        stage=f"{exit_type}: {side} {symbol_clean}",
                         input_data={
                             "symbol": symbol,
                             "side": side,
@@ -2400,7 +2432,7 @@ def resolve_opposite_sides():
                 oid = result.get("order_id")
                 
                 upload_ai_log_to_weex(
-                    stage=f"V3.1.55 Opposite-Side Resolution: Close {close_side} {sym_clean}",
+                    stage=f"Opposite-Side Resolution: Close {close_side} {sym_clean}",
                     input_data={
                         "symbol": sym,
                         "long_pnl": long_pnl,
@@ -2668,7 +2700,7 @@ def regime_aware_exit_check():
                 
                 # Upload AI log
                 upload_ai_log_to_weex(
-                    stage=f"V3.1.9 Regime Exit: {side} {symbol_clean}",
+                    stage=f"Regime Exit: {side} {symbol_clean}",
                     input_data={
                         "symbol": symbol,
                         "side": side,
@@ -2705,16 +2737,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.78 - EQUITY TIERED + FLAT 20x")
+    logger.info("SMT Daemon V3.1.80 - CHOP FILTER + FALLBACK SLOTS")
     logger.info("=" * 60)
-    logger.info("V3.1.78 CHANGES:")
-    logger.info("  - EQUITY-TIERED SLOTS: 3/4/5/6 at $5K/$8K/$12K/$15K+")
-    logger.info("  - FLAT 20x LEVERAGE: All tiers (was 15/12/10)")
-    logger.info("  - BTC T1->T2: ATR SL 2.28%, mid-cap volatility")
-    logger.info("  - SOL T2->T3: ATR SL 3.36%, more volatile than ADA")
-    logger.info("  - TP FLOOR REMOVED: Was broken (tier cap overrode it)")
-    logger.info("  - CONFIDENCE CASCADE: Sort by conf, open only top N for tier")
-    logger.info("  - MARGIN BOUNDED: 12-18% conf-scaled, capped so N slots <= 85% equity")
+    logger.info("V3.1.80 CHANGES:")
+    logger.info("  - CHOP FILTER: ADX + BB width + directional consistency")
+    logger.info("    High chop (ADX<15, BB<1.5%): Hard block entry")
+    logger.info("    Medium chop (ADX<20, BB<2.5%): -15% confidence penalty")
+    logger.info("  - FALLBACK SLOTS: Chop block frees slot for next trending pair at 75%+")
+    logger.info("  - Confidence floor: 80% primary, 75% fallback-only")
     logger.info("  - COMPETITION: Ends Feb 23")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():

@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.1.78 - EQUITY TIERED + FLAT 20x
+SMT Nightly Trade V3.1.80 - CHOP FILTER + FALLBACK SLOTS
 =============================================================
 No partial closes. Higher conviction trades only.
 
@@ -656,6 +656,211 @@ def get_pair_atr(symbol: str) -> dict:
     return result
 
 
+# ============================================================
+# V3.1.80: CHOP / SIDEWAYS MARKET DETECTION
+# ============================================================
+# Prevents entries into range-bound, choppy markets where price
+# ping-pongs sideways instead of trending. Uses ADX, Bollinger
+# Band width, and directional consistency to detect chop.
+# LTC 2026-02-15 was the catalyst: 90% conf LONG, but market
+# went completely sideways. This filter would have blocked it.
+
+_chop_cache = {}
+_chop_cache_time = 0
+
+def detect_sideways_market(symbol: str) -> dict:
+    """V3.1.80: Multi-factor chop/sideways detection.
+
+    Uses 1H candles (same as TechnicalPersona) to calculate:
+    1. ADX (Average Directional Index) - trend strength
+    2. Bollinger Band width - volatility squeeze detection
+    3. Directional consistency - are candles flip-flopping?
+
+    Returns:
+        {
+            "is_choppy": bool,
+            "severity": "high" | "medium" | "low",
+            "adx": float,
+            "bb_width_pct": float,
+            "directional_consistency": float,  # 0-1, higher = more trending
+            "reason": str
+        }
+    """
+    global _chop_cache, _chop_cache_time
+
+    # Cache for 10 minutes (slightly less than signal check interval)
+    now = time.time()
+    if now - _chop_cache_time < 600 and symbol in _chop_cache:
+        return _chop_cache[symbol]
+
+    if now - _chop_cache_time >= 600:
+        _chop_cache = {}
+        _chop_cache_time = now
+
+    result = {
+        "is_choppy": False,
+        "severity": "low",
+        "adx": 25.0,  # Default = neutral (not choppy)
+        "bb_width_pct": 3.0,
+        "directional_consistency": 0.7,
+        "reason": "OK",
+        "error": None
+    }
+
+    try:
+        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1h&limit=30"
+        r = requests.get(url, timeout=10)
+        candles = r.json()
+
+        if not isinstance(candles, list) or len(candles) < 20:
+            result["error"] = "Insufficient candle data"
+            _chop_cache[symbol] = result
+            return result
+
+        # Parse candle data (WEEX: [time, open, high, low, close, volume, value])
+        highs = [float(c[2]) for c in candles]
+        lows = [float(c[3]) for c in candles]
+        closes = [float(c[4]) for c in candles]
+        opens = [float(c[1]) for c in candles]
+
+        # ---- 1. ADX CALCULATION (14-period) ----
+        # ADX measures trend STRENGTH regardless of direction
+        # ADX > 25 = trending, ADX < 20 = choppy, ADX < 15 = very choppy
+        period = 14
+        if len(closes) >= period + 1:
+            plus_dm_list = []
+            minus_dm_list = []
+            tr_list = []
+
+            for i in range(len(candles) - 1):
+                high_diff = highs[i] - highs[i + 1]
+                low_diff = lows[i + 1] - lows[i]
+
+                plus_dm = high_diff if (high_diff > low_diff and high_diff > 0) else 0
+                minus_dm = low_diff if (low_diff > high_diff and low_diff > 0) else 0
+
+                tr = max(
+                    highs[i] - lows[i],
+                    abs(highs[i] - closes[i + 1]),
+                    abs(lows[i] - closes[i + 1])
+                )
+
+                plus_dm_list.append(plus_dm)
+                minus_dm_list.append(minus_dm)
+                tr_list.append(tr)
+
+            if len(tr_list) >= period:
+                # Smoothed averages (Wilder's smoothing)
+                atr_14 = sum(tr_list[:period]) / period
+                plus_dm_14 = sum(plus_dm_list[:period]) / period
+                minus_dm_14 = sum(minus_dm_list[:period]) / period
+
+                # +DI and -DI
+                plus_di = (plus_dm_14 / atr_14 * 100) if atr_14 > 0 else 0
+                minus_di = (minus_dm_14 / atr_14 * 100) if atr_14 > 0 else 0
+
+                # DX and ADX
+                di_sum = plus_di + minus_di
+                dx = (abs(plus_di - minus_di) / di_sum * 100) if di_sum > 0 else 0
+
+                result["adx"] = round(dx, 1)
+
+        # ---- 2. BOLLINGER BAND WIDTH (20-period, 2 std dev) ----
+        # Tight bands = low volatility = choppy/range-bound
+        # BB Width % = (Upper - Lower) / Middle * 100
+        bb_period = 20
+        if len(closes) >= bb_period:
+            bb_closes = closes[:bb_period]
+            sma = sum(bb_closes) / bb_period
+            std_dev = (sum((c - sma) ** 2 for c in bb_closes) / bb_period) ** 0.5
+
+            upper_band = sma + (2 * std_dev)
+            lower_band = sma - (2 * std_dev)
+
+            bb_width_pct = ((upper_band - lower_band) / sma * 100) if sma > 0 else 3.0
+            result["bb_width_pct"] = round(bb_width_pct, 2)
+
+        # ---- 3. DIRECTIONAL CONSISTENCY (last 12 candles) ----
+        # Counts how many consecutive candles move in the same direction
+        # Trending market: most candles agree. Choppy: alternating up/down
+        lookback = min(12, len(closes) - 1)
+        if lookback >= 6:
+            directions = []
+            for i in range(lookback):
+                # Compare close to open (candle direction)
+                if closes[i] > opens[i]:
+                    directions.append(1)  # Bullish candle
+                elif closes[i] < opens[i]:
+                    directions.append(-1)  # Bearish candle
+                else:
+                    directions.append(0)  # Doji
+
+            # Count direction changes (flip-flops)
+            flips = 0
+            for i in range(len(directions) - 1):
+                if directions[i] != 0 and directions[i + 1] != 0 and directions[i] != directions[i + 1]:
+                    flips += 1
+
+            max_flips = lookback - 1
+            # Consistency: 1.0 = all same direction, 0.0 = alternating every candle
+            consistency = 1.0 - (flips / max_flips) if max_flips > 0 else 0.5
+            result["directional_consistency"] = round(consistency, 2)
+
+        # ---- COMPOSITE CHOP SCORE ----
+        adx = result["adx"]
+        bb_width = result["bb_width_pct"]
+        consistency = result["directional_consistency"]
+
+        chop_signals = 0
+        reasons = []
+
+        # ADX scoring
+        if adx < 15:
+            chop_signals += 2
+            reasons.append(f"ADX={adx:.0f} (very weak trend)")
+        elif adx < 20:
+            chop_signals += 1
+            reasons.append(f"ADX={adx:.0f} (weak trend)")
+
+        # BB width scoring (pair-relative - use ATR context)
+        # Tight BB = squeezed = range-bound
+        if bb_width < 1.5:
+            chop_signals += 2
+            reasons.append(f"BB={bb_width:.1f}% (very tight)")
+        elif bb_width < 2.5:
+            chop_signals += 1
+            reasons.append(f"BB={bb_width:.1f}% (tight)")
+
+        # Directional consistency scoring
+        if consistency < 0.3:
+            chop_signals += 2
+            reasons.append(f"Dir={consistency:.0%} (flip-flopping)")
+        elif consistency < 0.45:
+            chop_signals += 1
+            reasons.append(f"Dir={consistency:.0%} (mixed)")
+
+        # Final classification
+        if chop_signals >= 4:
+            result["is_choppy"] = True
+            result["severity"] = "high"
+            result["reason"] = f"HIGH CHOP: {'; '.join(reasons)}"
+        elif chop_signals >= 2:
+            result["is_choppy"] = True
+            result["severity"] = "medium"
+            result["reason"] = f"MEDIUM CHOP: {'; '.join(reasons)}"
+        else:
+            result["is_choppy"] = False
+            result["severity"] = "low"
+            result["reason"] = f"OK: ADX={adx:.0f}, BB={bb_width:.1f}%, Dir={consistency:.0%}"
+
+        print(f"  [CHOP] {symbol.replace('cmt_','').upper()}: {result['reason']}")
+
+    except Exception as e:
+        result["error"] = str(e)
+        print(f"  [CHOP] {symbol} error: {e}")
+
+    _chop_cache[symbol] = result
+    return result
 
 
 
@@ -965,6 +1170,7 @@ def get_max_positions_for_equity(equity: float) -> int:
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
 MIN_CONFIDENCE_TO_TRADE = 0.80  # V3.1.77b: 85%->80%. With 3 slots, fill with best signals only.
+CHOP_FALLBACK_CONFIDENCE = 0.75  # V3.1.80: Minimum for fallback when a chop filter frees a slot
 
 # ============================================================
 # V3.1.78: TIER-BASED PARAMETERS (UPDATED!)
@@ -2463,9 +2669,11 @@ Respond with JSON ONLY (no markdown, no backticks):
                 return self._wait_decision(f"Gemini says SHORT but already have SHORT on {pair}", persona_votes,
                     [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
             
-            # V3.1.63: Minimum confidence floor (SNIPER)
-            if confidence < MIN_CONFIDENCE_TO_TRADE:
-                return self._wait_decision(f"Gemini confidence too low: {confidence:.0%} < {MIN_CONFIDENCE_TO_TRADE:.0%}", persona_votes,
+            # V3.1.63/V3.1.80: Minimum confidence floor (SNIPER) with fallback support
+            # 75-79%: Pass through as fallback candidate (only used if chop filter frees a slot)
+            # <75%: Hard block
+            if confidence < CHOP_FALLBACK_CONFIDENCE:
+                return self._wait_decision(f"Gemini confidence too low: {confidence:.0%} < {CHOP_FALLBACK_CONFIDENCE:.0%}", persona_votes,
                     [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
             
             # V3.1.59: Confidence-tiered position sizing with FLOW+WHALE alignment
@@ -2526,7 +2734,7 @@ Respond with JSON ONLY (no markdown, no backticks):
             # V3.1.39b: Upload AI decision log to WEEX for compliance
             try:
                 upload_ai_log_to_weex(
-                    stage=f"V3.1.39 Gemini Judge Decision: {pair} (Tier {tier})",
+                    stage=f"Gemini Judge Decision: {pair} (Tier {tier})",
                     input_data={
                         "pair": pair,
                         "tier": tier,
@@ -2555,13 +2763,16 @@ Respond with JSON ONLY (no markdown, no backticks):
                         "max_hold_hours": max_hold,
                         "position_usdt": round(position_usdt, 2),
                         "ai_model": "gemini-2.5-flash",
-                        "judge_version": "V3.1.39",
+                        "judge_version": "gemini-judge",
                     },
                     explanation=f"Gemini AI Judge Decision for {pair}: {decision} at {confidence:.0%} confidence. {reasoning} Market: {regime.get('regime','NEUTRAL')} regime, F&G={regime.get('fear_greed',50)}, BTC {regime.get('change_24h',0):+.1f}% 24h. TP={tp_pct}% SL={sl_pct}%. Persona votes: {', '.join(vote_summary)}"
                 )
             except Exception as log_err:
                 print(f"  [JUDGE] AI log upload error: {log_err}")
             
+            # V3.1.80: Mark 75-79% trades as fallback-only (need chop slot to execute)
+            is_fallback = CHOP_FALLBACK_CONFIDENCE <= confidence < MIN_CONFIDENCE_TO_TRADE
+
             return {
                 "decision": decision,
                 "confidence": confidence,
@@ -2571,7 +2782,7 @@ Respond with JSON ONLY (no markdown, no backticks):
                 "hold_time_hours": max_hold,
                 "tier": tier,
                 "tier_name": tier_config["name"],
-                "reasoning": f"Gemini Judge V3.1.42: {reasoning}. Votes: {', '.join(vote_summary)}",
+                "reasoning": f"Gemini Judge: {reasoning}. Votes: {', '.join(vote_summary)}",
                 "persona_votes": persona_votes,
                 "vote_breakdown": {
                     "long_score": 0,
@@ -2580,6 +2791,7 @@ Respond with JSON ONLY (no markdown, no backticks):
                 },
                 "fear_greed": regime.get("fear_greed", 50),
                 "regime": regime.get("regime", "NEUTRAL"),
+                "fallback_only": is_fallback,
             }
             
         except json.JSONDecodeError as e:
@@ -2655,7 +2867,7 @@ Respond with JSON ONLY (no markdown, no backticks):
         # V3.1.39b: Log WAIT decisions to WEEX too (shows AI is analyzing even when not trading)
         try:
             upload_ai_log_to_weex(
-                stage="V3.1.39 Gemini Judge: WAIT",
+                stage="Gemini Judge: WAIT",
                 input_data={
                     "persona_votes": [
                         {"persona": v["persona"], "signal": v["signal"], "confidence": v["confidence"]}
@@ -2665,7 +2877,7 @@ Respond with JSON ONLY (no markdown, no backticks):
                 output_data={
                     "decision": "WAIT",
                     "confidence": 0.0,
-                    "judge_version": "V3.1.39",
+                    "judge_version": "gemini-judge",
                 },
                 explanation=f"AI Judge decided WAIT: {reason}. {votes_str}"
             )
@@ -2762,7 +2974,41 @@ class MultiPersonaAnalyzer:
             # Fresh flip: 4h was up but 1h dumping = good SHORT entry
             elif decision == "SHORT" and btc_4h > 0.5 and btc_1h < -0.3:
                 print(f"  [FRESHNESS] FRESH FLIP SHORT: 4h={btc_4h:+.1f}%, 1h={btc_1h:+.1f}%. Good entry timing.")
-        
+
+        # V3.1.80: CHOP FILTER - don't enter choppy/sideways markets
+        # Daily trading needs trending markets. Choppy = ping-pong = SL hits.
+        # Runs AFTER Judge confidence check so we only compute for tradeable signals.
+        if final['decision'] in ("LONG", "SHORT"):
+            symbol = pair_info["symbol"]
+            chop = detect_sideways_market(symbol)
+            final['chop_data'] = chop  # Attach for daemon fallback logic
+
+            if chop.get("is_choppy", False):
+                severity = chop.get("severity", "medium")
+                orig_decision = final['decision']  # Save before overwriting
+                if severity == "high":
+                    # HIGH CHOP: Hard block - this market is going nowhere
+                    print(f"  [CHOP_FILTER] BLOCKED {orig_decision}: {chop['reason']}")
+                    final['chop_original_decision'] = orig_decision
+                    final['decision'] = 'WAIT'
+                    final['confidence'] = 0
+                    final['chop_blocked'] = True
+                elif severity == "medium":
+                    # MEDIUM CHOP: Confidence penalty (-15%), may still pass if very strong signal
+                    old_conf = final.get('confidence', 0)
+                    new_conf = old_conf - 0.15
+                    print(f"  [CHOP_FILTER] PENALTY {final['decision']}: {chop['reason']} (conf {old_conf:.0%} -> {new_conf:.0%})")
+                    final['confidence'] = new_conf
+                    final['chop_penalized'] = True
+                    # If penalty drops below MIN_CONFIDENCE_TO_TRADE, it becomes a WAIT
+                    if new_conf < MIN_CONFIDENCE_TO_TRADE:
+                        print(f"  [CHOP_FILTER] BLOCKED after penalty: {new_conf:.0%} < {MIN_CONFIDENCE_TO_TRADE:.0%}")
+                        final['decision'] = 'WAIT'
+                        final['confidence'] = 0
+                        final['chop_blocked'] = True
+        else:
+            final['chop_data'] = None
+
         return final
 
 
@@ -2991,7 +3237,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
     # V3.1.59: AI log for leverage/sizing decision
     upload_ai_log_to_weex(
-        stage=f"V3.1.59 Leverage Decision: {signal} {symbol.replace('cmt_', '').upper()}",
+        stage=f"Leverage Decision: {signal} {symbol.replace('cmt_', '').upper()}",
         input_data={
             "tier": tier,
             "confidence": trade_confidence,
@@ -3004,7 +3250,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
             "notional_usdt": round(notional_usdt, 2),
             "conf_bracket": conf_bracket if 'conf_bracket' in dir() else "UNKNOWN",
         },
-        explanation=f"V3.1.59 Confidence-tiered leverage: {safe_leverage}x for Tier {tier} at {trade_confidence:.0%} confidence. Margin: ${position_usdt:.0f}, Notional: ${notional_usdt:.0f}."
+        explanation=f"Confidence-tiered leverage: {safe_leverage}x for Tier {tier} at {trade_confidence:.0%} confidence. Margin: ${position_usdt:.0f}, Notional: ${notional_usdt:.0f}."
     )
 
     if raw_size <= 0:
@@ -3072,7 +3318,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     
     # Upload AI log
     upload_ai_log_to_weex(
-        stage=f"V3.1.4 Trade: {signal} {symbol.replace('cmt_', '').upper()}",
+        stage=f"Trade: {signal} {symbol.replace('cmt_', '').upper()}",
         input_data={
             "pair": symbol,
             "balance": balance,
@@ -3423,7 +3669,7 @@ def execute_runner_partial_close(symbol: str, side: str, current_size: float,
     
     # Upload AI log for runner
     upload_ai_log_to_weex(
-        stage=f"V3.1.2 Runner: Partial Close {symbol.replace('cmt_', '').upper()}",
+        stage=f"Runner: Partial Close {symbol.replace('cmt_', '').upper()}",
         input_data={
             "symbol": symbol,
             "side": side,
