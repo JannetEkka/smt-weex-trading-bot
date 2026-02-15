@@ -1406,43 +1406,10 @@ def monitor_positions():
                 })
                 if len(_pnl_history[symbol]) > _PNL_HISTORY_MAX:
                     _pnl_history[symbol] = _pnl_history[symbol][-_PNL_HISTORY_MAX:]
-                # V3.1.75b: PROFIT LOCK OVERHAUL - trust exchange TP/SL orders
-                #
-                # THE MATH: $4,600 balance, 20x, 30% sizing = $27,600 notional
-                #   TP hit at 2.5% = $690 profit (one trade covers $500 target)
-                #   Profit lock at 0.75% = $207 profit (need 3 trades for same $500)
-                #   Profit lock COSTS 3x more trades to hit same target. Remove it.
-                #
-                # WEEX has TP/SL orders placed on the exchange. Let them trigger.
-                # Only intervene for:
-                #   1. THESIS BROKEN: peaked green, now negative = trade failed, close before SL
-                #   2. TP OVERRUN: peaked past TP target but exchange order didn't fill = close on fade
-                #
-                fade_pct = peak_pnl_pct - pnl_pct if peak_pnl_pct > 0 else 0
-                _tier_tp_target = get_tier_config(tier).get("tp_pct", 2.5)
-
-                # Rule 1: THESIS BROKEN - peaked >= 1.0% but now negative
-                # Trade was working, now it's not. Close before SL to save capital.
-                if not should_exit and peak_pnl_pct >= 1.0 and pnl_pct <= 0:
-                    should_exit = True
-                    exit_reason = f"V3.1.75_thesis_broken T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (went negative)"
-                    print(f"  [THESIS BROKEN] {symbol}: {exit_reason}")
-
-                # Rule 2: TP OVERRUN - peaked PAST the TP target, fading back
-                # Exchange TP order should have triggered but didn't (slippage/gap).
-                # Close now to capture what's left.
-                elif not should_exit and peak_pnl_pct >= _tier_tp_target and pnl_pct < _tier_tp_target * 0.60 and pnl_pct > 0:
-                    should_exit = True
-                    exit_reason = f"V3.1.75_tp_overrun T{tier}: peaked {peak_pnl_pct:.2f}% (past TP {_tier_tp_target}%), now {pnl_pct:.2f}% (TP missed, locking)"
-                    print(f"  [TP OVERRUN] {symbol}: {exit_reason}")
-
-                # Rule 3: CATASTROPHIC REVERSAL - peaked >= 2.0% (strong winner) now nearly flat
-                # This trade was a clear winner that completely reversed. Something changed fundamentally.
-                elif not should_exit and peak_pnl_pct >= 2.0 and pnl_pct < 0.3:
-                    should_exit = True
-                    exit_reason = f"V3.1.75_catastrophic_reversal T{tier}: peaked {peak_pnl_pct:.2f}%, now {pnl_pct:.2f}% (gave it all back)"
-                    print(f"  [CATASTROPHIC] {symbol}: {exit_reason}")
-                
+                # V3.1.78: PROFIT GUARD REMOVED - trust exchange TP/SL orders fully
+                # Thesis-broken, TP-overrun, catastrophic-reversal rules were closing
+                # positions on normal noise (ADA closed at -0.17%, BNB at -0.33%).
+                # SL on exchange is the safety net. Let trades breathe.
 
                 # 1. Max hold time exceeded (tier-specific)
                 if hours_open >= max_hold:
@@ -1474,8 +1441,7 @@ def monitor_positions():
                     # V3.1.25: Log RL outcome
                     if RL_ENABLED and rl_collector:
                         try:
-                            exit_type = "PROFIT_GUARD" if "profit_guard" in exit_reason else \
-                                       "TIMEOUT" if "max_hold" in exit_reason else \
+                            exit_type = "TIMEOUT" if "max_hold" in exit_reason else \
                                        "EARLY_EXIT" if "early_exit" in exit_reason else \
                                        "FORCE_STOP"
                             rl_collector.log_outcome(symbol, pnl_pct, hours_open, exit_type)
