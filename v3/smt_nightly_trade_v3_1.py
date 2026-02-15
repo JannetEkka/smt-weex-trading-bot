@@ -576,7 +576,84 @@ def get_btc_atr() -> dict:
                     
     except Exception as e:
         result["error"] = str(e)
-    
+
+    return result
+
+
+# V3.1.77: Per-pair ATR cache (avoid redundant API calls within same cycle)
+_pair_atr_cache = {}
+_pair_atr_cache_time = 0
+
+def get_pair_atr(symbol: str) -> dict:
+    """V3.1.77: Calculate ATR for ANY pair, not just BTC.
+    Each pair has its own volatility profile. DOGE swings 5-8% daily while BTC swings 1-2%.
+    Using BTC ATR for DOGE sets SL too tight, causing noise stop-outs.
+    """
+    global _pair_atr_cache, _pair_atr_cache_time
+
+    # Cache for 15 minutes (matches signal check interval)
+    now = time.time()
+    if now - _pair_atr_cache_time < 900 and symbol in _pair_atr_cache:
+        return _pair_atr_cache[symbol]
+
+    if now - _pair_atr_cache_time >= 900:
+        _pair_atr_cache = {}
+        _pair_atr_cache_time = now
+
+    result = {
+        "atr": 0, "atr_pct": 0, "atr_ratio": 1.0,
+        "volatility": "NORMAL", "size_multiplier": 1.0, "error": None
+    }
+
+    try:
+        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=4h&limit=20"
+        r = requests.get(url, timeout=10)
+        candles = r.json()
+
+        if isinstance(candles, list) and len(candles) >= 15:
+            true_ranges = []
+            for i in range(len(candles) - 1):
+                high = float(candles[i][2])
+                low = float(candles[i][3])
+                prev_close = float(candles[i + 1][4])
+                tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+                true_ranges.append(tr)
+
+            if len(true_ranges) >= 14:
+                current_atr = sum(true_ranges[:14]) / 14
+                avg_atr = sum(true_ranges) / len(true_ranges)
+                current_price = float(candles[0][4])
+
+                result["atr"] = current_atr
+                result["atr_pct"] = (current_atr / current_price) * 100
+                result["atr_ratio"] = current_atr / avg_atr if avg_atr > 0 else 1.0
+
+                if result["atr_ratio"] > 2.0:
+                    result["volatility"] = "EXTREME"
+                    result["size_multiplier"] = 0.3
+                elif result["atr_ratio"] > 1.5:
+                    result["volatility"] = "HIGH"
+                    result["size_multiplier"] = 0.5
+                elif result["atr_ratio"] > 1.2:
+                    result["volatility"] = "ELEVATED"
+                    result["size_multiplier"] = 0.7
+                elif result["atr_ratio"] < 0.7:
+                    result["volatility"] = "LOW"
+                    result["size_multiplier"] = 1.2
+                else:
+                    result["volatility"] = "NORMAL"
+                    result["size_multiplier"] = 1.0
+
+        _pair_atr_cache[symbol] = result
+    except Exception as e:
+        result["error"] = str(e)
+        # Fallback to BTC ATR if pair-specific fails
+        btc_atr = get_btc_atr()
+        if btc_atr.get("atr_pct", 0) > 0:
+            result["atr_pct"] = btc_atr["atr_pct"]
+            result["atr_ratio"] = btc_atr["atr_ratio"]
+            print(f"  [ATR] {symbol} failed, using BTC ATR fallback: {btc_atr['atr_pct']:.2f}%")
+
     return result
 
 
@@ -865,7 +942,7 @@ def get_enhanced_market_regime() -> dict:
 
 # Competition
 COMPETITION_START = datetime(2026, 2, 8, 15, 0, 0, tzinfo=timezone.utc)
-COMPETITION_END = datetime(2026, 2, 24, 20, 0, 0, tzinfo=timezone.utc)
+COMPETITION_END = datetime(2026, 2, 23, 23, 59, 0, tzinfo=timezone.utc)  # V3.1.77: Fixed - competition ends Feb 23
 STARTING_BALANCE = 10000.0  # V3.1.42: Finals - started with 10K
 FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 
@@ -922,10 +999,10 @@ TRADING_PAIRS = {
     "BTC": {"symbol": "cmt_btcusdt", "tier": 1, "has_whale_data": True},
     "ETH": {"symbol": "cmt_ethusdt", "tier": 1, "has_whale_data": True},
     "BNB": {"symbol": "cmt_bnbusdt", "tier": 1, "has_whale_data": True},
-    "LTC": {"symbol": "cmt_ltcusdt", "tier": 1, "has_whale_data": True},
+    "LTC": {"symbol": "cmt_ltcusdt", "tier": 2, "has_whale_data": True},  # V3.1.77: T1→T2 ($8B mcap, too small for Blue Chip)
     "SOL": {"symbol": "cmt_solusdt", "tier": 2, "has_whale_data": True},
     "DOGE": {"symbol": "cmt_dogeusdt", "tier": 3, "has_whale_data": True},
-    "XRP": {"symbol": "cmt_xrpusdt", "tier": 3, "has_whale_data": True},
+    "XRP": {"symbol": "cmt_xrpusdt", "tier": 2, "has_whale_data": True},  # V3.1.77: T3→T2 ($70B mcap, same class as SOL)
     "ADA": {"symbol": "cmt_adausdt", "tier": 3, "has_whale_data": True},
 }
 
@@ -2178,6 +2255,13 @@ class JudgePersona:
             trade_history_summary = get_trade_history_summary(_hist_tracker)
         except Exception:
             trade_history_summary = "Trade history unavailable."
+
+        # V3.1.77: RL-based pair performance for Judge
+        try:
+            from smt_daemon_v3_1 import get_rl_performance_summary
+            rl_performance = get_rl_performance_summary()
+        except Exception:
+            rl_performance = "Historical pair performance unavailable."
         
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
 Your job: analyze all signals and decide the SINGLE BEST action for {pair} right now.
@@ -2204,9 +2288,15 @@ Days remaining: {days_left}
 PnL: ${pnl:.0f} ({pnl_pct:+.1f}%)
 Available balance: ${balance:.0f}
 
-=== DECISION GUIDELINES (V3.1.75 DISCIPLINED TRADING) ===
+=== DECISION GUIDELINES (V3.1.77 DATA-DRIVEN) ===
 
 YOUR ONLY JOB: Decide LONG, SHORT, or WAIT based on signal quality. Position limits, TP/SL, and slot management are handled by code -- ignore them entirely.
+
+CRITICAL: Your confidence score MUST reflect actual signal quality, NOT rules or bias.
+- F&G rules below force your DIRECTION (LONG or SHORT), but confidence must honestly reflect how strong the setup is.
+- If all signals weakly agree: 60-70% confidence. If signals are mixed but rules force direction: 50-65%.
+- Only give 85%+ when WHALE + FLOW strongly agree AND align with direction.
+- Our RL data shows 85%+ confidence trades have a 7.2% win rate. The model has been overconfident. Be honest about uncertainty.
 
 SIGNAL RELIABILITY:
   CO-PRIMARY (equal weight, these drive your decision):
@@ -2223,6 +2313,11 @@ HOW TO DECIDE:
 - If WHALE and FLOW directly contradict (opposite directions, both >60%): WAIT.
 - If neither co-primary signal exceeds 60%: WAIT. No clear edge.
 
+=== HISTORICAL PAIR PERFORMANCE (from RL training data) ===
+{rl_performance}
+USE THIS DATA: If a pair has <10% win rate, be VERY skeptical. Lower your confidence.
+If a pair has >15% win rate, it has proven itself - trust stronger signals on it.
+
 FEAR & GREED (CONTRARIAN - THIS IS A HARD RULE):
 - F&G < 15 (CAPITULATION): ONLY suggest LONG. Extreme fear = panic selling = bounces are violent. Shorting capitulation is suicide. Code will block any SHORT you suggest.
 - F&G < 30 (FEAR): Strongly favor LONG. Fear = accumulation zone. Only SHORT if WHALE+FLOW both strongly confirm selling.
@@ -2233,7 +2328,8 @@ FEAR & GREED (CONTRARIAN - THIS IS A HARD RULE):
 TRADE HISTORY CONTEXT:
 {trade_history_summary}
 
-IMPORTANT: Say LONG or SHORT if you see a good setup. Do not say WAIT to be "safe." We are in a competition and need to take quality trades. Only WAIT when WHALE and FLOW directly contradict each other.
+IMPORTANT: Say LONG or SHORT if WHALE + FLOW support it. WAIT is valid when signals are weak or contradictory.
+Quality over quantity - one winning trade beats three losing ones. Check the pair's historical win rate above before committing.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences explaining your decision"}}"""
@@ -2828,6 +2924,16 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     position_usdt = decision.get("recommended_position_usdt", balance * 0.07)
     position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
     position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
+
+    # V3.1.77: RL-based sizing adjustment - reduce size for historically losing pairs
+    try:
+        from smt_daemon_v3_1 import get_pair_sizing_multiplier
+        _sizing_mult = get_pair_sizing_multiplier(symbol)
+        if _sizing_mult < 1.0:
+            position_usdt *= _sizing_mult
+            print(f"  [SIZING] RL adjustment: {symbol.replace('cmt_','').upper()} size x{_sizing_mult} (historical performance)")
+    except Exception:
+        pass
     
     # V3.1.59: Confidence-tiered leverage
     trade_confidence = decision.get("confidence", 0.75)
@@ -2879,10 +2985,10 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     # F&G > 60 (greed): TP * 0.65 (take profits faster in greed)
     # F&G > 80 (extreme greed): TP * 0.50 (aggressive profit taking)
     try:
-        atr_data = get_btc_atr()
+        atr_data = get_pair_atr(symbol)  # V3.1.77: Per-pair ATR (was BTC-only)
         atr_pct = atr_data.get("atr_pct", 0)
         if atr_pct > 0:
-            dynamic_sl = round(atr_pct * 1.2, 2)
+            dynamic_sl = round(atr_pct * 1.5, 2)  # V3.1.77: 1.5x ATR (was 1.2x, too tight = noise stop-outs)
             tier_floor_sl = tier_config["sl_pct"]
             sl_pct_raw = max(dynamic_sl, tier_floor_sl)
             # V3.1.64a: Widen SL cap in extreme fear (respect Judge's vol-adjusted SL)

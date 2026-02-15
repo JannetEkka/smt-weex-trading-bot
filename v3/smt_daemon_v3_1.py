@@ -171,7 +171,7 @@ CLEANUP_CHECK_INTERVAL = 30
 
 # Competition
 COMPETITION_START = datetime(2026, 2, 8, 15, 0, 0, tzinfo=timezone.utc)
-COMPETITION_END = datetime(2026, 2, 24, 20, 0, 0, tzinfo=timezone.utc)
+COMPETITION_END = datetime(2026, 2, 23, 23, 59, 0, tzinfo=timezone.utc)  # V3.1.77: Fixed - competition ends Feb 23
 
 # Retry
 MAX_RETRIES = 3
@@ -1554,6 +1554,117 @@ def get_trade_history_summary(tracker) -> str:
     return summary
 
 
+# V3.1.77: RL-based pair performance analysis for Judge and PM
+_rl_performance_cache = {}
+_rl_performance_cache_time = 0
+
+def get_rl_pair_performance() -> dict:
+    """V3.1.77: Read RL training data to compute per-pair win rates and performance.
+    Returns dict like: {"BTCUSDT": {"wins": 1, "losses": 32, "win_rate": 3.0, "avg_pnl": -3.41}, ...}
+    """
+    global _rl_performance_cache, _rl_performance_cache_time
+    import glob as _glob
+
+    now = time.time()
+    if now - _rl_performance_cache_time < 1800 and _rl_performance_cache:  # 30min cache
+        return _rl_performance_cache
+
+    pair_stats = {}
+    try:
+        rl_files = sorted(_glob.glob("rl_training_data/exp_*.jsonl"))
+        # Only look at last 3 days of data for recency
+        rl_files = rl_files[-3:] if len(rl_files) > 3 else rl_files
+
+        for fp in rl_files:
+            try:
+                with open(fp, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            e = json.loads(line)
+                            if e.get('action') not in ('LONG', 'SHORT'):
+                                continue
+                            outcome = e.get('outcome')
+                            if outcome is None:
+                                continue
+                            sym = e.get('symbol', '').replace('cmt_', '').upper()
+                            if not sym:
+                                continue
+                            if sym not in pair_stats:
+                                pair_stats[sym] = {"wins": 0, "losses": 0, "total_pnl": 0, "trades": 0, "avg_hours": 0}
+                            pair_stats[sym]["trades"] += 1
+                            if outcome.get("win", False):
+                                pair_stats[sym]["wins"] += 1
+                            else:
+                                pair_stats[sym]["losses"] += 1
+                            pair_stats[sym]["total_pnl"] += outcome.get("pnl", 0)
+                            pair_stats[sym]["avg_hours"] += outcome.get("hours", 0)
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+            except IOError:
+                continue
+
+        for sym in pair_stats:
+            n = pair_stats[sym]["trades"]
+            if n > 0:
+                pair_stats[sym]["win_rate"] = round(pair_stats[sym]["wins"] / n * 100, 1)
+                pair_stats[sym]["avg_pnl"] = round(pair_stats[sym]["total_pnl"] / n, 2)
+                pair_stats[sym]["avg_hours"] = round(pair_stats[sym]["avg_hours"] / n, 1)
+            else:
+                pair_stats[sym]["win_rate"] = 0
+                pair_stats[sym]["avg_pnl"] = 0
+
+        _rl_performance_cache = pair_stats
+        _rl_performance_cache_time = now
+    except Exception as e:
+        logger.debug(f"RL performance read error: {e}")
+
+    return pair_stats
+
+
+def get_rl_performance_summary() -> str:
+    """V3.1.77: Human-readable RL performance summary for Judge/PM prompts."""
+    stats = get_rl_pair_performance()
+    if not stats:
+        return "No historical performance data available."
+
+    lines = ["PAIR PERFORMANCE (last 3 days of RL data):"]
+    for sym in sorted(stats.keys()):
+        s = stats[sym]
+        if s["trades"] == 0:
+            continue
+        emoji = "PROFITABLE" if s["avg_pnl"] > 0 else "LOSING"
+        lines.append(f"  {sym}: {s['wins']}W/{s['losses']}L ({s['win_rate']}% WR), avg PnL: {s['avg_pnl']:+.2f}%, avg hold: {s['avg_hours']:.1f}h [{emoji}]")
+
+    total_trades = sum(s["trades"] for s in stats.values())
+    total_wins = sum(s["wins"] for s in stats.values())
+    overall_wr = round(total_wins / max(total_trades, 1) * 100, 1)
+    lines.append(f"  OVERALL: {total_wins}/{total_trades} ({overall_wr}% WR)")
+    return "\n".join(lines)
+
+
+def get_pair_sizing_multiplier(symbol: str) -> float:
+    """V3.1.77: Reduce position sizing for consistently losing pairs.
+    BTC with 3% win rate should not get full-size positions.
+    """
+    stats = get_rl_pair_performance()
+    sym = symbol.replace('cmt_', '').upper()
+    if sym not in stats or stats[sym]["trades"] < 5:
+        return 1.0  # Not enough data, use default
+
+    wr = stats[sym]["win_rate"]
+    if wr >= 15:
+        return 1.0   # Performing OK
+    elif wr >= 10:
+        return 0.7   # Below average
+    elif wr >= 5:
+        return 0.5   # Poor performer
+    else:
+        return 0.3   # Serial loser (like BTC at 3%)
+
+
 # V3.1.60: Track symbols with recent SL tightens - prevent resolve_opposite from killing new trades
 _sl_tightened_symbols = {}
 
@@ -1750,7 +1861,13 @@ def gemini_portfolio_review():
                 cryptoracle_context = "No data available"
         except Exception as e:
             cryptoracle_context = f"Unavailable: {e}"
-        
+
+        # V3.1.77: RL performance for PM
+        try:
+            rl_performance_text = get_rl_performance_summary()
+        except Exception:
+            rl_performance_text = "Historical performance data unavailable."
+
         # V3.1.59: AI log for PM review start
         upload_ai_log_to_weex(
             stage=f"V3.1.59 Portfolio Review Start",
@@ -1794,6 +1911,10 @@ Days left in competition: {days_left}
 
 === CRYPTORACLE INTELLIGENCE ===
 {cryptoracle_context}
+
+=== HISTORICAL PAIR PERFORMANCE (RL data, last 3 days) ===
+{rl_performance_text}
+Use this to judge which positions to cut first. Pairs with <10% win rate are chronic losers - cut them faster.
 
 === PNL TRAJECTORY PATTERNS ===
 Each position shows its last 5 PnL readings (newest last).
@@ -2462,10 +2583,11 @@ def regime_aware_exit_check():
             side = pos['side']
             pnl = float(pos.get('unrealized_pnl', 0))
             margin = float(pos.get("margin", 500))
-            # V3.1.30: Percentage-based exit thresholds
-            regime_fight_threshold = -(margin * 0.15)   # V3.1.47: Raised to 15% - trust SL
-            hard_stop_threshold = -(margin * 0.25)      # V3.1.47: Raised to 25% - let SL on WEEX handle it
-            spike_threshold = -(margin * 0.015)          # -1.5% of margin
+            # V3.1.77: RL data shows regime exits average -12.5% PnL (worst close reason).
+            # Trust the exchange SL to do its job. Only intervene for catastrophic cases.
+            regime_fight_threshold = -(margin * 0.35)   # V3.1.77: 35% margin loss (was 15%). Let SL handle normal cases.
+            hard_stop_threshold = -(margin * 0.45)      # V3.1.77: 45% margin loss (was 25%). Near-liquidation emergency only.
+            spike_threshold = -(margin * 0.05)           # V3.1.77: 5% of margin (was 1.5%)
             size = float(pos['size'])
             
             symbol_clean = symbol.replace('cmt_', '').upper()
@@ -2487,10 +2609,10 @@ def regime_aware_exit_check():
             if hours_open < 4:
                 continue
             
-            # V3.1.64: EXTREME FEAR SHIELD - Don't cut profitable positions in capitulation
-            # In F&G < 20, regime bounces are noise. Trust whale-aligned positions.
+            # V3.1.77: FEAR SHIELD extended to F&G < 30 (was < 20)
+            # RL data: regime exits are the most destructive close reason (-12.5% avg PnL)
             _fg_for_regime = regime.get("fear_greed", 50)
-            if _fg_for_regime < 20 and pnl > 0:
+            if _fg_for_regime < 30 and pnl > 0:
                 logger.info(f"[REGIME] FEAR SHIELD: Skipping {symbol_clean} {side} (profitable ${pnl:+.1f} in F&G={_fg_for_regime})")
                 continue
             
@@ -2606,14 +2728,17 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.76 - DISCIPLINE RESTORATION: 3 max positions, trust exchange TP, flat 20x")
+    logger.info("SMT Daemon V3.1.77 - DATA-DRIVEN: per-pair ATR, RL-aware Judge, honest confidence")
     logger.info("=" * 60)
-    logger.info("V3.1.76 DISCIPLINE RESTORATION:")
-    logger.info("  - CONCENTRATE CAPITAL: Max 3 positions (was 5/8). Fewer slots = bigger trades = bigger wins.")
-    logger.info("  - PROFIT LOCK FIX: Trust exchange TP orders. Stop killing winners at +0.7%.")
-    logger.info("  - FLAT 20x LEVERAGE: No more random reductions. Full power every trade.")
-    logger.info("  - CONTRARIAN F&G: Extreme Fear = LONG only, Extreme Greed = SHORT only.")
-    logger.info("  - 85% confidence + 3 slots = natural trade throttle. Less churn, less fees.")
+    logger.info("V3.1.77 DATA-DRIVEN UPGRADE:")
+    logger.info("  - PER-PAIR ATR: Each coin gets its own volatility-calibrated SL (was BTC-only)")
+    logger.info("  - RL-AWARE JUDGE: Gemini sees historical win rates per pair before deciding")
+    logger.info("  - HONEST CONFIDENCE: Judge calibrates confidence to signal quality, not rules")
+    logger.info("  - RL-AWARE PM: Portfolio manager knows which pairs are chronic losers")
+    logger.info("  - SMART SIZING: Position size reduced for historically losing pairs (BTC 3% WR)")
+    logger.info("  - TRUST SL: Regime exits softened (RL shows they avg -12.5% PnL)")
+    logger.info("  - RE-TIERED: LTC T1->T2, XRP T3->T2 (market cap alignment)")
+    logger.info("  - COMPETITION: Fixed end date to Feb 23")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
