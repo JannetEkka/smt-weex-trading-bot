@@ -2000,10 +2000,15 @@ RULE 12 - FUNDING COST AWARENESS:
 If funding rate is positive and we are LONG, we PAY every 8h. If position is barely
 profitable (+0.1-0.3%) and funding eats the profit, close it. Same for negative funding + SHORT.
 
-RULE 13 - STALE POSITION CLEANUP:
-If a position has been held > max_hold_hours AND is losing ANY amount, close it.
-Do not wait for -3%. A stale losing position is dead capital. Free it.
-If the position is winning past max_hold_hours, let it run but tighten expectations.
+RULE 13 - STALE POSITION CLEANUP (USE THESE EXACT THRESHOLDS):
+TIER HOLD LIMITS (from TIER_CONFIG - do NOT guess these values):
+  Tier 1 (BTC,ETH,BNB): max_hold = 24h, early_exit = 6h if losing > 1%
+  Tier 2 (LTC,SOL,XRP): max_hold = 12h, early_exit = 4h if losing > 1%
+  Tier 3 (DOGE,ADA):    max_hold = 8h,  early_exit = 3h if losing > 1%
+If held > max_hold_hours AND losing ANY amount: close it. Dead capital.
+If held > early_exit_hours AND losing > 1%: close it. Thesis is failing.
+If winning past max_hold: let it run but tighten expectations.
+CRITICAL: A Tier 1 position held 5h is NOT stale (max is 24h). Do NOT close it.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"closes": [{{"symbol": "DOGEUSDT", "side": "SHORT", "reason": "Rule X: brief reason"}}, ...], "keep_reasons": "brief summary of why others are kept, referencing rule numbers"}}
