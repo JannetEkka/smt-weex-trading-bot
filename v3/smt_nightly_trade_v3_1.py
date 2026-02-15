@@ -948,7 +948,21 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 3  # V3.1.76: CONCENTRATE CAPITAL - 5 positions spread too thin. Bob is #1 with fewer, bigger trades.
+# V3.1.78: EQUITY-TIERED POSITION LIMITS (Option A - more bites at the apple)
+# Replaced static MAX_OPEN_POSITIONS with dynamic equity-based slots
+EQUITY_POSITION_TIERS = [
+    (8000, 3),   # $5K-$8K: 3 positions
+    (12000, 4),  # $8K-$12K: 4 positions
+    (15000, 5),  # $12K-$15K: 5 positions
+]
+EQUITY_POSITION_DEFAULT = 6  # $15K+: 6 positions
+
+def get_max_positions_for_equity(equity: float) -> int:
+    """Get max open positions based on current equity"""
+    for threshold, slots in EQUITY_POSITION_TIERS:
+        if equity < threshold:
+            return slots
+    return EQUITY_POSITION_DEFAULT
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
 MIN_CONFIDENCE_TO_TRADE = 0.80  # V3.1.77b: 85%->80%. With 3 slots, fill with best signals only.
