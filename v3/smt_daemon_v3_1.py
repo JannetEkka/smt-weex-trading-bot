@@ -2731,17 +2731,15 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.77 - DATA-DRIVEN: per-pair ATR, RL-aware Judge, honest confidence")
+    logger.info("SMT Daemon V3.1.78 - EQUITY TIERED + FLAT 20x")
     logger.info("=" * 60)
-    logger.info("V3.1.77 DATA-DRIVEN UPGRADE:")
-    logger.info("  - PER-PAIR ATR: Each coin gets its own volatility-calibrated SL (was BTC-only)")
-    logger.info("  - RL-AWARE JUDGE: Gemini sees historical win rates per pair before deciding")
-    logger.info("  - HONEST CONFIDENCE: Judge calibrates confidence to signal quality, not rules")
-    logger.info("  - RL-AWARE PM: Portfolio manager knows which pairs are chronic losers")
-    logger.info("  - SMART SIZING: Position size reduced for historically losing pairs (BTC 3% WR)")
-    logger.info("  - TRUST SL: Regime exits softened (RL shows they avg -12.5% PnL)")
-    logger.info("  - RE-TIERED: LTC T1->T2, XRP T3->T2 (market cap alignment)")
-    logger.info("  - COMPETITION: Fixed end date to Feb 23")
+    logger.info("V3.1.78 CHANGES:")
+    logger.info("  - EQUITY-TIERED SLOTS: 3/4/5/6 at $5K/$8K/$12K/$15K+")
+    logger.info("  - FLAT 20x LEVERAGE: All tiers (was 15/12/10)")
+    logger.info("  - BTC T1->T2: ATR SL 2.28%, mid-cap volatility")
+    logger.info("  - SOL T2->T3: ATR SL 3.36%, more volatile than ADA")
+    logger.info("  - TP FLOOR REMOVED: Was broken (tier cap overrode it)")
+    logger.info("  - COMPETITION: Ends Feb 23")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
