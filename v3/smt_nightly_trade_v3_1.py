@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.1.24 - STOP LOSING LONGS
+SMT Nightly Trade V3.1.78 - EQUITY TIERED + FLAT 20x
 =============================================================
 No partial closes. Higher conviction trades only.
 
@@ -947,17 +947,31 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
-MAX_OPEN_POSITIONS = 3  # V3.1.76: CONCENTRATE CAPITAL - 5 positions spread too thin. Bob is #1 with fewer, bigger trades.
+# V3.1.78: EQUITY-TIERED POSITION LIMITS (Option A - more bites at the apple)
+# Replaced static MAX_OPEN_POSITIONS with dynamic equity-based slots
+EQUITY_POSITION_TIERS = [
+    (8000, 3),   # $5K-$8K: 3 positions
+    (12000, 4),  # $8K-$12K: 4 positions
+    (15000, 5),  # $12K-$15K: 5 positions
+]
+EQUITY_POSITION_DEFAULT = 6  # $15K+: 6 positions
+
+def get_max_positions_for_equity(equity: float) -> int:
+    """Get max open positions based on current equity"""
+    for threshold, slots in EQUITY_POSITION_TIERS:
+        if equity < threshold:
+            return slots
+    return EQUITY_POSITION_DEFAULT
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
 MIN_CONFIDENCE_TO_TRADE = 0.80  # V3.1.77b: 85%->80%. With 3 slots, fill with best signals only.
 
 # ============================================================
-# V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
+# V3.1.78: TIER-BASED PARAMETERS (UPDATED!)
 # ============================================================
-# Tier 1: Stable (BTC, ETH, BNB, LTC) - slow grind, need room to breathe
-# Tier 2: Mid volatility (SOL) - volatile but not meme-tier
-# Tier 3: Fast/Meme (DOGE, XRP, ADA) - WIDENED SL to stop whipsaw losses
+# Tier 1: Blue Chip (ETH, BNB) - tight SL, long hold
+# Tier 2: Mid Cap (BTC, LTC, XRP) - moderate vol, 12h hold
+# Tier 3: Small Cap (SOL, DOGE, ADA) - high vol, short 8h hold
 
 
 # ============================================================
@@ -985,29 +999,30 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
     jitter = random.uniform(0, delay * 0.1)
     return delay + jitter
 
-# V3.1.75: DISCIPLINE RESTORATION - sane R:R ratios, lower leverage, wider TPs
-# TP must be >= 1.5x SL for positive expectancy after fees
-# Leverage reduced: T1=15x T2=12x T3=10x (was 20x everything)
+# V3.1.78: FLAT 20x LEVERAGE, competition only cares about final PnL
+# Tier TP/SL unchanged, R:R floor removed (was broken - tier cap overrode it)
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 15, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 6, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    2: {"name": "Mid Cap", "leverage": 12, "stop_loss": 0.015, "take_profit": 0.035, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 3.5, "sl_pct": 1.5, "max_hold_hours": 12, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    3: {"name": "Small Cap", "leverage": 10, "stop_loss": 0.018, "take_profit": 0.03, "trailing_stop": 0.015, "time_limit": 480, "tp_pct": 3.0, "sl_pct": 1.8, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 6, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.035, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 3.5, "sl_pct": 1.5, "max_hold_hours": 12, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.03, "trailing_stop": 0.015, "time_limit": 480, "tp_pct": 3.0, "sl_pct": 1.8, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
 }
-# Trading Pairs with correct tiers
+# V3.1.78: Tier reassignment based on actual ATR/volatility analysis
+# BTC T1→T2 (2.28% actual SL, +52% stretch - behaves mid-cap)
+# SOL T2→T3 (3.36% actual SL, higher than ADA - needs short hold)
 TRADING_PAIRS = {
-    "BTC": {"symbol": "cmt_btcusdt", "tier": 1, "has_whale_data": True},
+    "BTC": {"symbol": "cmt_btcusdt", "tier": 2, "has_whale_data": True},   # V3.1.78: T1→T2 (ATR SL 2.28%, mid-cap volatility)
     "ETH": {"symbol": "cmt_ethusdt", "tier": 1, "has_whale_data": True},
     "BNB": {"symbol": "cmt_bnbusdt", "tier": 1, "has_whale_data": True},
-    "LTC": {"symbol": "cmt_ltcusdt", "tier": 2, "has_whale_data": True},  # V3.1.77: T1→T2 ($8B mcap, too small for Blue Chip)
-    "SOL": {"symbol": "cmt_solusdt", "tier": 2, "has_whale_data": True},
+    "LTC": {"symbol": "cmt_ltcusdt", "tier": 2, "has_whale_data": True},   # V3.1.77: T1→T2 ($8B mcap)
+    "SOL": {"symbol": "cmt_solusdt", "tier": 3, "has_whale_data": True},   # V3.1.78: T2→T3 (ATR SL 3.36%, more volatile than ADA)
     "DOGE": {"symbol": "cmt_dogeusdt", "tier": 3, "has_whale_data": True},
-    "XRP": {"symbol": "cmt_xrpusdt", "tier": 2, "has_whale_data": True},  # V3.1.77: T3→T2 ($70B mcap, same class as SOL)
+    "XRP": {"symbol": "cmt_xrpusdt", "tier": 2, "has_whale_data": True},   # V3.1.77: T3→T2 ($70B mcap)
     "ADA": {"symbol": "cmt_adausdt", "tier": 3, "has_whale_data": True},
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.1.76-UltraSniper-DisciplineRestoration"
-MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.76"
+PIPELINE_VERSION = "SMT-v3.1.78-OptionA-EquityTiered"
+MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.78"
 
 # Known step sizes
 KNOWN_STEP_SIZES = {
@@ -3013,17 +3028,10 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         sl_pct_raw = tier_config["sl_pct"]
         print(f"  [ATR-SL] Error ({e}), using tier SL: {sl_pct_raw}%")
     
-    # V3.1.66b: REALISTIC TP - tier-based, no F&G scaling
-    # F&G scaling caused 9% TPs in capitulation (unrealistic, never hit)
-    # TP is now strictly tier-based with a sane floor
-    base_tp = tier_config["tp_pct"]  # V3.1.75: T1=3%, T2=3.5%, T3=3%
-    tp_floor = sl_pct_raw * 1.5  # V3.1.75: Minimum 1.5x SL (was 1.2x - not enough edge after fees)
-    tp_pct_raw = max(base_tp, tp_floor)
-    # Hard cap per tier
-    _tier_tp_caps = {1: 4.0, 2: 4.5, 3: 4.0}  # V3.1.75: Allow wider TPs for bigger wins
-    _tp_cap = _tier_tp_caps.get(tier, 4.0)
-    tp_pct_raw = min(tp_pct_raw, _tp_cap)
-    print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% (Tier {tier} cap={_tp_cap}%, floor=SL*1.2={tp_floor:.2f}%)")
+    # V3.1.78: TP = tier base config. R:R floor REMOVED (was broken - tier cap overrode it).
+    # Competition cares about final PnL, not theoretical R:R ratios.
+    tp_pct_raw = tier_config["tp_pct"]
+    print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% (Tier {tier})")
     
     tp_pct = tp_pct_raw / 100
     sl_pct = sl_pct_raw / 100

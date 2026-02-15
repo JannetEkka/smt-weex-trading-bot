@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.76 - ULTRA SNIPER + DISCIPLINE RESTORATION
+SMT Trading Daemon V3.1.78 - EQUITY TIERED + FLAT 20x
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -224,7 +224,7 @@ try:
         WEEX_BASE_URL,
         # Config
         TEST_MODE, TRADING_PAIRS, MAX_LEVERAGE, STARTING_BALANCE,
-        PIPELINE_VERSION, MODEL_NAME, MAX_OPEN_POSITIONS,
+        PIPELINE_VERSION, MODEL_NAME, get_max_positions_for_equity,
         MIN_CONFIDENCE_TO_TRADE,  # Added for trade filtering
         TIER_CONFIG, get_tier_for_symbol, get_tier_config,
         RUNNER_CONFIG, get_runner_config,
@@ -496,7 +496,7 @@ def check_trading_signals():
             if tracker.active_trades.get(symbol, {}).get('runner_triggered', False):
                 risk_free_count += 1
         
-        BASE_SLOTS = 5  # V3.1.75: Match MAX_OPEN_POSITIONS - 3 was starving the bot of diversification
+        BASE_SLOTS = get_max_positions_for_equity(equity)  # V3.1.78: Equity-tiered (was static 5)
         MAX_BONUS_SLOTS = 0  # V3.1.64a: DISABLED - hard cap is absolute
         bonus_slots = min(risk_free_count, MAX_BONUS_SLOTS)
         effective_max_positions = BASE_SLOTS + bonus_slots
