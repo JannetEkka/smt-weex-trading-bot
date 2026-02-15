@@ -2479,8 +2479,8 @@ Respond with JSON ONLY (no markdown, no backticks):
                     and whale_vote.get("confidence", 0) >= 0.60):
                     flow_whale_aligned = True
 
-            # V3.1.75: Conservative sizing - survive to trade another day
-            # 12% base, scale up slightly for ultra-high conviction
+            # V3.1.78: Confidence-scaled sizing (12-18%) bounded by equity tier position count
+            # Scale: 12% base, 15% high-conf, 18% ultra. But cap so all slots fit in ~85% of equity.
             base_size = balance * 0.12
             if confidence >= 0.90 and flow_whale_aligned:
                 position_usdt = base_size * 1.5  # 18% of balance - ULTRA
@@ -2490,14 +2490,22 @@ Respond with JSON ONLY (no markdown, no backticks):
             else:
                 position_usdt = base_size * 1.0  # 12% of balance
 
+            # V3.1.78: Bound by position count - prevent over-allocation at higher equity tiers
+            # At 6 slots, 18% each = 108% equity (bad). Cap per-position so total <= 85%.
+            max_slots = get_max_positions_for_equity(balance)
+            per_slot_cap = (balance * 0.85) / max(max_slots, 1)
+            if position_usdt > per_slot_cap:
+                print(f"  [SIZING] Capped: ${position_usdt:.0f} -> ${per_slot_cap:.0f} ({max_slots} slots, 85% equity cap)")
+                position_usdt = per_slot_cap
+
             # Balance protection
             if balance < 200:
                 position_usdt *= 0.5
                 print(f"  [JUDGE] EMERGENCY BALANCE: size halved")
-            
+
             # Volatility adjustment from regime
             position_usdt *= regime.get("size_multiplier", 1.0)
-            
+
             position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
             position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
             
@@ -2951,6 +2959,13 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     position_usdt = decision.get("recommended_position_usdt", balance * 0.07)
     position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
     position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
+
+    # V3.1.78: Bound by equity tier position count (mirrors Judge sizing cap)
+    max_slots = get_max_positions_for_equity(balance)
+    per_slot_cap = (balance * 0.85) / max(max_slots, 1)
+    if position_usdt > per_slot_cap:
+        print(f"  [SIZING] Execute cap: ${position_usdt:.0f} -> ${per_slot_cap:.0f} ({max_slots} slots)")
+        position_usdt = per_slot_cap
 
     # V3.1.77: RL-based sizing adjustment - reduce size for historically losing pairs
     try:
