@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.76 - ULTRA SNIPER + DISCIPLINE RESTORATION
+SMT Trading Daemon V3.1.78 - EQUITY TIERED + FLAT 20x
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 

@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.1.24 - STOP LOSING LONGS
+SMT Nightly Trade V3.1.78 - EQUITY TIERED + FLAT 20x
 =============================================================
 No partial closes. Higher conviction trades only.
 
