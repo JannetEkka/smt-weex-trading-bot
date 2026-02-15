@@ -951,7 +951,7 @@ MAX_LEVERAGE = 20
 MAX_OPEN_POSITIONS = 3  # V3.1.76: CONCENTRATE CAPITAL - 5 positions spread too thin. Bob is #1 with fewer, bigger trades.
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
-MIN_CONFIDENCE_TO_TRADE = 0.75  # V3.1.77b: 85%->75%. Judge now gives honest confidence; 75% means good signal alignment.
+MIN_CONFIDENCE_TO_TRADE = 0.80  # V3.1.77b: 85%->80%. With 3 slots, fill with best signals only.
 
 # ============================================================
 # V3.1.4: TIER-BASED PARAMETERS (UPDATED!)
