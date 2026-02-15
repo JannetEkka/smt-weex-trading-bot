@@ -821,14 +821,21 @@ def check_trading_signals():
         if trade_opportunities:
             # Sort by confidence (highest first)
             trade_opportunities.sort(key=lambda x: x["decision"]["confidence"], reverse=True)
-            
-            # V3.1.19: Use smart slot calculation (same as above)
+
+            # V3.1.78: CONFIDENCE CASCADE - only consider top N candidates for current equity tier
+            # This is a code-level filter AFTER Gemini scoring. No prompt changes needed.
             current_positions = len(open_positions)
             available_slots = effective_max_positions - current_positions
             # V3.1.64: HARD CAP - never exceed BASE_SLOTS total regardless of mode
             if current_positions >= BASE_SLOTS:
                 available_slots = 0
-            
+
+            if available_slots > 0 and len(trade_opportunities) > available_slots:
+                dropped = trade_opportunities[available_slots:]
+                trade_opportunities = trade_opportunities[:available_slots]
+                for d in dropped:
+                    logger.info(f"  CASCADE DROP: {d['pair']} ({d['decision']['confidence']:.0%}) - only top {available_slots} candidates selected")
+
             # V3.1.26: Track confidence override slots used
             confidence_slots_used = 0
             
@@ -2739,6 +2746,8 @@ def run_daemon():
     logger.info("  - BTC T1->T2: ATR SL 2.28%, mid-cap volatility")
     logger.info("  - SOL T2->T3: ATR SL 3.36%, more volatile than ADA")
     logger.info("  - TP FLOOR REMOVED: Was broken (tier cap overrode it)")
+    logger.info("  - CONFIDENCE CASCADE: Sort by conf, open only top N for tier")
+    logger.info("  - MARGIN BOUNDED: 12-18% conf-scaled, capped so N slots <= 85% equity")
     logger.info("  - COMPETITION: Ends Feb 23")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
