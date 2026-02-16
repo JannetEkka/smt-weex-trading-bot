@@ -957,8 +957,10 @@ def check_trading_signals():
                 # Pairs with 75-79% confidence are "fallback_only" — they can only trade
                 # if a chop filter blocked a higher-confidence pair, freeing a slot.
                 # V3.1.82: Slot swap trades bypass fallback gate (they create their own slot)
+                # V3.1.82 FIX: Also bypass when regular slots are available (0 positions = don't skip!)
                 is_fallback = opportunity["decision"].get("fallback_only", False)
-                if is_fallback and opportunity.get("trade_type") != "slot_swap":
+                _has_regular_slots = (trades_executed < available_slots)
+                if is_fallback and opportunity.get("trade_type") != "slot_swap" and not _has_regular_slots:
                     if chop_blocked_count > 0:
                         logger.info(f"  CHOP FALLBACK: {opportunity['pair']} ({confidence:.0%}) promoted - chop freed {chop_blocked_count} slot(s)")
                         chop_blocked_count -= 1  # Consume one freed slot
@@ -2554,7 +2556,22 @@ def sync_tracker_with_weex():
             _tier = _tv.get("tier", "?")
             _synced = "synced" if _tv.get("synced") else "original"
             logger.info(f"  [{_tk}] T{_tier} {_tv.get('side','?')} opened={_opened_str[:19]} hold={_hold_h:.1f}h/{_max_h}h ({_synced})")
-        
+
+        # V3.1.82: Clean stale cooldowns for symbols with no open positions
+        # The pnl_pct key bug (fixed now) gave wins false cooldowns. Clear cooldowns
+        # for any symbol that has NO open position on WEEX (already closed).
+        _weex_syms = {p['symbol'] for p in positions}
+        _stale_cds = []
+        for _cd_key in list(tracker.cooldowns.keys()):
+            _cd_plain = _cd_key.split(":")[0] if ":" in _cd_key else _cd_key
+            if _cd_plain not in _weex_syms:
+                _stale_cds.append(_cd_key)
+        if _stale_cds:
+            for _sk in _stale_cds:
+                del tracker.cooldowns[_sk]
+            tracker.save_state()
+            logger.info(f"  Cleared {len(_stale_cds)} stale cooldown(s): {', '.join(s.replace('cmt_','').upper() for s in _stale_cds)}")
+
     except Exception as e:
         logger.error(f"Sync error: {e}")
 
