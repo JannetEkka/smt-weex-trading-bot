@@ -80,9 +80,14 @@ POSITION_MONITOR_INTERVAL = 120      # 2min
 
 # Slot system (equity-tiered)
 # >= $500: 5 slots | $200-500: 3 slots | < $200: 1 slot
+# When all slots are full: only slot swaps can enter (needs 83%+ confidence)
+# If no signals reach 80%, ALL pairs show WAIT — this is expected, not a bug.
+# Existing position + same direction signal = WAIT (already have that side).
 
-# Slot swap gates (V3.1.84)
-# Min age: 45min | Min PnL: -0.5% | Min confidence: 83%
+# Slot swap gates (V3.1.87)
+# Min age: 45min | Min confidence: 83%
+# PnL threshold: regime-aware
+#   Normal (F&G >= 20): -0.5% | Capitulation (F&G < 20): -0.25%
 
 # Regime exit thresholds
 # Regime fight: 35% margin loss | Hard stop: 45% margin loss
