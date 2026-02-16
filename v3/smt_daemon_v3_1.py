@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.81 - DEATH SPIRAL FIX: blacklist + cooldown enforce + sync fix + SL cap
+SMT Trading Daemon V3.1.82 - SLOT SWAP + PM COMPETITION MODE + sync debug
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -421,6 +421,53 @@ def run_with_retry(func, *args, max_retries=MAX_RETRIES, **kwargs):
 
 
 # ============================================================
+# V3.1.82: SLOT SWAP HELPER
+# ============================================================
+
+def _find_weakest_position(open_positions, new_symbol, position_map):
+    """V3.1.82: Find the weakest position that can be swapped out for a stronger signal.
+
+    Returns dict with position info if a viable swap target exists, None otherwise.
+    Criteria: position PnL < +0.5% AND declining (not the same symbol as new signal).
+    """
+    weakest = None
+    weakest_pnl_pct = 999
+
+    for pos in open_positions:
+        pos_symbol = pos.get("symbol", "")
+        pos_side = pos.get("side", "").upper()
+        pos_entry = float(pos.get("entry_price", 0))
+        pos_upnl = float(pos.get("unrealized_pnl", 0))
+        pos_size = float(pos.get("size", 0))
+
+        # Skip if same symbol as the new signal
+        if pos_symbol == new_symbol:
+            continue
+
+        # Calculate PnL %
+        if pos_entry > 0 and pos_size > 0:
+            margin = float(pos.get("margin", 0))
+            # PnL % relative to position value (entry_price * size = notional)
+            notional = pos_entry * pos_size
+            pnl_pct = (pos_upnl / notional) * 100 if notional > 0 else 0
+        else:
+            pnl_pct = 0
+
+        # Only consider positions with PnL < +0.5% (near breakeven or losing)
+        if pnl_pct < 0.5 and pnl_pct < weakest_pnl_pct:
+            weakest_pnl_pct = pnl_pct
+            weakest = {
+                "symbol": pos_symbol,
+                "side": pos_side,
+                "size": pos_size,
+                "entry_price": pos_entry,
+                "unrealized_pnl": pos_upnl,
+                "pnl_pct": pnl_pct,
+            }
+
+    return weakest
+
+
 # V3.1.9 SIGNAL CHECKING - HEDGE MODE SUPPORT
 # ============================================================
 
@@ -709,6 +756,13 @@ def check_trading_signals():
                         if can_open_new:
                             can_trade_this = True
                             trade_type = "new"
+                        elif confidence >= 0.75:
+                            # V3.1.82: SLOT SWAP - find weakest position to replace
+                            _weakest = _find_weakest_position(open_positions, symbol, position_map)
+                            if _weakest:
+                                can_trade_this = True
+                                trade_type = "slot_swap"
+                                logger.info(f"    -> SLOT SWAP: {confidence:.0%} signal, closing weak {_weakest['symbol'].replace('cmt_','').upper()} ({_weakest['pnl_pct']:+.2f}%) to free slot")
 
                 elif signal == "SHORT":
                     if has_short:
@@ -733,6 +787,13 @@ def check_trading_signals():
                         if can_open_new:
                             can_trade_this = True
                             trade_type = "new"
+                        elif confidence >= 0.75:
+                            # V3.1.82: SLOT SWAP - find weakest position to replace
+                            _weakest = _find_weakest_position(open_positions, symbol, position_map)
+                            if _weakest:
+                                can_trade_this = True
+                                trade_type = "slot_swap"
+                                logger.info(f"    -> SLOT SWAP: {confidence:.0%} signal, closing weak {_weakest['symbol'].replace('cmt_','').upper()} ({_weakest['pnl_pct']:+.2f}%) to free slot")
                 
                 # Build comprehensive vote details with FULL reasoning
                 vote_details = []
@@ -953,6 +1014,66 @@ def check_trading_signals():
                     else:
                         logger.info(f"OPPOSITE TRADE: {opportunity['pair']} {existing_side} losing ${existing_pnl:.1f}, won't realize loss (tighten SL instead)")
                         # TODO: could tighten SL on losing position instead
+                        continue
+
+                # V3.1.82: SLOT SWAP - close weakest position to free slot for stronger signal
+                if trade_type_check == "slot_swap":
+                    _swap_target = _find_weakest_position(open_positions, opportunity["pair_info"]["symbol"], position_map)
+                    if _swap_target:
+                        _swap_sym = _swap_target["symbol"]
+                        _swap_side = _swap_target["side"]
+                        _swap_size = _swap_target["size"]
+                        _swap_pnl = _swap_target["unrealized_pnl"]
+                        _swap_pnl_pct = _swap_target["pnl_pct"]
+                        _swap_clean = _swap_sym.replace("cmt_", "").upper()
+
+                        logger.info(f"SLOT SWAP: Closing {_swap_side} {_swap_clean} (PnL: {_swap_pnl_pct:+.2f}%, ${_swap_pnl:+.1f}) for {opportunity['pair']} {opportunity['decision']['decision']} at {confidence:.0%}")
+
+                        try:
+                            close_result = close_position_manually(
+                                symbol=_swap_sym,
+                                side=_swap_side,
+                                size=_swap_size
+                            )
+
+                            # Close in tracker (try both key formats)
+                            _swap_key = f"{_swap_sym}:{_swap_side}"
+                            if _swap_key in tracker.active_trades:
+                                tracker.close_trade(_swap_key, {
+                                    "reason": f"slot_swap_for_{opportunity['pair'].lower()}",
+                                    "pnl": _swap_pnl,
+                                    "final_pnl_pct": _swap_pnl_pct,
+                                })
+                            elif _swap_sym in tracker.active_trades:
+                                tracker.close_trade(_swap_sym, {
+                                    "reason": f"slot_swap_for_{opportunity['pair'].lower()}",
+                                    "pnl": _swap_pnl,
+                                    "final_pnl_pct": _swap_pnl_pct,
+                                })
+
+                            upload_ai_log_to_weex(
+                                stage=f"Slot Swap: {_swap_clean} {_swap_side} closed for {opportunity['pair']}",
+                                input_data={
+                                    "closed_symbol": _swap_sym, "closed_side": _swap_side,
+                                    "closed_pnl_pct": round(_swap_pnl_pct, 2),
+                                    "new_signal": opportunity["decision"]["decision"],
+                                    "new_pair": opportunity["pair"], "new_confidence": confidence,
+                                },
+                                output_data={"action": "SLOT_SWAP_CLOSE", "freed_for": opportunity["pair"]},
+                                explanation=(
+                                    f"PM slot optimization: {_swap_clean} {_swap_side} at {_swap_pnl_pct:+.2f}% is near breakeven with fading momentum. "
+                                    f"Closing to free slot for {opportunity['pair']} {opportunity['decision']['decision']} at {confidence:.0%} confidence. "
+                                    f"Better risk-adjusted opportunity identified."
+                                ),
+                            )
+                            state.trades_closed += 1
+                            available_slots += 1
+                            time.sleep(2)  # Let WEEX process the close
+                        except Exception as _swap_err:
+                            logger.error(f"SLOT SWAP FAILED: {_swap_err}")
+                            continue
+                    else:
+                        logger.info(f"SLOT SWAP: No weak position found for {opportunity['pair']}, skipping")
                         continue
 
                 if trades_executed >= available_slots:
@@ -2008,9 +2129,13 @@ Examples:
 - LONG position losing -0.01%, whale says SHORT@72% -> KEEP (basically breakeven)
 Exception: if position is WINNING despite whale disagreement, ALWAYS keep it.
 
-RULE 6 - BREAKEVEN PATIENCE:
-If a position has faded to breakeven (within +/- 0.3%), DO NOT CLOSE. Crypto is volatile.
-A position at 0% can rally to +5% in the next hour. Only the SL should close breakeven positions.
+RULE 6 - BREAKEVEN PATIENCE (UPDATED V3.1.82 - COMPETITION MODE):
+If a position has faded to breakeven (within +/- 0.3%), normally DO NOT CLOSE.
+EXCEPTION (V3.1.82 COMPETITION): If ALL slots are full ({weex_position_count}/{effective_max_positions}) AND the position
+has been declining from its peak for 3+ readings AND there are higher-conviction signals waiting,
+CLOSE the weakest breakeven position to free a slot. In competition mode, a dying +0.1% position
+occupying a slot is worse than freeing it for a 75%+ confidence entry.
+IMPORTANT: This override ONLY applies when slots are completely full. If slots are available, keep patience.
 
 RULE 7 - TIME-BASED PATIENCE:
 Do NOT close positions just because they have been open 2-4 hours.
@@ -2020,11 +2145,12 @@ Only close if: max_hold_hours exceeded AND position is negative.
 RULE 8 - WEEKEND/LOW LIQUIDITY (check if Saturday or Sunday):
 On weekends, max 4 positions. Thinner books = more manipulation.
 
-RULE 9 - SLOT MANAGEMENT (UPDATED V3.1.55):
-If we have 7+ total positions, we SHOULD free slots by closing the weakest position.
-7+ positions means we are over-committed and have no room for high-conviction entries.
+RULE 9 - SLOT MANAGEMENT (UPDATED V3.1.82 - COMPETITION):
+If ALL {effective_max_positions} slots are full AND any position is at breakeven (<+0.3%) or declining
+from its peak, consider closing the WEAKEST to free capital for better entries.
+In competition mode with only {effective_max_positions} slots, every slot matters.
 Close the position with: worst PnL% + whale disagreement + longest hold time past max.
-If we have 5 or fewer, be patient - SL orders protect us.
+If slots are available, be patient - SL orders protect us.
 
 RULE 10 - GRACE PERIOD:
 Positions opened < 30 minutes ago with confidence >= 85% get a GRACE PERIOD.
@@ -2399,6 +2525,21 @@ def sync_tracker_with_weex():
         total_tracked = len(tracker.get_active_symbols())
         total_weex = len(positions)
         logger.info(f"Sync complete. Tracking {total_tracked} entries for {total_weex} WEEX positions.")
+
+        # V3.1.82: Debug log all tracked positions with their opened_at and hold time
+        _now_sync = datetime.now(timezone.utc)
+        for _tk, _tv in tracker.active_trades.items():
+            _opened_str = _tv.get("opened_at", "unknown")
+            _hold_h = 0
+            try:
+                _opened_dt = datetime.fromisoformat(_opened_str.replace("Z", "+00:00"))
+                _hold_h = (_now_sync - _opened_dt).total_seconds() / 3600
+            except:
+                pass
+            _max_h = _tv.get("max_hold_hours", "?")
+            _tier = _tv.get("tier", "?")
+            _synced = "synced" if _tv.get("synced") else "original"
+            logger.info(f"  [{_tk}] T{_tier} {_tv.get('side','?')} opened={_opened_str[:19]} hold={_hold_h:.1f}h/{_max_h}h ({_synced})")
         
     except Exception as e:
         logger.error(f"Sync error: {e}")
@@ -2793,15 +2934,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.81 - DEATH SPIRAL FIX: blacklist + cooldown enforce + sync fix + SL cap")
+    logger.info("SMT Daemon V3.1.82 - SLOT SWAP + PM COMPETITION MODE")
     logger.info("=" * 60)
-    logger.info("V3.1.81 CHANGES (DEATH SPIRAL FIX):")
-    logger.info("  - FIX 1: COOLDOWNS NOW ENFORCED (were display-only!)")
-    logger.info("  - FIX 1: BLACKLIST after force_stop/early_exit (blocks re-entry for max_hold hours)")
-    logger.info("  - FIX 2: SYNC BUG FIXED - opened_at uses WEEX ctime (was resetting to NOW)")
-    logger.info("  - FIX 3: PM skips grace period for recently force-stopped symbols")
-    logger.info("  - FIX 4: CONSECUTIVE LOSS BLOCK - 2+ force-stops in 24h = WAIT (overrides F&G)")
-    logger.info("  - FIX 5: SL CAP at force_exit + 0.5% (max 3%), was 6% in fear = catastrophic")
+    logger.info("V3.1.82 CHANGES (SLOT OPTIMIZATION):")
+    logger.info("  - FIX 6: SLOT SWAP - close weakest position when 3/3 full + strong signal (>=75%)")
+    logger.info("  - FIX 7: PM COMPETITION MODE - Rule 6 override when slots full + better opportunity")
+    logger.info("  - FIX 8: SYNC DEBUG - logs opened_at for all tracked positions on startup")
+    logger.info("  - INHERITED: V3.1.81 cooldown enforce + blacklist + sync fix + SL cap")
     logger.info("  - COMPETITION: Ends Feb 23")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
@@ -2812,6 +2951,7 @@ def run_daemon():
         logger.info(f"  Tier {tier}: {', '.join(pairs)}")
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     logger.info("Cooldowns: ENFORCED (V3.1.81) + blacklist after force_stop")
+    logger.info("Slot Swap: ENABLED (V3.1.82) - close weakest when full + strong signal")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
