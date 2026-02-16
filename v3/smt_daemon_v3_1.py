@@ -164,7 +164,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # ============================================================
 
 # Timing
-SIGNAL_CHECK_INTERVAL = 10 * 60  # V3.1.84: 10 min (was 15). Competition needs faster turnover.
+SIGNAL_CHECK_INTERVAL = 5 * 60  # V3.1.88: 5 min (was 10). Competition final week — maximize opportunities.
 POSITION_MONITOR_INTERVAL = 2 * 60  # 2 minutes (check more often for tier 3)
 HEALTH_CHECK_INTERVAL = 60
 CLEANUP_CHECK_INTERVAL = 30
@@ -1174,10 +1174,9 @@ def check_trading_signals():
                 else:
                     logger.info(f"SESSION [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} >= {session_min_conf:.0%}, proceeding {opportunity['pair']}")
                 
-                # V3.1.75: REGIME VETO + F&G SANITY CHECK
-                # Rule 1: F&G < 15 = CAPITULATION = LONG ONLY (no shorts into bounces)
-                # Rule 2: F&G > 85 = EUPHORIA = SHORT ONLY (no longs into tops)
-                # Rule 3: Regime-based veto with WHALE+FLOW override (not WHALE alone)
+                # V3.1.88: F&G SOFT BIAS + REGIME VETO
+                # F&G: contrarian direction gets +10% confidence boost (no hard block)
+                # Regime: BEARISH/BULLISH veto requires WHALE+FLOW override (not WHALE alone)
                 try:
                     _regime_now = get_market_regime_for_exit()
                 except Exception as _re:
@@ -1187,12 +1186,23 @@ def check_trading_signals():
                 _opp_signal = opportunity["decision"]["decision"]
                 _regime_vetoed = False
 
-                # V3.1.88: F&G soft bias - log warning but allow trade if signals confirm
-                # Removed hard block: sustained fear/greed ≠ imminent reversal
-                if opp_fear_greed < 15 and _opp_signal == "SHORT":
-                    logger.info(f"F&G NOTE: F&G={opp_fear_greed} < 15 but signals say SHORT on {opportunity['pair']}. Allowing (V3.1.88 soft bias).")
-                elif opp_fear_greed > 85 and _opp_signal == "LONG":
-                    logger.info(f"F&G NOTE: F&G={opp_fear_greed} > 85 but signals say LONG on {opportunity['pair']}. Allowing (V3.1.88 soft bias).")
+                # V3.1.88: F&G soft contrarian bias — boost contrarian direction by 10%, allow anti-contrarian
+                if opp_fear_greed < 15:
+                    if _opp_signal == "LONG":
+                        _fg_boost = round(opp_confidence * 0.10, 4)
+                        opp_confidence = min(opp_confidence + _fg_boost, 0.95)
+                        opportunity["decision"]["confidence"] = opp_confidence
+                        logger.info(f"F&G BOOST: {opportunity['pair']} LONG +{_fg_boost:.1%} (contrarian in extreme fear F&G={opp_fear_greed}) -> {opp_confidence:.0%}")
+                    elif _opp_signal == "SHORT":
+                        logger.info(f"F&G NOTE: {opportunity['pair']} SHORT in extreme fear (F&G={opp_fear_greed}). No boost, allowing.")
+                elif opp_fear_greed > 85:
+                    if _opp_signal == "SHORT":
+                        _fg_boost = round(opp_confidence * 0.10, 4)
+                        opp_confidence = min(opp_confidence + _fg_boost, 0.95)
+                        opportunity["decision"]["confidence"] = opp_confidence
+                        logger.info(f"F&G BOOST: {opportunity['pair']} SHORT +{_fg_boost:.1%} (contrarian in extreme greed F&G={opp_fear_greed}) -> {opp_confidence:.0%}")
+                    elif _opp_signal == "LONG":
+                        logger.info(f"F&G NOTE: {opportunity['pair']} LONG in extreme greed (F&G={opp_fear_greed}). No boost, allowing.")
 
                 # V3.1.75 FIX #7: Regime veto requires WHALE+FLOW agreement to override (not WHALE alone)
                 if not _regime_vetoed and _regime_label == "BEARISH" and _opp_signal == "LONG":
@@ -1235,7 +1245,7 @@ def check_trading_signals():
                         stage=f"Regime Veto: {_opp_signal} {opportunity['pair']} blocked",
                         input_data={"regime": _regime_label, "signal": _opp_signal, "pair": opportunity['pair'], "fear_greed": opp_fear_greed},
                         output_data={"action": "VETOED", "reason": f"F&G={opp_fear_greed}, regime={_regime_label}"},
-                        explanation=f"Sanity filter: blocked {_opp_signal} on {opportunity['pair']}. F&G={opp_fear_greed}, regime={_regime_label}. Contrarian logic: no shorts in capitulation, no longs in euphoria."
+                        explanation=f"Regime veto: blocked {_opp_signal} on {opportunity['pair']}. Regime={_regime_label}, F&G={opp_fear_greed}."
                     )
                     continue
 
@@ -3030,16 +3040,17 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.88 - REMOVE F&G LONG-ONLY HARD RULE + HALVE COOLDOWNS")
+    logger.info("SMT Daemon V3.1.88 - F&G SOFT BIAS + FASTER CYCLES + R:R GATE")
     logger.info("=" * 60)
     logger.info("V3.1.88 CHANGES:")
-    logger.info("  - FIX 17: Remove F&G<15 LONG-only hard rule -> soft bias")
-    logger.info("  -   Judge can now suggest SHORT in extreme fear if signals confirm")
-    logger.info("  -   FLOW SHORT signals no longer capped in capitulation")
-    logger.info("  -   Hedging re-enabled in extreme fear")
-    logger.info("  -   BTC SHORT fear shield removed")
-    logger.info("  - FIX 18: Halve post-loss cooldowns (competition mode)")
-    logger.info("  -   SL hit: 2x->1x, Force stop: 2x->1x, Early exit: 1.5x->0.75x")
+    logger.info("  - F&G soft bias: +10% contrarian boost, no hard blocks")
+    logger.info("  -   FLOW caps moderated (0.85->0.70 in extreme F&G, was 0.55)")
+    logger.info("  -   Judge prompt softened, BTC SHORT shield removed")
+    logger.info("  - Trend-adjusted MAX_TP: 1.2-2.0% based on 5-candle momentum")
+    logger.info("  - R:R gate: trades need 1.5:1 reward:risk minimum")
+    logger.info("  - Signal check: 5min (was 10min). Final week — faster cycling")
+    logger.info("  - Cooldowns halved: SL 2x->1x, force 2x->1x, early 1.5x->0.75x")
+    logger.info("  - Regime score softened: ±2 -> ±1 (F&G one input, not override)")
     logger.info("  - INHERITED: V3.1.87 regime-aware swap + V3.1.85 80% hard floor")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():

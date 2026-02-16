@@ -992,6 +992,22 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         ltf_resistances = _cluster_price_levels(raw_res_1h, entry_price, threshold_pct=0.3)
         ltf_supports = _cluster_price_levels(raw_sup_1h, entry_price, threshold_pct=0.3)
 
+        # V3.1.88: Trend-adjusted MAX_TP — shorter TP when strong recent momentum
+        # Strong moves tend to mean-revert at S/R faster. Take profits quicker.
+        try:
+            recent_closes = [float(c[4]) for c in candles_1h[:6]]  # Last 6 candles = 5-candle move
+            if len(recent_closes) >= 2:
+                _5c_return = abs((recent_closes[0] - recent_closes[-1]) / recent_closes[-1]) * 100
+                if _5c_return > 1.5:
+                    MAX_TP_PCT = 1.2
+                    print(f"  [CHART-SR] Trend-adjusted TP: 5C move {_5c_return:.1f}% -> MAX_TP=1.2%")
+                elif _5c_return > 0.8:
+                    MAX_TP_PCT = 1.5
+                    print(f"  [CHART-SR] Trend-adjusted TP: 5C move {_5c_return:.1f}% -> MAX_TP=1.5%")
+                # else: keep default 2.0%
+        except Exception:
+            pass
+
         # === MERGE: 4H levels are structural (preferred for SL), 1H fills gaps ===
         # For resistances/supports, combine both but track origin
         # 4H levels that don't overlap with 1H are "structural" — stronger
@@ -2299,26 +2315,42 @@ class FlowPersona:
             # Log for debugging
             print(f"  [FLOW] Taker ratio: {taker_ratio:.2f} | Extreme sell: {extreme_selling} | Heavy sell: {heavy_selling}")
             
-            # V3.1.88: Removed capitulation SHORT cap - trust FLOW signals regardless of F&G
-            # Previous versions capped SHORT confidence to 0.55/0.40 when F&G<15, hiding real sell pressure
+            # V3.1.88: Moderate F&G cap on FLOW signals (V3.1.75 was 0.85->0.55, now 0.85->0.70)
+            # Still allows counter-trend signals, just dampened slightly in extreme F&G
+            fg_data = get_fear_greed_index()
+            fg_val = fg_data.get("value", 50)
 
             if extreme_selling:
                 # V3.1.17: MASSIVE SELL PRESSURE - ignore depth entirely
-                signals.append(("SHORT", 0.85, f"EXTREME taker selling: {taker_ratio:.2f}"))
+                if fg_val < 15:
+                    signals.append(("SHORT", 0.70, f"EXTREME taker selling: {taker_ratio:.2f} (F&G cap: 0.85->0.70)"))
+                    print(f"  [FLOW] F&G CAP: Extreme sell 0.85->0.70 (F&G={fg_val})")
+                else:
+                    signals.append(("SHORT", 0.85, f"EXTREME taker selling: {taker_ratio:.2f}"))
                 # Don't even add depth signal - it's fake/spoofing
             elif heavy_selling:
                 # V3.1.17: Heavy selling - taker wins over depth
-                signals.append(("SHORT", 0.70, f"Heavy taker selling: {taker_ratio:.2f}"))
+                if fg_val < 15:
+                    signals.append(("SHORT", 0.55, f"Heavy taker selling: {taker_ratio:.2f} (F&G cap: 0.70->0.55)"))
+                    print(f"  [FLOW] F&G CAP: Heavy sell 0.70->0.55 (F&G={fg_val})")
+                else:
+                    signals.append(("SHORT", 0.70, f"Heavy taker selling: {taker_ratio:.2f}"))
                 # Depth signal at reduced weight
                 if depth["ask_strength"] > 1.3:
                     signals.append(("SHORT", 0.3, "Ask depth confirms"))
                 # IGNORE bid depth when heavy selling
             elif extreme_buying:
-                # V3.1.88: Removed euphoria LONG cap - trust FLOW signals regardless of F&G
-                signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
+                if fg_val > 85:
+                    signals.append(("LONG", 0.70, f"EXTREME taker buying: {taker_ratio:.2f} (F&G cap: 0.85->0.70)"))
+                    print(f"  [FLOW] F&G CAP: Extreme buy 0.85->0.70 (F&G={fg_val})")
+                else:
+                    signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
             elif heavy_buying:
-                # V3.1.88: Removed euphoria LONG cap
-                signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
+                if fg_val > 85:
+                    signals.append(("LONG", 0.55, f"Heavy taker buying: {taker_ratio:.2f} (F&G cap: 0.70->0.55)"))
+                    print(f"  [FLOW] F&G CAP: Heavy buy 0.70->0.55 (F&G={fg_val})")
+                else:
+                    signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
                 if depth["bid_strength"] > 1.3:
                     signals.append(("LONG", 0.3, "Bid depth confirms"))
             else:
@@ -3598,7 +3630,19 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     except Exception:
         pass
 
-    print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | Method: {chart_sr['method']}")
+    # V3.1.88: R:R gate — reject trades with reward:risk < 1.5:1
+    _rr_ratio = tp_pct_raw / sl_pct_raw if sl_pct_raw > 0 else 0
+    if _rr_ratio < 1.5:
+        print(f"  [R:R GATE] REJECTED: TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}% = {_rr_ratio:.2f}:1 (need 1.5:1)")
+        upload_ai_log_to_weex(
+            stage=f"R:R Gate: {symbol} rejected",
+            input_data={"tp_pct": tp_pct_raw, "sl_pct": sl_pct_raw, "rr_ratio": round(_rr_ratio, 2)},
+            output_data={"action": "REJECTED", "reason": "R:R too low"},
+            explanation=f"Trade rejected: TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}% = {_rr_ratio:.2f}:1. Minimum 1.5:1 R:R required."
+        )
+        return {"executed": False, "reason": f"R:R too low: {_rr_ratio:.2f}:1 (TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}%)"}
+
+    print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | R:R {_rr_ratio:.1f}:1 | Method: {chart_sr['method']}")
     
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
     # Orphan TP/SL triggers from previous trades block leverage changes on WEEX.
