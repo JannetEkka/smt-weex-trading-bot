@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.82 - SLOT SWAP + PM COMPETITION MODE + sync debug
+SMT Trading Daemon V3.1.90 - COMPETITION PUSH: 25% base margin (was 12%)
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
