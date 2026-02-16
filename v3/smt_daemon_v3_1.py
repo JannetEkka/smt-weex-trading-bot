@@ -640,6 +640,9 @@ def check_trading_signals():
                 logger.info(f"CAPITULATION: F&G={_fg_value} < 15, hedging DISABLED (pick a side)")
         except:
             pass
+        # V3.1.88: Always log F&G in cycle header for observability
+        _fg_label = "EXTREME FEAR" if _fg_value < 20 else "FEAR" if _fg_value < 40 else "NEUTRAL" if _fg_value < 60 else "GREED" if _fg_value < 80 else "EXTREME GREED"
+        logger.info(f"F&G: {_fg_value} ({_fg_label}) | Slots: {weex_position_count}/{effective_max_positions}")
         
         # Build map: symbol -> {side: position}
         # This tracks BOTH long and short for each symbol
@@ -652,6 +655,11 @@ def check_trading_signals():
             position_map[symbol][side] = pos
         
         # ANALYZE ALL PAIRS
+        # V3.1.88: Cycle stats counters for end-of-cycle summary
+        _cycle_signals = 0       # Pairs that returned LONG/SHORT (any confidence)
+        _cycle_above_80 = 0      # Signals at 80%+ (tradeable)
+        _cycle_blocked = 0       # Blocked by cooldown/blacklist/loss-streak
+        _cycle_wait = 0          # Analyzer returned WAIT
         for pair, pair_info in TRADING_PAIRS.items():
             symbol = pair_info["symbol"]
             tier = pair_info.get("tier", 2)
@@ -695,6 +703,19 @@ def check_trading_signals():
                 
                 status_str = f" [{', '.join(status_parts)}]" if status_parts else ""
                 logger.info(f"  {pair} (T{tier}): {signal} ({confidence:.0%}){status_str}")
+
+                # V3.1.88: Log WHY signal is WAIT (from analyzer) for observability
+                if signal == "WAIT" and confidence == 0:
+                    _cycle_wait += 1
+                    _raw_reason = decision.get("reasoning", "")[:80]
+                    if _raw_reason:
+                        logger.info(f"    -> reason: {_raw_reason}")
+                elif signal in ("LONG", "SHORT") and confidence < 0.80:
+                    _cycle_signals += 1
+                    logger.info(f"    -> below 80% floor ({confidence:.0%})")
+                elif signal in ("LONG", "SHORT") and confidence >= 0.80:
+                    _cycle_signals += 1
+                    _cycle_above_80 += 1
 
                 # V3.1.74: EXTREME FEAR BTC SHIELD - BTC is too slow for shorts in fear bounces
                 # F&G < 20 = contrarian BUY signal. BTC shorts at 20x leverage lose on fear bounces.
@@ -770,6 +791,7 @@ def check_trading_signals():
                         _bl_remaining = tracker.get_blacklist_remaining(symbol)
                         _block_reason.append(f"blacklisted {_bl_remaining:.1f}h")
                     logger.info(f"    -> BLOCKED: {', '.join(_block_reason)}")
+                    _cycle_blocked += 1
                     signal = "WAIT"
                     confidence = 0
 
@@ -807,6 +829,12 @@ def check_trading_signals():
                                 can_trade_this = True
                                 trade_type = "slot_swap"
                                 logger.info(f"    -> SLOT SWAP: {confidence:.0%} signal, closing weak {_weakest['symbol'].replace('cmt_','').upper()} ({_weakest['pnl_pct']:+.2f}%) to free slot")
+                            else:
+                                # V3.1.88: Log when swap qualified but no weak target found
+                                logger.info(f"    -> NO SWAP TARGET: {confidence:.0%} qualifies but no position weak enough to swap")
+                        elif not can_open_new:
+                            # V3.1.88: Log when slots full and signal too weak for swap
+                            logger.info(f"    -> SLOTS FULL: {confidence:.0%} < 83% swap threshold ({weex_position_count}/{effective_max_positions})")
 
                 elif signal == "SHORT":
                     if has_short:
@@ -838,6 +866,12 @@ def check_trading_signals():
                                 can_trade_this = True
                                 trade_type = "slot_swap"
                                 logger.info(f"    -> SLOT SWAP: {confidence:.0%} signal, closing weak {_weakest['symbol'].replace('cmt_','').upper()} ({_weakest['pnl_pct']:+.2f}%) to free slot")
+                            else:
+                                # V3.1.88: Log when swap qualified but no weak target found
+                                logger.info(f"    -> NO SWAP TARGET: {confidence:.0%} qualifies but no position weak enough to swap")
+                        elif not can_open_new:
+                            # V3.1.88: Log when slots full and signal too weak for swap
+                            logger.info(f"    -> SLOTS FULL: {confidence:.0%} < 83% swap threshold ({weex_position_count}/{effective_max_positions})")
 
                 # Build comprehensive vote details with FULL reasoning
                 vote_details = []
@@ -1423,7 +1457,10 @@ def check_trading_signals():
                 logger.info(f"Executed {trades_executed} trades this cycle")
         else:
             logger.info(f"")
-            logger.info("No trade opportunities")        
+            logger.info("No trade opportunities")
+        # V3.1.88: Cycle-end summary for observability
+        _opp_count = len(trade_opportunities) if trade_opportunities else 0
+        logger.info(f"--- Cycle summary: {_cycle_signals} signals ({_cycle_above_80} at 80%+), {_cycle_wait} WAIT, {_cycle_blocked} blocked, {_opp_count} opportunities ---")
         save_local_log(ai_log, run_timestamp)
         
     except Exception as e:
@@ -2094,6 +2131,10 @@ def gemini_portfolio_review():
             explanation=f"Portfolio Manager reviewing {len(positions)} positions. Equity: ${equity:.0f}. {cryptoracle_context[:150]}"
         )
         
+        # V3.1.88: Compute slot info locally for PM prompt (was referencing check_trading_signals locals)
+        weex_position_count = len(positions)
+        effective_max_positions = get_max_positions_for_equity(equity)
+
         prompt = f"""You are the AI Portfolio Manager for a crypto futures trading bot in a LIVE competition with REAL money.
 Your job is DISCIPLINED portfolio management. Apply the rules strictly and without emotion.
 - Let WINNERS run to their TP targets. Do NOT close winning positions early.
@@ -3039,15 +3080,15 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.87 - REGIME-AWARE SWAP GATE")
+    logger.info("SMT Daemon V3.1.88 - DAEMON OBSERVABILITY")
     logger.info("=" * 60)
-    logger.info("V3.1.87 CHANGES (REGIME-AWARE SWAP GATE):")
-    logger.info("  - FIX 16: Swap PnL threshold adapts to market regime")
-    logger.info("  -   Normal (F&G >= 20): -0.5% (don't kill recovering positions)")
-    logger.info("  -   Capitulation (F&G < 20): -0.25% (opportunity cost > swap cost)")
-    logger.info("  -   Stops 12h lockouts from weak LONGs blocking stronger signals")
-    logger.info("  - INHERITED: V3.1.86 MTF TP/SL + V3.1.85 80% hard floor")
-    logger.info("  - COMPETITION: 7 days left, maximize slot efficiency")
+    logger.info("V3.1.88 CHANGES (DAEMON OBSERVABILITY):")
+    logger.info("  - FIX 17: F&G value + regime label logged every signal cycle")
+    logger.info("  - FIX 17: WAIT reason logged per pair (from analyzer reasoning)")
+    logger.info("  - FIX 17: below-80% signals flagged explicitly")
+    logger.info("  - FIX 17: SLOTS FULL / NO SWAP TARGET logged when swap blocked")
+    logger.info("  - FIX 17: Cycle-end summary (signals/blocked/opportunities)")
+    logger.info("  - INHERITED: V3.1.87 regime-aware swap gate + V3.1.85 80% floor")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
@@ -3057,7 +3098,7 @@ def run_daemon():
         logger.info(f"  Tier {tier}: {', '.join(pairs)}")
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     logger.info("Cooldowns: ENFORCED (V3.1.81) + blacklist after force_stop")
-    logger.info("Slot Swap: ENABLED (V3.1.87) - 83% min conf, 45min age, regime-aware PnL gate")
+    logger.info("Slot Swap: ENABLED (V3.1.88) - 83% min conf, 45min age, regime-aware PnL gate")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
