@@ -3299,25 +3299,39 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         sl_pct_raw = tier_config["sl_pct"]
         print(f"  [ATR-SL] Error ({e}), using tier SL: {sl_pct_raw}%")
     
-    # V3.1.82: F&G TP SCALING RE-ENABLED (was removed in V3.1.78 along with broken R:R floor).
-    # At F&G=12 we need wider TPs — fear bounces are violent, 3.5% leaves money on the table.
-    # Competition needs every % — $770/win at 5.25% vs $513/win at 3.5%.
+    # V3.1.83: COMPETITION TP FIX — never widen TPs during competition.
+    # Previous x1.5 scaling at F&G<15 pushed TPs to 4.5% which rarely hits in fear markets.
+    # Compounding needs TURNOVER: 3% TP hits 2-3x more often than 4.5%, more wins = faster growth.
+    # $3,870 -> $20k needs ~6 perfect cycles. Tighter TPs = more cycles per day.
     tp_pct_raw = tier_config["tp_pct"]
     try:
         _fg_regime = REGIME_CACHE.get("regime", 300)
         _fg_val = _fg_regime.get("fear_greed", 50) if _fg_regime else 50
-        if _fg_val < 15:
-            tp_pct_raw = round(tp_pct_raw * 1.5, 2)
-            print(f"  [TP-SCALE] CAPITULATION F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x1.5)")
-        elif _fg_val < 30:
-            tp_pct_raw = round(tp_pct_raw * 1.25, 2)
-            print(f"  [TP-SCALE] FEAR F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x1.25)")
-        elif _fg_val > 80:
-            tp_pct_raw = round(tp_pct_raw * 0.50, 2)
-            print(f"  [TP-SCALE] EXTREME GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.5)")
-        elif _fg_val > 60:
-            tp_pct_raw = round(tp_pct_raw * 0.65, 2)
-            print(f"  [TP-SCALE] GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.65)")
+        _in_competition = COMPETITION_START <= datetime.now(timezone.utc) <= COMPETITION_END
+        if _in_competition:
+            # Competition: NEVER widen TPs. Only tighten in greed.
+            if _fg_val > 80:
+                tp_pct_raw = round(tp_pct_raw * 0.50, 2)
+                print(f"  [TP-SCALE] COMP+EXTREME GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.5)")
+            elif _fg_val > 60:
+                tp_pct_raw = round(tp_pct_raw * 0.65, 2)
+                print(f"  [TP-SCALE] COMP+GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.65)")
+            else:
+                print(f"  [TP-SCALE] COMPETITION: TP {tp_pct_raw}% (base, no F&G widening)")
+        else:
+            # Normal (non-competition): full F&G scaling
+            if _fg_val < 15:
+                tp_pct_raw = round(tp_pct_raw * 1.5, 2)
+                print(f"  [TP-SCALE] CAPITULATION F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x1.5)")
+            elif _fg_val < 30:
+                tp_pct_raw = round(tp_pct_raw * 1.25, 2)
+                print(f"  [TP-SCALE] FEAR F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x1.25)")
+            elif _fg_val > 80:
+                tp_pct_raw = round(tp_pct_raw * 0.50, 2)
+                print(f"  [TP-SCALE] EXTREME GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.5)")
+            elif _fg_val > 60:
+                tp_pct_raw = round(tp_pct_raw * 0.65, 2)
+                print(f"  [TP-SCALE] GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.65)")
     except Exception:
         pass  # Keep base tier TP on error
     print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% (Tier {tier})")
@@ -3332,8 +3346,17 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         tp_price = current_price * (1 - tp_pct)
         sl_price = current_price * (1 + sl_pct)
     
+    # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
+    # Orphan TP/SL triggers from previous trades block leverage changes on WEEX.
+    try:
+        _pre_cleanup = cancel_all_orders_for_symbol(symbol)
+        if _pre_cleanup.get("cancelled"):
+            print(f"  [PRE-TRADE] Cancelled {len(_pre_cleanup['cancelled'])} orphan orders on {symbol}")
+    except Exception:
+        pass
+
     set_leverage(symbol, safe_leverage)
-    
+
     print(f"  [TRADE] {signal} {symbol}: {size} @ ${current_price:.4f}")
     print(f"  [TRADE] Tier {tier} ({tier_config['name']}): TP ${tp_price:.4f} ({tp_pct*100:.1f}%), SL ${sl_price:.4f} ({sl_pct*100:.1f}%)")
     
@@ -3729,6 +3752,17 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
 
 
 def close_position_manually(symbol: str, side: str, size: float) -> Dict:
+    # V3.1.83: ALWAYS cancel trigger orders (TP/SL) BEFORE closing position.
+    # Without this, orphan triggers persist on WEEX after close, causing:
+    #   1. Leverage set failures on next trade ("open orders" blocking)
+    #   2. Old SL triggers executing at wrong prices on new positions
+    #   3. Ghost TP/SL from previous trades interfering with current ones
+    try:
+        cleanup = cancel_all_orders_for_symbol(symbol)
+        if cleanup.get("cancelled"):
+            print(f"  [CLOSE] Cancelled {len(cleanup['cancelled'])} orphan orders for {symbol} before closing")
+    except Exception as e:
+        print(f"  [CLOSE] Warning: trigger cleanup failed for {symbol}: {e}")
     close_type = "3" if side == "LONG" else "4"
     return place_order(symbol, close_type, size)
 
