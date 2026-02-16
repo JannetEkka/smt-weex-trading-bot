@@ -863,6 +863,204 @@ def detect_sideways_market(symbol: str) -> dict:
     return result
 
 
+# ============================================================
+# V3.1.84: CHART-BASED TP/SL (Support/Resistance)
+# ============================================================
+# Instead of fixed % TP/SL, analyze actual candle swing highs/lows
+# to find real support/resistance levels - like a human looking at a chart.
+# Competition bounds: TP 0.8-2.0%, SL 0.5-2.0% for fast turnover.
+
+_sr_cache = {}
+_sr_cache_time = 0
+
+def _cluster_price_levels(levels: list, ref_price: float, threshold_pct: float = 0.3) -> list:
+    """Cluster nearby price levels (within threshold_pct of each other).
+    Returns the average of each cluster - merges S/R zones."""
+    if not levels:
+        return []
+    sorted_levels = sorted(levels)
+    clusters = []
+    current_cluster = [sorted_levels[0]]
+    for i in range(1, len(sorted_levels)):
+        pct_diff = abs(sorted_levels[i] - current_cluster[-1]) / ref_price * 100
+        if pct_diff <= threshold_pct:
+            current_cluster.append(sorted_levels[i])
+        else:
+            clusters.append(sum(current_cluster) / len(current_cluster))
+            current_cluster = [sorted_levels[i]]
+    clusters.append(sum(current_cluster) / len(current_cluster))
+    return clusters
+
+
+def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict:
+    """V3.1.84: Chart-based TP/SL using support/resistance from swing highs/lows.
+
+    Like a human trader looking at a 1H chart:
+    1. Find swing highs (resistance) and swing lows (support) from recent candles
+    2. For LONG: TP at nearest resistance above entry, SL below nearest support
+    3. For SHORT: TP at nearest support below entry, SL above nearest resistance
+    4. Apply competition bounds to ensure fast turnover
+
+    Returns dict with tp_pct, sl_pct, method ("chart" or "fallback"), levels found.
+    """
+    global _sr_cache, _sr_cache_time
+
+    # Cache for 10 minutes
+    now = time.time()
+    cache_key = f"{symbol}_{signal}"
+    if now - _sr_cache_time < 600 and cache_key in _sr_cache:
+        cached = _sr_cache[cache_key]
+        # Recalculate pcts for current entry price (may differ from cached)
+        if cached.get("method") == "chart":
+            return cached
+
+    if now - _sr_cache_time >= 600:
+        _sr_cache = {}
+        _sr_cache_time = now
+
+    result = {
+        "tp_pct": None, "sl_pct": None,
+        "tp_price": None, "sl_price": None,
+        "method": "fallback",
+        "levels": {"resistances": [], "supports": []}
+    }
+
+    # Competition bounds - tight for fast turnover
+    MIN_TP_PCT = 0.8   # Min 0.8% TP (covers fees at 20x + profit)
+    MAX_TP_PCT = 2.0   # Max 2.0% TP (competition: faster cycles)
+    MIN_SL_PCT = 0.5   # Min 0.5% SL (too tight = noise stops)
+    MAX_SL_PCT = 2.0   # Max 2.0% SL (max risk per trade)
+
+    try:
+        # Fetch 1H candles for S/R detection (50 candles = ~2 days)
+        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1h&limit=50"
+        r = requests.get(url, timeout=10)
+        candles = r.json()
+
+        if not isinstance(candles, list) or len(candles) < 20:
+            print(f"  [CHART-SR] {symbol}: Insufficient candle data ({len(candles) if isinstance(candles, list) else 0})")
+            return result
+
+        highs = [float(c[2]) for c in candles]
+        lows = [float(c[3]) for c in candles]
+        closes = [float(c[4]) for c in candles]
+
+        # --- SWING HIGH detection (pivot highs = resistance) ---
+        # A swing high: high[i] > high of 2 candles on each side
+        raw_resistances = []
+        for i in range(2, len(candles) - 2):
+            if (highs[i] > highs[i-1] and highs[i] > highs[i+1] and
+                highs[i] > highs[i-2] and highs[i] > highs[i+2]):
+                raw_resistances.append(highs[i])
+
+        # --- SWING LOW detection (pivot lows = support) ---
+        raw_supports = []
+        for i in range(2, len(candles) - 2):
+            if (lows[i] < lows[i-1] and lows[i] < lows[i+1] and
+                lows[i] < lows[i-2] and lows[i] < lows[i+2]):
+                raw_supports.append(lows[i])
+
+        # Add recent 12-candle extremes as additional S/R
+        recent_high = max(highs[:12])
+        recent_low = min(lows[:12])
+        raw_resistances.append(recent_high)
+        raw_supports.append(recent_low)
+
+        # Cluster nearby levels (within 0.3% = same zone)
+        resistances = _cluster_price_levels(raw_resistances, entry_price, threshold_pct=0.3)
+        supports = _cluster_price_levels(raw_supports, entry_price, threshold_pct=0.3)
+
+        result["levels"]["resistances"] = [round(r, 8) for r in sorted(resistances)]
+        result["levels"]["supports"] = [round(s, 8) for s in sorted(supports, reverse=True)]
+
+        tp_found = False
+        sl_found = False
+
+        if signal == "LONG":
+            # TP: nearest resistance ABOVE entry (with min buffer)
+            tp_candidates = [r for r in resistances if r > entry_price * (1 + MIN_TP_PCT / 100)]
+            if tp_candidates:
+                tp_price = min(tp_candidates)  # Nearest resistance
+                tp_pct = ((tp_price - entry_price) / entry_price) * 100
+                # Place TP slightly below resistance (95% of the way)
+                tp_pct = tp_pct * 0.95
+                tp_pct = max(tp_pct, MIN_TP_PCT)
+                tp_pct = min(tp_pct, MAX_TP_PCT)
+                result["tp_pct"] = round(tp_pct, 2)
+                result["tp_price"] = round(entry_price * (1 + tp_pct / 100), 8)
+                tp_found = True
+
+            # SL: nearest support BELOW entry (with min buffer)
+            sl_candidates = [s for s in supports if s < entry_price * (1 - MIN_SL_PCT / 100)]
+            if sl_candidates:
+                sl_price = max(sl_candidates)  # Nearest support
+                sl_pct = ((entry_price - sl_price) / entry_price) * 100
+                # Place SL slightly below support (105% of the distance)
+                sl_pct = sl_pct * 1.05
+                sl_pct = max(sl_pct, MIN_SL_PCT)
+                sl_pct = min(sl_pct, MAX_SL_PCT)
+                result["sl_pct"] = round(sl_pct, 2)
+                result["sl_price"] = round(entry_price * (1 - sl_pct / 100), 8)
+                sl_found = True
+
+        elif signal == "SHORT":
+            # TP: nearest support BELOW entry
+            tp_candidates = [s for s in supports if s < entry_price * (1 - MIN_TP_PCT / 100)]
+            if tp_candidates:
+                tp_price = max(tp_candidates)  # Nearest support
+                tp_pct = ((entry_price - tp_price) / entry_price) * 100
+                tp_pct = tp_pct * 0.95
+                tp_pct = max(tp_pct, MIN_TP_PCT)
+                tp_pct = min(tp_pct, MAX_TP_PCT)
+                result["tp_pct"] = round(tp_pct, 2)
+                result["tp_price"] = round(entry_price * (1 - tp_pct / 100), 8)
+                tp_found = True
+
+            # SL: nearest resistance ABOVE entry
+            sl_candidates = [r for r in resistances if r > entry_price * (1 + MIN_SL_PCT / 100)]
+            if sl_candidates:
+                sl_price = min(sl_candidates)  # Nearest resistance
+                sl_pct = ((sl_price - entry_price) / entry_price) * 100
+                sl_pct = sl_pct * 1.05
+                sl_pct = max(sl_pct, MIN_SL_PCT)
+                sl_pct = min(sl_pct, MAX_SL_PCT)
+                result["sl_pct"] = round(sl_pct, 2)
+                result["sl_price"] = round(entry_price * (1 + sl_pct / 100), 8)
+                sl_found = True
+
+        if tp_found and sl_found:
+            result["method"] = "chart"
+            print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} {signal}: "
+                  f"TP {result['tp_pct']:.2f}% (${result['tp_price']:.4f}), "
+                  f"SL {result['sl_pct']:.2f}% (${result['sl_price']:.4f}) "
+                  f"| R: {len(resistances)} levels, S: {len(supports)} levels")
+        elif tp_found:
+            print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()}: TP found ({result['tp_pct']:.2f}%), SL fallback")
+        elif sl_found:
+            print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()}: SL found ({result['sl_pct']:.2f}%), TP fallback")
+        else:
+            print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()}: No clear S/R, using fallback "
+                  f"| R: {len(resistances)} levels, S: {len(supports)} levels")
+
+    except Exception as e:
+        print(f"  [CHART-SR] Error for {symbol}: {e}")
+
+    _sr_cache[cache_key] = result
+    return result
+
+
+# V3.1.84: Competition fallback TPs (tighter than base for fast turnover)
+COMPETITION_FALLBACK_TP = {
+    1: 1.5,   # Tier 1 (ETH, BNB): 3.0% → 1.5%
+    2: 1.8,   # Tier 2 (BTC, LTC, XRP): 3.5% → 1.8%
+    3: 1.5,   # Tier 3 (SOL, DOGE, ADA): 3.0% → 1.5%
+}
+COMPETITION_FALLBACK_SL = {
+    1: 1.2,   # Tier 1: 1.5% → 1.2%
+    2: 1.2,   # Tier 2: 1.5% → 1.2%
+    3: 1.5,   # Tier 3: 1.8% → 1.5%
+}
+
 
 def detect_whale_absorption(whale_vote: dict, flow_vote: dict, regime: dict) -> dict:
     """
@@ -1227,8 +1425,8 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.1.78-OptionA-EquityTiered"
-MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.78"
+PIPELINE_VERSION = "SMT-v3.1.84-ChartTP-CompetitionMode"
+MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.84"
 
 # Known step sizes
 KNOWN_STEP_SIZES = {
@@ -3273,78 +3471,89 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     
     order_type = "1" if signal == "LONG" else "2"
     
-    # V3.1.51: ATR-based dynamic SL + REGIME-SCALED TP
-    # SL: ATR-driven (volatility-aware). TP: Tier config scaled by Fear & Greed.
-    # F&G < 15 (capitulation): TP * 1.5 (bounces are violent, 12% on T1)
-    # F&G < 30 (fear): TP * 1.25 (wider TP, fear entries are strong)
-    # F&G > 60 (greed): TP * 0.65 (take profits faster in greed)
-    # F&G > 80 (extreme greed): TP * 0.50 (aggressive profit taking)
-    try:
-        atr_data = get_pair_atr(symbol)  # V3.1.77: Per-pair ATR (was BTC-only)
-        atr_pct = atr_data.get("atr_pct", 0)
-        if atr_pct > 0:
-            dynamic_sl = round(atr_pct * 1.5, 2)  # V3.1.77: 1.5x ATR (was 1.2x, too tight = noise stop-outs)
-            tier_floor_sl = tier_config["sl_pct"]
-            sl_pct_raw = max(dynamic_sl, tier_floor_sl)
-            # V3.1.81: Cap SL at force_exit level so exchange SL actually protects you.
-            # Previously: 6% cap in fear = 120% margin loss at 20x. That's catastrophic.
-            # Now: SL capped at the daemon's force_exit_loss_pct (2%) so the exchange SL
-            # triggers BEFORE the daemon force_stop, making exchange SL the real safety net.
-            _force_exit_sl = abs(tier_config.get("force_exit_loss_pct", -2.0))
-            _sl_cap = min(_force_exit_sl + 0.5, 3.0)  # force_exit + 0.5% buffer, max 3%
-            sl_pct_raw = min(sl_pct_raw, _sl_cap)
-        else:
-            sl_pct_raw = tier_config["sl_pct"]
-    except Exception as e:
-        sl_pct_raw = tier_config["sl_pct"]
-        print(f"  [ATR-SL] Error ({e}), using tier SL: {sl_pct_raw}%")
-    
-    # V3.1.83: COMPETITION TP FIX — never widen TPs during competition.
-    # Previous x1.5 scaling at F&G<15 pushed TPs to 4.5% which rarely hits in fear markets.
-    # Compounding needs TURNOVER: 3% TP hits 2-3x more often than 4.5%, more wins = faster growth.
-    # $3,870 -> $20k needs ~6 perfect cycles. Tighter TPs = more cycles per day.
-    tp_pct_raw = tier_config["tp_pct"]
-    try:
-        _fg_regime = REGIME_CACHE.get("regime", 300)
-        _fg_val = _fg_regime.get("fear_greed", 50) if _fg_regime else 50
-        _in_competition = COMPETITION_START <= datetime.now(timezone.utc) <= COMPETITION_END
-        if _in_competition:
-            # Competition: NEVER widen TPs. Only tighten in greed.
-            if _fg_val > 80:
-                tp_pct_raw = round(tp_pct_raw * 0.50, 2)
-                print(f"  [TP-SCALE] COMP+EXTREME GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.5)")
-            elif _fg_val > 60:
-                tp_pct_raw = round(tp_pct_raw * 0.65, 2)
-                print(f"  [TP-SCALE] COMP+GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.65)")
-            else:
-                print(f"  [TP-SCALE] COMPETITION: TP {tp_pct_raw}% (base, no F&G widening)")
-        else:
-            # Normal (non-competition): full F&G scaling
-            if _fg_val < 15:
-                tp_pct_raw = round(tp_pct_raw * 1.5, 2)
-                print(f"  [TP-SCALE] CAPITULATION F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x1.5)")
-            elif _fg_val < 30:
-                tp_pct_raw = round(tp_pct_raw * 1.25, 2)
-                print(f"  [TP-SCALE] FEAR F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x1.25)")
-            elif _fg_val > 80:
-                tp_pct_raw = round(tp_pct_raw * 0.50, 2)
-                print(f"  [TP-SCALE] EXTREME GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.5)")
-            elif _fg_val > 60:
-                tp_pct_raw = round(tp_pct_raw * 0.65, 2)
-                print(f"  [TP-SCALE] GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.65)")
-    except Exception:
-        pass  # Keep base tier TP on error
-    print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% (Tier {tier})")
-    
-    tp_pct = tp_pct_raw / 100
-    sl_pct = sl_pct_raw / 100
-    
-    if signal == "LONG":
-        tp_price = current_price * (1 + tp_pct)
-        sl_price = current_price * (1 - sl_pct)
+    # V3.1.84: CHART-BASED TP/SL (replaces fixed % approach)
+    # Step 1: Try chart-based S/R levels (like a human trader)
+    # Step 2: If chart fails, use competition fallback (tighter than old base)
+    # Step 3: ATR only used as SL safety net, not primary
+    _in_competition = COMPETITION_START <= datetime.now(timezone.utc) <= COMPETITION_END
+
+    chart_sr = find_chart_based_tp_sl(symbol, signal, current_price)
+
+    if chart_sr["method"] == "chart" and chart_sr["tp_pct"] and chart_sr["sl_pct"]:
+        # CHART-BASED: Real S/R levels from candle swing highs/lows
+        tp_pct_raw = chart_sr["tp_pct"]
+        sl_pct_raw = chart_sr["sl_pct"]
+        tp_price = chart_sr["tp_price"]
+        sl_price = chart_sr["sl_price"]
+        tp_pct = tp_pct_raw / 100
+        sl_pct = sl_pct_raw / 100
+        print(f"  [TP/SL] CHART-BASED: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
     else:
-        tp_price = current_price * (1 - tp_pct)
-        sl_price = current_price * (1 + sl_pct)
+        # FALLBACK: Use competition-tightened percentages (NOT the old wide 3.0-3.5%)
+        if _in_competition:
+            tp_pct_raw = COMPETITION_FALLBACK_TP.get(tier, 1.5)
+            sl_pct_raw = COMPETITION_FALLBACK_SL.get(tier, 1.2)
+            print(f"  [TP/SL] COMP FALLBACK: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
+        else:
+            # Normal mode: use old tier-based approach with ATR SL
+            tp_pct_raw = tier_config["tp_pct"]
+            sl_pct_raw = tier_config["sl_pct"]
+            try:
+                atr_data = get_pair_atr(symbol)
+                atr_pct = atr_data.get("atr_pct", 0)
+                if atr_pct > 0:
+                    dynamic_sl = round(atr_pct * 1.5, 2)
+                    sl_pct_raw = max(dynamic_sl, tier_config["sl_pct"])
+                    _force_exit_sl = abs(tier_config.get("force_exit_loss_pct", -2.0))
+                    _sl_cap = min(_force_exit_sl + 0.5, 3.0)
+                    sl_pct_raw = min(sl_pct_raw, _sl_cap)
+            except Exception:
+                pass
+            # F&G scaling (non-competition only)
+            try:
+                _fg_regime = REGIME_CACHE.get("regime", 300)
+                _fg_val = _fg_regime.get("fear_greed", 50) if _fg_regime else 50
+                if _fg_val < 15:
+                    tp_pct_raw = round(tp_pct_raw * 1.5, 2)
+                elif _fg_val < 30:
+                    tp_pct_raw = round(tp_pct_raw * 1.25, 2)
+                elif _fg_val > 80:
+                    tp_pct_raw = round(tp_pct_raw * 0.50, 2)
+                elif _fg_val > 60:
+                    tp_pct_raw = round(tp_pct_raw * 0.65, 2)
+            except Exception:
+                pass
+            print(f"  [TP/SL] NORMAL FALLBACK: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
+
+        # Calculate TP/SL prices from percentages (only if not set by chart)
+        tp_pct = tp_pct_raw / 100
+        sl_pct = sl_pct_raw / 100
+        if signal == "LONG":
+            tp_price = current_price * (1 + tp_pct)
+            sl_price = current_price * (1 - sl_pct)
+        else:
+            tp_price = current_price * (1 - tp_pct)
+            sl_price = current_price * (1 + sl_pct)
+
+    # V3.1.84: ATR safety net - if chart SL is tighter than 0.5x ATR, widen it
+    # Prevents noise stop-outs on volatile pairs even with chart-based SL
+    try:
+        _atr_check = get_pair_atr(symbol)
+        _atr_pct_check = _atr_check.get("atr_pct", 0)
+        if _atr_pct_check > 0:
+            _min_atr_sl = round(_atr_pct_check * 0.8, 2)  # At least 0.8x ATR
+            if sl_pct_raw < _min_atr_sl and _min_atr_sl <= 2.0:
+                print(f"  [ATR-SAFETY] SL {sl_pct_raw:.2f}% < 0.8x ATR ({_min_atr_sl:.2f}%), widening to {_min_atr_sl:.2f}%")
+                sl_pct_raw = _min_atr_sl
+                sl_pct = sl_pct_raw / 100
+                if signal == "LONG":
+                    sl_price = current_price * (1 - sl_pct)
+                else:
+                    sl_price = current_price * (1 + sl_pct)
+    except Exception:
+        pass
+
+    print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | Method: {chart_sr['method']}")
     
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
     # Orphan TP/SL triggers from previous trades block leverage changes on WEEX.

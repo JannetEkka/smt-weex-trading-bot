@@ -164,7 +164,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # ============================================================
 
 # Timing
-SIGNAL_CHECK_INTERVAL = 15 * 60  # V3.1.34: 15 min - catch moves earlier
+SIGNAL_CHECK_INTERVAL = 10 * 60  # V3.1.84: 10 min (was 15). Competition needs faster turnover.
 POSITION_MONITOR_INTERVAL = 2 * 60  # 2 minutes (check more often for tier 3)
 HEALTH_CHECK_INTERVAL = 60
 CLEANUP_CHECK_INTERVAL = 30
@@ -442,13 +442,20 @@ def run_with_retry(func, *args, max_retries=MAX_RETRIES, **kwargs):
 # ============================================================
 
 def _find_weakest_position(open_positions, new_symbol, position_map):
-    """V3.1.82: Find the weakest position that can be swapped out for a stronger signal.
+    """V3.1.84: Find the weakest position that can be swapped out for a stronger signal.
 
     Returns dict with position info if a viable swap target exists, None otherwise.
-    Criteria: position PnL < +0.5% AND declining (not the same symbol as new signal).
+
+    V3.1.84 CHANGES (STOP BURNING MONEY ON SWAPS):
+    - Require PnL < -0.5% (was < +0.5%). Don't kill barely-negative positions.
+    - Require position age >= 45 minutes. Young trades haven't had time to develop.
+    - The old logic swapped -0.18% BTC after 20min for -$25.9 loss + fees. Never again.
     """
     weakest = None
     weakest_pnl_pct = 999
+    now_ms = int(time.time() * 1000)
+    MIN_AGE_MS = 45 * 60 * 1000  # 45 minutes minimum before eligible for swap
+    MIN_PNL_FOR_SWAP = -0.5      # Must be losing at least -0.5% to be swappable
 
     for pos in open_positions:
         pos_symbol = pos.get("symbol", "")
@@ -461,17 +468,28 @@ def _find_weakest_position(open_positions, new_symbol, position_map):
         if pos_symbol == new_symbol:
             continue
 
+        # V3.1.84: Check position age - don't swap young positions
+        pos_ctime = pos.get("ctime", "")
+        if pos_ctime:
+            try:
+                age_ms = now_ms - int(pos_ctime)
+                if age_ms < MIN_AGE_MS:
+                    age_min = age_ms / 60000
+                    logger.debug(f"  [SWAP] Skip {pos_symbol}: too young ({age_min:.0f}min < 45min)")
+                    continue
+            except (ValueError, TypeError):
+                pass  # If ctime parse fails, allow swap (conservative)
+
         # Calculate PnL %
         if pos_entry > 0 and pos_size > 0:
-            margin = float(pos.get("margin", 0))
-            # PnL % relative to position value (entry_price * size = notional)
             notional = pos_entry * pos_size
             pnl_pct = (pos_upnl / notional) * 100 if notional > 0 else 0
         else:
             pnl_pct = 0
 
-        # Only consider positions with PnL < +0.5% (near breakeven or losing)
-        if pnl_pct < 0.5 and pnl_pct < weakest_pnl_pct:
+        # V3.1.84: Only consider positions meaningfully losing (< -0.5%)
+        # Was: < +0.5% which killed barely-negative positions for no reason
+        if pnl_pct < MIN_PNL_FOR_SWAP and pnl_pct < weakest_pnl_pct:
             weakest_pnl_pct = pnl_pct
             weakest = {
                 "symbol": pos_symbol,
@@ -773,8 +791,8 @@ def check_trading_signals():
                         if can_open_new:
                             can_trade_this = True
                             trade_type = "new"
-                        elif confidence >= 0.75:
-                            # V3.1.82: SLOT SWAP - find weakest position to replace
+                        elif confidence >= 0.83:
+                            # V3.1.84: SLOT SWAP - 83% min (was 75%). Don't swap for marginal signals.
                             _weakest = _find_weakest_position(open_positions, symbol, position_map)
                             if _weakest:
                                 can_trade_this = True
@@ -804,14 +822,14 @@ def check_trading_signals():
                         if can_open_new:
                             can_trade_this = True
                             trade_type = "new"
-                        elif confidence >= 0.75:
-                            # V3.1.82: SLOT SWAP - find weakest position to replace
+                        elif confidence >= 0.83:
+                            # V3.1.84: SLOT SWAP - 83% min (was 75%). Don't swap for marginal signals.
                             _weakest = _find_weakest_position(open_positions, symbol, position_map)
                             if _weakest:
                                 can_trade_this = True
                                 trade_type = "slot_swap"
                                 logger.info(f"    -> SLOT SWAP: {confidence:.0%} signal, closing weak {_weakest['symbol'].replace('cmt_','').upper()} ({_weakest['pnl_pct']:+.2f}%) to free slot")
-                
+
                 # Build comprehensive vote details with FULL reasoning
                 vote_details = []
                 market_analysis = ""
@@ -3019,16 +3037,20 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.83 - ORPHAN TRIGGER FIX + COMPETITION TP")
+    logger.info("SMT Daemon V3.1.84 - CHART-BASED TP/SL + SWAP FIX")
     logger.info("=" * 60)
-    logger.info("V3.1.83 CHANGES (CRITICAL BUG FIX):")
-    logger.info("  - FIX 9: ORPHAN TRIGGER CLEANUP - cancel TP/SL triggers before closing positions")
-    logger.info("  -   Bug: close_position_manually() never cancelled trigger orders")
-    logger.info("  -   Impact: old SL/TP persisted, wrong SL on new trades (DOGE $0.0936 vs $0.0999)")
-    logger.info("  -   Fix: cancel triggers in close_position_manually + pre-trade + startup sync")
-    logger.info("  - FIX 10: COMPETITION TP - no F&G widening during competition (base TPs only)")
-    logger.info("  -   Was: F&G<15 -> TP x1.5 (4.5%). Now: TP stays at base (3.0-3.5%)")
-    logger.info("  - INHERITED: V3.1.82 slot swap + PM + sync debug")
+    logger.info("V3.1.84 CHANGES (COMPETITION TURBO):")
+    logger.info("  - FIX 11: CHART-BASED TP/SL - S/R from swing highs/lows (like a human)")
+    logger.info("  -   Old: Fixed 3.0-3.5% TP (too wide, trades never close)")
+    logger.info("  -   New: TP at nearest resistance, SL at nearest support")
+    logger.info("  -   Competition bounds: TP 0.8-2.0%, SL 0.5-2.0%")
+    logger.info("  -   Fallback if no S/R: T1=1.5%, T2=1.8%, T3=1.5% TP")
+    logger.info("  - FIX 12: SLOT SWAP FIXED - stop burning money on premature swaps")
+    logger.info("  -   Min position age: 45 min (was 0). Young trades need time.")
+    logger.info("  -   Min PnL for swap: -0.5% (was +0.5%). Don't kill barely-negative.")
+    logger.info("  -   Min confidence: 83% (was 75%). Only swap for strong signals.")
+    logger.info("  - FIX 13: Signal check interval 15min -> 10min (competition speed)")
+    logger.info("  - INHERITED: V3.1.83 orphan trigger fix + competition TP")
     logger.info("  - COMPETITION: Ends Feb 23")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
@@ -3039,7 +3061,7 @@ def run_daemon():
         logger.info(f"  Tier {tier}: {', '.join(pairs)}")
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     logger.info("Cooldowns: ENFORCED (V3.1.81) + blacklist after force_stop")
-    logger.info("Slot Swap: ENABLED (V3.1.82) - close weakest when full + strong signal")
+    logger.info("Slot Swap: ENABLED (V3.1.84) - 83% min conf, 45min age, -0.5% PnL threshold")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
