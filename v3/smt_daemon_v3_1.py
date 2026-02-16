@@ -956,8 +956,9 @@ def check_trading_signals():
                 # V3.1.80: CHOP FALLBACK GATE
                 # Pairs with 75-79% confidence are "fallback_only" — they can only trade
                 # if a chop filter blocked a higher-confidence pair, freeing a slot.
+                # V3.1.82: Slot swap trades bypass fallback gate (they create their own slot)
                 is_fallback = opportunity["decision"].get("fallback_only", False)
-                if is_fallback:
+                if is_fallback and opportunity.get("trade_type") != "slot_swap":
                     if chop_blocked_count > 0:
                         logger.info(f"  CHOP FALLBACK: {opportunity['pair']} ({confidence:.0%}) promoted - chop freed {chop_blocked_count} slot(s)")
                         chop_blocked_count -= 1  # Consume one freed slot
@@ -1449,7 +1450,7 @@ def monitor_positions():
                         "cleanup": cleanup,
                         "symbol": symbol,
                         "pnl": actual_pnl,
-                        "pnl_pct": pnl_pct
+                        "final_pnl_pct": pnl_pct,  # V3.1.82 FIX: was "pnl_pct" but close_trade reads "final_pnl_pct"
                     })
                     state.trades_closed += 1
                     
@@ -2254,9 +2255,12 @@ If nothing should be closed, return:
                         
                         # Update tracker
                         try:
+                            # V3.1.82 FIX: Include final_pnl_pct for correct cooldown calculation
+                            _pm_pnl_pct = (pnl / (entry * size) * 100) if entry > 0 and size > 0 else 0
                             tracker.close_trade(sym, {
                                 "reason": f"portfolio_manager_{close_reason[:30]}",
                                 "pnl": pnl,
+                                "final_pnl_pct": _pm_pnl_pct,
                             })
                         except:
                             pass
@@ -2324,8 +2328,9 @@ def quick_cleanup_check():
                 side = trade.get("side", "LONG")
                 position_usdt = trade.get("position_usdt", 0)
                 pnl_usd = 0
+                pnl_pct = 0  # V3.1.82: Initialize before try block
                 hit_tp = False
-                
+
                 if entry_price > 0 and position_usdt > 0:
                     try:
                         current_price = get_price(symbol)
@@ -2343,6 +2348,7 @@ def quick_cleanup_check():
                     "cleanup": cleanup,
                     "symbol": symbol,
                     "pnl": round(pnl_usd, 2),
+                    "final_pnl_pct": pnl_pct,  # V3.1.82 FIX: was missing final_pnl_pct
                     "hit_tp": hit_tp,
                 })
                 state.trades_closed += 1
@@ -2390,17 +2396,25 @@ def quick_cleanup_check():
 # ============================================================
 
 def log_health():
+    # V3.1.82: Mark progress INSIDE health check as safety net
+    # The watchdog was killing the daemon despite the main loop running.
+    # Health logs were printing but _mark_progress at line 3021 wasn't updating.
+    _mark_progress()
+
     uptime = datetime.now(timezone.utc) - state.started_at
     uptime_str = str(uptime).split('.')[0]
     active = len(tracker.get_active_symbols())
-    
+
     logger.info(
         f"HEALTH | Up: {uptime_str} | "
         f"Signals: {state.signals_checked} | "
         f"Trades: {state.trades_opened}/{state.trades_closed} | "
         f"Active: {active}"
     )
-    
+
+    # V3.1.82: Mark again after health log (belt and suspenders)
+    _mark_progress()
+
     # V3.1.36: Auto-fill RL outcomes every health check
     if state.trades_closed > 0:
         fill_rl_outcomes_inline()
@@ -2643,9 +2657,13 @@ def resolve_opposite_sides():
                 )
                 
                 # Remove from tracker
+                # V3.1.82 FIX: Include final_pnl_pct for correct cooldown calc
+                _opp_entry = float(close_pos.get("entry_price", 1))
+                _opp_size = float(close_pos.get("size", 1))
+                _opp_pnl_pct = (close_pnl / (_opp_entry * _opp_size) * 100) if _opp_entry and _opp_size else 0
                 for key in [f"{sym}:{close_side}", sym]:
                     if key in tracker.active_trades:
-                        tracker.close_trade(key, {"reason": "opposite_side_resolution", "pnl": close_pnl})
+                        tracker.close_trade(key, {"reason": "opposite_side_resolution", "pnl": close_pnl, "final_pnl_pct": _opp_pnl_pct})
                         break
                 
                 logger.info(f"  [OPPOSITE] Closed {close_side} {sym_clean}: order {oid}")
@@ -2885,9 +2903,14 @@ def regime_aware_exit_check():
                         logger.debug(f"RL outcome log error: {e}")
                 
                 # Update tracker
+                # V3.1.82 FIX: Include final_pnl_pct for correct cooldown calc
+                _re_entry = tracker.get_active_trade(symbol) or {}
+                _re_entry_price = _re_entry.get("entry_price", 1)
+                _re_pnl_pct = (pnl / (_re_entry_price * size) * 100) if _re_entry_price and size else 0
                 tracker.close_trade(symbol, {
                     "reason": f"regime_exit_{regime['regime'].lower()}",
                     "pnl": pnl,
+                    "final_pnl_pct": _re_pnl_pct,
                     "regime": regime["regime"],
                 })
                 
