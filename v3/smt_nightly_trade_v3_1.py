@@ -822,14 +822,28 @@ def detect_sideways_market(symbol: str) -> dict:
             chop_signals += 1
             reasons.append(f"ADX={adx:.0f} (weak trend)")
 
-        # BB width scoring (pair-relative - use ATR context)
-        # Tight BB = squeezed = range-bound
-        if bb_width < 1.5:
+        # BB width scoring - tier-aware thresholds (V3.1.89)
+        # Tier 1 (ETH, BNB) = blue chips with naturally tighter bands
+        # Tier 3 (SOL, DOGE, ADA) = higher vol, wider bands expected
+        # Using flat thresholds punished low-vol coins unfairly
+        tier = None
+        for _pair, _info in TRADING_PAIRS.items():
+            if _info["symbol"] == symbol:
+                tier = _info["tier"]
+                break
+        if tier == 1:
+            bb_very_tight, bb_tight = 1.0, 1.8  # BNB/ETH normal range is tighter
+        elif tier == 3:
+            bb_very_tight, bb_tight = 2.0, 3.0  # SOL/DOGE/ADA need wider threshold
+        else:
+            bb_very_tight, bb_tight = 1.5, 2.5  # Tier 2 (BTC, LTC, XRP) = default
+
+        if bb_width < bb_very_tight:
             chop_signals += 2
-            reasons.append(f"BB={bb_width:.1f}% (very tight)")
-        elif bb_width < 2.5:
+            reasons.append(f"BB={bb_width:.1f}% (very tight, T{tier} thresh={bb_very_tight})")
+        elif bb_width < bb_tight:
             chop_signals += 1
-            reasons.append(f"BB={bb_width:.1f}% (tight)")
+            reasons.append(f"BB={bb_width:.1f}% (tight, T{tier} thresh={bb_tight})")
 
         # Directional consistency scoring
         if consistency < 0.3:
