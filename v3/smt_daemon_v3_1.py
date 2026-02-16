@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.80 - CHOP FILTER + FALLBACK SLOTS
+SMT Trading Daemon V3.1.81 - DEATH SPIRAL FIX: blacklist + cooldown enforce + sync fix + SL cap
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -613,6 +613,16 @@ def check_trading_signals():
                     signal = "WAIT"
                     confidence = 0
 
+                # V3.1.81: CONSECUTIVE LOSS OVERRIDE - if we've force-stopped 2+ times
+                # on the same symbol in the same direction within 24h, BLOCK the trade.
+                # This overrides F&G capitulation rules that force LONGs into a crash.
+                if signal in ("LONG", "SHORT"):
+                    _consec = tracker.consecutive_losses(symbol, signal, hours=24)
+                    if _consec >= 2:
+                        logger.warning(f"    -> LOSS STREAK BLOCK: {pair} {signal} blocked - {_consec} consecutive force-stops in 24h. Market is not bouncing.")
+                        signal = "WAIT"
+                        confidence = 0
+
                 # V3.1.80: Track chop-blocked trades for fallback logic
                 if decision.get("chop_blocked"):
                     chop_blocked_count += 1
@@ -659,10 +669,23 @@ def check_trading_signals():
 #                    except Exception as e:
 #                        logger.error(f"[TELEGRAM] Alert failed: {e}")
                 
+                # V3.1.81: ENFORCE cooldown + blacklist (was display-only before!)
+                is_blacklisted = tracker.is_blacklisted(symbol)
+                if on_cooldown or is_blacklisted:
+                    _block_reason = []
+                    if on_cooldown:
+                        _block_reason.append(f"cooldown {cooldown_remaining:.1f}h")
+                    if is_blacklisted:
+                        _bl_remaining = tracker.get_blacklist_remaining(symbol)
+                        _block_reason.append(f"blacklisted {_bl_remaining:.1f}h")
+                    logger.info(f"    -> BLOCKED: {', '.join(_block_reason)}")
+                    signal = "WAIT"
+                    confidence = 0
+
                 # Determine tradability
                 can_trade_this = False
                 trade_type = "none"
-                
+
                 if signal == "LONG":
                     if has_long:
                         logger.info(f"    -> Already LONG")
@@ -1740,6 +1763,12 @@ def gemini_portfolio_review():
         grace_positions = []
         for p in positions:
             sym = p.get('symbol', '')
+            # V3.1.81: NEVER hide recently force-stopped symbols from PM
+            # The grace period was allowing zombie re-entries to avoid PM scrutiny
+            if tracker.was_recently_force_stopped(sym, within_hours=4):
+                logger.info(f'[PORTFOLIO] NO GRACE: {sym.replace("cmt_","").upper()} was recently force-stopped, PM must review')
+                grace_positions.append(p)
+                continue
             trade = tracker.get_active_trade(sym)
             if trade and trade.get('opened_at'):
                 try:
@@ -1802,8 +1831,14 @@ def gemini_portfolio_review():
                     else:
                         pnl_pct = (pnl / (margin if margin > 0 else 1)) * 100
             
+            # V3.1.81: Flag recently force-stopped symbols so PM knows the history
+            _fs_flag = ""
+            if tracker.was_recently_force_stopped(p.get("symbol", ""), within_hours=4):
+                _fs_count = tracker.consecutive_losses(p.get("symbol", ""), side, hours=24)
+                _fs_flag = f" [FORCE_STOPPED x{_fs_count} in 24h - CLOSE THIS]"
+
             pos_details.append(
-                f"- {sym} {side}: PnL=${pnl:.2f} ({pnl_pct:+.1f}%), entry=${entry:.4f}, margin=${margin:.1f}, held={hours_open:.1f}h, tier={tier}"
+                f"- {sym} {side}: PnL=${pnl:.2f} ({pnl_pct:+.1f}%), entry=${entry:.4f}, margin=${margin:.1f}, held={hours_open:.1f}h, tier={tier}{_fs_flag}"
             )
         
         positions_text = "\n".join(pos_details)
@@ -2291,8 +2326,19 @@ def sync_tracker_with_weex():
                 tier = get_tier_for_symbol(sym)
                 tier_config = get_tier_config(tier)
                 
+                # V3.1.81: Use WEEX position ctime for accurate hold time tracking
+                # ctime is millisecond epoch from WEEX. Fall back to NOW only if unavailable.
+                _weex_ctime = pos.get('ctime', '')
+                if _weex_ctime:
+                    try:
+                        _opened_at = datetime.fromtimestamp(int(_weex_ctime) / 1000, tz=timezone.utc).isoformat()
+                    except (ValueError, TypeError):
+                        _opened_at = datetime.now(timezone.utc).isoformat()
+                else:
+                    _opened_at = datetime.now(timezone.utc).isoformat()
+
                 tracker.active_trades[key_sided] = {
-                    "opened_at": datetime.now(timezone.utc).isoformat(),
+                    "opened_at": _opened_at,
                     "side": side,
                     "entry_price": float(pos.get('entry_price', 0)),
                     "tier": tier,
@@ -2301,15 +2347,25 @@ def sync_tracker_with_weex():
                     "confidence": 0.75,
                 }
                 added += 1
-                logger.info(f"  Added {key_sided} (Tier {tier}, {side} @ {float(pos.get('entry_price',0)):.4f})")
+                logger.info(f"  Added {key_sided} (Tier {tier}, {side} @ {float(pos.get('entry_price',0)):.4f}, opened_at={_opened_at})")
             elif key_sided not in tracker_keys and sym in tracker_keys:
                 # Tracked under plain symbol but side might be wrong - check
                 existing = tracker.active_trades.get(sym, {})
                 existing_side = existing.get('side', '').upper()
                 if existing_side and existing_side != side:
                     # Different side! Track this one separately
+                    # V3.1.81: Use WEEX ctime
+                    _weex_ctime2 = pos.get('ctime', '')
+                    if _weex_ctime2:
+                        try:
+                            _opened_at2 = datetime.fromtimestamp(int(_weex_ctime2) / 1000, tz=timezone.utc).isoformat()
+                        except (ValueError, TypeError):
+                            _opened_at2 = datetime.now(timezone.utc).isoformat()
+                    else:
+                        _opened_at2 = datetime.now(timezone.utc).isoformat()
+
                     tracker.active_trades[key_sided] = {
-                        "opened_at": datetime.now(timezone.utc).isoformat(),
+                        "opened_at": _opened_at2,
                         "side": side,
                         "entry_price": float(pos.get('entry_price', 0)),
                         "tier": get_tier_for_symbol(sym),
@@ -2737,14 +2793,15 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.80 - CHOP FILTER + FALLBACK SLOTS")
+    logger.info("SMT Daemon V3.1.81 - DEATH SPIRAL FIX: blacklist + cooldown enforce + sync fix + SL cap")
     logger.info("=" * 60)
-    logger.info("V3.1.80 CHANGES:")
-    logger.info("  - CHOP FILTER: ADX + BB width + directional consistency")
-    logger.info("    High chop (ADX<15, BB<1.5%): Hard block entry")
-    logger.info("    Medium chop (ADX<20, BB<2.5%): -15% confidence penalty")
-    logger.info("  - FALLBACK SLOTS: Chop block frees slot for next trending pair at 75%+")
-    logger.info("  - Confidence floor: 80% primary, 75% fallback-only")
+    logger.info("V3.1.81 CHANGES (DEATH SPIRAL FIX):")
+    logger.info("  - FIX 1: COOLDOWNS NOW ENFORCED (were display-only!)")
+    logger.info("  - FIX 1: BLACKLIST after force_stop/early_exit (blocks re-entry for max_hold hours)")
+    logger.info("  - FIX 2: SYNC BUG FIXED - opened_at uses WEEX ctime (was resetting to NOW)")
+    logger.info("  - FIX 3: PM skips grace period for recently force-stopped symbols")
+    logger.info("  - FIX 4: CONSECUTIVE LOSS BLOCK - 2+ force-stops in 24h = WAIT (overrides F&G)")
+    logger.info("  - FIX 5: SL CAP at force_exit + 0.5% (max 3%), was 6% in fear = catastrophic")
     logger.info("  - COMPETITION: Ends Feb 23")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
@@ -2754,7 +2811,7 @@ def run_daemon():
         runner_str = f"Runner: +{runner.get('trigger_pct', 0)}% -> close 50%" if runner.get("enabled") else "No Runner"
         logger.info(f"  Tier {tier}: {', '.join(pairs)}")
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
-    logger.info("Cooldowns: display only (confidence threshold is the real gate)")
+    logger.info("Cooldowns: ENFORCED (V3.1.81) + blacklist after force_stop")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup

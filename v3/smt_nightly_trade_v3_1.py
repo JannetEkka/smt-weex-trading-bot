@@ -1396,6 +1396,9 @@ def get_open_positions() -> List[Dict]:
                         "entry_price": entry_price,
                         "unrealized_pnl": float(pos.get("unrealizePnl", 0)),
                         "margin": margin,
+                        # V3.1.81: Preserve position open time for accurate max_hold tracking
+                        "ctime": pos.get("ctime", ""),
+                        "utime": pos.get("utime", ""),
                     })
         return positions
     except:
@@ -3276,12 +3279,12 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
             dynamic_sl = round(atr_pct * 1.5, 2)  # V3.1.77: 1.5x ATR (was 1.2x, too tight = noise stop-outs)
             tier_floor_sl = tier_config["sl_pct"]
             sl_pct_raw = max(dynamic_sl, tier_floor_sl)
-            # V3.1.64a: Widen SL cap in extreme fear (respect Judge's vol-adjusted SL)
-            try:
-                _fg_sl = get_fear_greed_index().get("value", 50)
-            except:
-                _fg_sl = 50
-            _sl_cap = 6.0 if _fg_sl < 15 else 4.5 if _fg_sl < 30 else 4.0
+            # V3.1.81: Cap SL at force_exit level so exchange SL actually protects you.
+            # Previously: 6% cap in fear = 120% margin loss at 20x. That's catastrophic.
+            # Now: SL capped at the daemon's force_exit_loss_pct (2%) so the exchange SL
+            # triggers BEFORE the daemon force_stop, making exchange SL the real safety net.
+            _force_exit_sl = abs(tier_config.get("force_exit_loss_pct", -2.0))
+            _sl_cap = min(_force_exit_sl + 0.5, 3.0)  # force_exit + 0.5% buffer, max 3%
             sl_pct_raw = min(sl_pct_raw, _sl_cap)
         else:
             sl_pct_raw = tier_config["sl_pct"]
@@ -3412,6 +3415,8 @@ class TradeTracker:
         self.active_trades: Dict = {}
         self.closed_trades: List = []
         self.cooldowns: Dict = {}  # symbol -> cooldown_until timestamp
+        self.force_stop_blacklist: Dict = {}  # V3.1.81: symbol -> blacklist_until timestamp (hard block after force_stop)
+        self.recent_force_stops: Dict = {}  # V3.1.81: symbol -> list of {time, direction, pnl} for consecutive loss tracking
         self.load_state()
     
     def load_state(self):
@@ -3422,15 +3427,19 @@ class TradeTracker:
                     self.active_trades = data.get("active", {})
                     self.closed_trades = data.get("closed", [])
                     self.cooldowns = data.get("cooldowns", {})
+                    self.force_stop_blacklist = data.get("force_stop_blacklist", {})
+                    self.recent_force_stops = data.get("recent_force_stops", {})
         except:
             pass
     
     def save_state(self):
         with open(self.state_file, 'w') as f:
             json.dump({
-                "active": self.active_trades, 
+                "active": self.active_trades,
                 "closed": self.closed_trades,
-                "cooldowns": self.cooldowns
+                "cooldowns": self.cooldowns,
+                "force_stop_blacklist": self.force_stop_blacklist,
+                "recent_force_stops": self.recent_force_stops,
             }, f, indent=2, default=str)
     
     def add_trade(self, symbol: str, trade_data: Dict):
@@ -3497,10 +3506,37 @@ class TradeTracker:
             if cooldown_hours > 0:
                 cooldown_until = datetime.now(timezone.utc) + timedelta(hours=cooldown_hours)
                 self.cooldowns[symbol] = cooldown_until.isoformat()
+                # V3.1.81: Also set cooldown on plain symbol key (not just sided key)
+                plain_sym = symbol.split(":")[0] if ":" in symbol else symbol
+                self.cooldowns[plain_sym] = cooldown_until.isoformat()
             else:
                 if symbol in self.cooldowns:
                     del self.cooldowns[symbol]
-            
+
+            # V3.1.81: FORCE STOP BLACKLIST - hard block re-entry after force_stop/early_exit
+            # This prevents the zombie re-entry loop where the system closes at a loss
+            # then immediately re-opens the same trade on the next signal check.
+            plain_sym = symbol.split(":")[0] if ":" in symbol else symbol
+            if "force_stop" in reason or "force_exit" in reason or "early_exit" in reason:
+                max_hold = trade.get("max_hold_hours", 8)
+                blacklist_hours = max(max_hold, 4)  # At least 4h, or full max_hold
+                blacklist_until = datetime.now(timezone.utc) + timedelta(hours=blacklist_hours)
+                self.force_stop_blacklist[plain_sym] = blacklist_until.isoformat()
+                print(f"  [BLACKLIST] {plain_sym.replace('cmt_','').upper()} blocked for {blacklist_hours}h after {cd_type}")
+
+                # V3.1.81: Track consecutive force stops for F&G override logic
+                direction = trade.get("side", "UNKNOWN")
+                if plain_sym not in self.recent_force_stops:
+                    self.recent_force_stops[plain_sym] = []
+                self.recent_force_stops[plain_sym].append({
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "direction": direction,
+                    "pnl_pct": pnl_pct,
+                    "reason": reason,
+                })
+                # Keep only last 10 entries
+                self.recent_force_stops[plain_sym] = self.recent_force_stops[plain_sym][-10:]
+
             self.save_state()
     
     def is_on_cooldown(self, symbol: str) -> bool:
@@ -3533,9 +3569,64 @@ class TradeTracker:
         except:
             return 0
     
+    def is_blacklisted(self, symbol: str) -> bool:
+        """V3.1.81: Check if symbol is blacklisted after force_stop (hard re-entry block)"""
+        plain_sym = symbol.split(":")[0] if ":" in symbol else symbol
+        if plain_sym not in self.force_stop_blacklist:
+            return False
+        try:
+            bl_until = datetime.fromisoformat(self.force_stop_blacklist[plain_sym].replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) < bl_until:
+                return True
+            else:
+                del self.force_stop_blacklist[plain_sym]
+                self.save_state()
+                return False
+        except:
+            return False
+
+    def get_blacklist_remaining(self, symbol: str) -> float:
+        """V3.1.81: Get remaining blacklist hours"""
+        plain_sym = symbol.split(":")[0] if ":" in symbol else symbol
+        if plain_sym not in self.force_stop_blacklist:
+            return 0
+        try:
+            bl_until = datetime.fromisoformat(self.force_stop_blacklist[plain_sym].replace("Z", "+00:00"))
+            remaining = (bl_until - datetime.now(timezone.utc)).total_seconds() / 3600
+            return max(0, remaining)
+        except:
+            return 0
+
+    def consecutive_losses(self, symbol: str, direction: str, hours: int = 24) -> int:
+        """V3.1.81: Count consecutive force_stop losses for same symbol+direction within N hours"""
+        plain_sym = symbol.split(":")[0] if ":" in symbol else symbol
+        if plain_sym not in self.recent_force_stops:
+            return 0
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        count = 0
+        for entry in reversed(self.recent_force_stops[plain_sym]):
+            if entry.get("time", "") < cutoff:
+                break
+            if entry.get("direction", "").upper() == direction.upper():
+                count += 1
+            else:
+                break  # Different direction = reset streak
+        return count
+
+    def was_recently_force_stopped(self, symbol: str, within_hours: float = 2) -> bool:
+        """V3.1.81: Check if symbol had a force_stop recently (for PM coordination)"""
+        plain_sym = symbol.split(":")[0] if ":" in symbol else symbol
+        if plain_sym not in self.recent_force_stops:
+            return False
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=within_hours)).isoformat()
+        for entry in reversed(self.recent_force_stops[plain_sym]):
+            if entry.get("time", "") > cutoff:
+                return True
+        return False
+
     def get_active_symbols(self) -> List[str]:
         return list(self.active_trades.keys())
-    
+
     def get_active_trade(self, symbol: str) -> Optional[Dict]:
         return self.active_trades.get(symbol)
 
