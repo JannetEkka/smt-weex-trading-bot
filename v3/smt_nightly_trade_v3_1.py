@@ -2347,8 +2347,14 @@ class FlowPersona:
                 elif taker_ratio < 0.8:
                     signals.append(("SHORT", 0.5, f"Taker sell pressure: {taker_ratio:.2f}"))
                 
-                if depth["bid_strength"] > 1.3:
+                # V3.1.89: Graduated depth signals — extreme imbalance (3x+) gets stronger score
+                if depth["bid_strength"] > 3.0:
+                    signals.append(("LONG", 0.6, f"EXTREME bid depth: {depth['bid_strength']:.2f}x"))
+                elif depth["bid_strength"] > 1.3:
                     signals.append(("LONG", 0.4, "Strong bid depth"))
+
+                if depth["ask_strength"] > 3.0:
+                    signals.append(("SHORT", 0.6, f"EXTREME ask depth: {depth['ask_strength']:.2f}x"))
                 elif depth["ask_strength"] > 1.3:
                     signals.append(("SHORT", 0.4, "Strong ask depth"))
             
@@ -2379,14 +2385,14 @@ class FlowPersona:
                     "reasoning": "; ".join(s[2] for s in signals if s[0] == "NEUTRAL"),
                 }
             
-            if long_score > short_score and long_score > 0.4:
+            if long_score > short_score and long_score >= 0.4:
                 return {
                     "persona": self.name,
                     "signal": "LONG",
                     "confidence": min(0.85, long_score),
                     "reasoning": "; ".join(s[2] for s in signals if s[0] == "LONG"),
                 }
-            elif short_score > long_score and short_score > 0.4:
+            elif short_score > long_score and short_score >= 0.4:
                 return {
                     "persona": self.name,
                     "signal": "SHORT",
