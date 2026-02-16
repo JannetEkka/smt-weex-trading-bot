@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 8 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 
-**Current version: V3.1.84** — all production code is in `v3/`.
+**Current version: V3.1.85** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -73,7 +73,7 @@ Never manually edit this file while the daemon is running.
 
 ```python
 MAX_LEVERAGE = 20
-MIN_CONFIDENCE_TO_TRADE = 0.80      # 80% minimum from persona ensemble
+MIN_CONFIDENCE_TO_TRADE = 0.80      # 80% HARD FLOOR - NO exceptions (V3.1.85)
 GLOBAL_TRADE_COOLDOWN = 900          # 15min between trades
 SIGNAL_CHECK_INTERVAL = 600          # 10min
 POSITION_MONITOR_INTERVAL = 120      # 2min
@@ -171,7 +171,11 @@ python3 v3/smt_nightly_trade_v3_1.py --test
 
 Format: `V3.1.{N}` where N increments with each fix/feature.
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.1.84. Next change should be V3.1.85.
+Current: V3.1.85. Next change should be V3.1.86.
+
+**CRITICAL RULE (V3.1.85+): The 80% confidence floor is ABSOLUTE.**
+Never add session discounts, contrarian boosts, or any other override that
+lowers the trading threshold below 80%. Quality over quantity wins competitions.
 
 ## Files to Ignore
 

@@ -1368,7 +1368,7 @@ def get_max_positions_for_equity(equity: float) -> int:
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
 MIN_CONFIDENCE_TO_TRADE = 0.80  # V3.1.77b: 85%->80%. With 3 slots, fill with best signals only.
-CHOP_FALLBACK_CONFIDENCE = 0.75  # V3.1.80: Minimum for fallback when a chop filter frees a slot
+CHOP_FALLBACK_CONFIDENCE = 0.80  # V3.1.85: Raised to 80%. No sub-80% trades, period.
 
 # ============================================================
 # V3.1.78: TIER-BASED PARAMETERS (UPDATED!)

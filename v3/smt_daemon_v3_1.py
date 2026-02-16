@@ -1145,33 +1145,26 @@ def check_trading_signals():
                 opp_fear_greed = opportunity["decision"].get("fear_greed", 50)
                 is_extreme_fear = opp_fear_greed < 20
                 
-                # Session classification and confidence threshold
+                # V3.1.85: HARD 80% FLOOR - no session discounts.
+                # Quality > quantity. One 85% win beats three 70% coinflips.
+                # $3.6k -> $20k needs consistent wins, not volume.
                 if 13 <= utc_hour < 16:
                     session_name = "US_OPEN"
-                    session_min_conf = 0.70  # Best liquidity, lower bar
                 elif 0 <= utc_hour < 3:
                     session_name = "ASIA_OPEN"
-                    session_min_conf = 0.75  # Good liquidity
                 elif 6 <= utc_hour < 9:
                     session_name = "DEAD_HOURS"
-                    session_min_conf = 0.82  # Low liquidity, higher bar
                 elif 0 <= utc_hour < 6:
                     session_name = "ASIA"
-                    session_min_conf = 0.78
                 else:
                     session_name = "ACTIVE"
-                    session_min_conf = 0.70  # Normal hours
+                session_min_conf = 0.80  # HARD FLOOR - no exceptions
                 
-                # V3.1.75 FIX #4: Lower confidence floor for CONTRARIAN trades in extreme F&G
-                # Extreme fear = best LONG opportunities. Extreme greed = best SHORT opportunities.
-                # Blocking them with high confidence floors defeats the contrarian strategy.
-                _opp_signal_check = opportunity["decision"]["decision"]
-                if opp_fear_greed < 20 and _opp_signal_check == "LONG":
-                    session_min_conf = min(session_min_conf, 0.65)  # LONGs in extreme fear get lower bar
-                    logger.info(f"CONTRARIAN BOOST: F&G={opp_fear_greed}, lowering LONG floor to 65% for {opportunity['pair']}")
-                elif opp_fear_greed > 80 and _opp_signal_check == "SHORT":
-                    session_min_conf = min(session_min_conf, 0.65)  # SHORTs in extreme greed get lower bar
-                    logger.info(f"CONTRARIAN BOOST: F&G={opp_fear_greed}, lowering SHORT floor to 65% for {opportunity['pair']}")
+                # V3.1.85: CONTRARIAN BOOST REMOVED - 80% hard floor applies always.
+                # Even in extreme fear/greed, only trade with 80%+ confidence.
+                # Low-confidence contrarian trades bleed fees and kill compounding.
+                if opp_fear_greed < 20 or opp_fear_greed > 80:
+                    logger.info(f"EXTREME F&G={opp_fear_greed} but 80% floor enforced for {opportunity['pair']} ({opp_confidence:.0%})")
 
                 if opp_confidence < session_min_conf:
                     logger.warning(f"SESSION FILTER [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} < {session_min_conf:.0%}, skipping {opportunity['pair']}")
@@ -3037,21 +3030,16 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.84 - CHART-BASED TP/SL + SWAP FIX")
+    logger.info("SMT Daemon V3.1.85 - HARD 80% CONFIDENCE FLOOR")
     logger.info("=" * 60)
-    logger.info("V3.1.84 CHANGES (COMPETITION TURBO):")
-    logger.info("  - FIX 11: CHART-BASED TP/SL - S/R from swing highs/lows (like a human)")
-    logger.info("  -   Old: Fixed 3.0-3.5% TP (too wide, trades never close)")
-    logger.info("  -   New: TP at nearest resistance, SL at nearest support")
-    logger.info("  -   Competition bounds: TP 0.8-2.0%, SL 0.5-2.0%")
-    logger.info("  -   Fallback if no S/R: T1=1.5%, T2=1.8%, T3=1.5% TP")
-    logger.info("  - FIX 12: SLOT SWAP FIXED - stop burning money on premature swaps")
-    logger.info("  -   Min position age: 45 min (was 0). Young trades need time.")
-    logger.info("  -   Min PnL for swap: -0.5% (was +0.5%). Don't kill barely-negative.")
-    logger.info("  -   Min confidence: 83% (was 75%). Only swap for strong signals.")
-    logger.info("  - FIX 13: Signal check interval 15min -> 10min (competition speed)")
-    logger.info("  - INHERITED: V3.1.83 orphan trigger fix + competition TP")
-    logger.info("  - COMPETITION: Ends Feb 23")
+    logger.info("V3.1.85 CHANGES (HARD 80% FLOOR):")
+    logger.info("  - FIX 14: HARD 80% CONFIDENCE FLOOR - no exceptions, no discounts")
+    logger.info("  -   Session floors REMOVED (was 70-82% by hour)")
+    logger.info("  -   Contrarian boost REMOVED (was 65% in extreme F&G)")
+    logger.info("  -   Chop fallback raised to 80% (was 75%)")
+    logger.info("  -   Goal: $3.6k -> $20k via consistent small wins, not volume")
+    logger.info("  - INHERITED: V3.1.84 chart-based TP/SL + swap fix + orphan fix")
+    logger.info("  - COMPETITION: 5 days left, quality over quantity")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
