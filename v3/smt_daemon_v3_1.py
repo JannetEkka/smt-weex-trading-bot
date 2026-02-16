@@ -1092,7 +1092,9 @@ def check_trading_signals():
                             # next slot swap can't target the same (already-closed) position.
                             # Without this, LTC gets "closed" twice → 4 positions on 3 slots.
                             open_positions = [p for p in open_positions if p.get("symbol") != _swap_sym]
-                            time.sleep(2)  # Let WEEX process the close
+                            time.sleep(5)  # V3.1.82 FIX: 5s wait (was 2s). WEEX needs time to settle
+                            # the close order before new trade can set_leverage on a different symbol.
+                            # At 2s, "open orders" from the close block set_leverage → wrong leverage.
                         except Exception as _swap_err:
                             logger.error(f"SLOT SWAP FAILED: {_swap_err}")
                             continue

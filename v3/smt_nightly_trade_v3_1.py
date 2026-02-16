@@ -3061,12 +3061,19 @@ def set_leverage(symbol: str, leverage: int) -> Dict:
         "longLeverage": lev_str,
         "shortLeverage": lev_str
     })
-    r = requests.post(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("POST", endpoint, body), data=body, timeout=15)
-    result = r.json()
-    if result.get("code") != "200":
+    # V3.1.82: Retry up to 3 times if WEEX rejects due to pending orders (slot swap race)
+    for _lev_attempt in range(3):
+        r = requests.post(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("POST", endpoint, body), data=body, timeout=15)
+        result = r.json()
+        if result.get("code") == "200":
+            print(f"  [LEVERAGE OK] {symbol} set to {leverage}x cross")
+            return result
+        if "open orders" in str(result.get("msg", "")).lower() and _lev_attempt < 2:
+            print(f"  [LEVERAGE RETRY] Pending orders blocking, waiting 3s... (attempt {_lev_attempt+1}/3)")
+            time.sleep(3)
+            continue
         print(f"  [LEVERAGE WARNING] set_leverage failed: {result}")
-    else:
-        print(f"  [LEVERAGE OK] {symbol} set to {leverage}x cross")
+        return result
     return result
 
 
