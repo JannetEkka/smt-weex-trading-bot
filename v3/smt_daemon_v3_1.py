@@ -3069,13 +3069,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.89 - REMOVED R:R GATE + TREND-ADJUSTED MAX_TP")
+    logger.info("SMT Daemon V3.1.89 - NO PER-SYMBOL COOLDOWNS")
     logger.info("=" * 60)
     logger.info("V3.1.89 CHANGES:")
-    logger.info("  - REMOVED R:R gate: 1.5:1 requirement blocked 85% signals (SOL)")
-    logger.info("  - REMOVED trend-adjusted MAX_TP: crushed TP in trending markets")
-    logger.info("  - Chart-based TP/SL + ATR safety + 80% floor = sufficient protection")
-    logger.info("  - INHERITED: V3.1.88 F&G soft bias, 5min cycles, halved cooldowns")
+    logger.info("  - REMOVED per-symbol cooldowns: all multipliers zeroed")
+    logger.info("  - 80% floor + chop filter + blacklist = sufficient entry gates")
+    logger.info("  - REMOVED R:R gate + trend-adjusted MAX_TP (blocked good signals)")
+    logger.info("  - Global 15min inter-trade cooldown + force-stop blacklist remain")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
@@ -3084,7 +3084,7 @@ def run_daemon():
         runner_str = f"Runner: +{runner.get('trigger_pct', 0)}% -> close 50%" if runner.get("enabled") else "No Runner"
         logger.info(f"  Tier {tier}: {', '.join(pairs)}")
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
-    logger.info("Cooldowns: ENFORCED (V3.1.81) + blacklist after force_stop")
+    logger.info("Per-Symbol Cooldowns: DISABLED (V3.1.89) | Blacklist after force_stop: ACTIVE")
     logger.info("Slot Swap: ENABLED (V3.1.88) - 83% min conf, 45min age, regime-aware PnL gate")
     logger.info("F&G: LOG-ONLY (V3.1.89) - no confidence boost, raw signals only")
     logger.info("=" * 60)
