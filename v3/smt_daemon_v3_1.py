@@ -357,23 +357,40 @@ tracker = TradeTracker(state_file="trade_state_v3_1_7.json")
 import threading
 
 _last_progress_time = time.time()
-_progress_lock = threading.Lock()
 
 def _mark_progress():
-    """Called by main loop to indicate the daemon is making progress."""
+    """Called by main loop to indicate the daemon is making progress.
+    V3.1.82 FIX: Use file-based heartbeat instead of threading variable.
+    The global variable approach had a mystery bug where _last_progress_time
+    was never updated despite _mark_progress() being called (possibly due to
+    subprocess re-imports creating variable shadowing).
+    """
     global _last_progress_time
-    with _progress_lock:
-        _last_progress_time = time.time()
+    _last_progress_time = time.time()
+    # File-based heartbeat: write timestamp to file so watchdog can read it
+    # This is immune to any threading/import/variable shadowing issues
+    try:
+        with open("/tmp/smt_daemon_heartbeat", "w") as f:
+            f.write(str(_last_progress_time))
+    except Exception:
+        pass  # Non-critical, don't crash on heartbeat write
 
 def _internal_watchdog():
-    """Background thread that kills the process if it hangs > 10 minutes."""
-    HANG_TIMEOUT = 1200  # V3.1.75: 20 minutes (was 10min, killed daemon mid-cycle during 8-pair analysis)
+    """Background thread that kills the process if it hangs > 20 minutes.
+    V3.1.82 FIX: Read heartbeat from FILE instead of shared variable.
+    """
+    HANG_TIMEOUT = 1200  # 20 minutes
     while True:
         time.sleep(60)
-        with _progress_lock:
-            elapsed = time.time() - _last_progress_time
+        try:
+            with open("/tmp/smt_daemon_heartbeat", "r") as f:
+                last_beat = float(f.read().strip())
+            elapsed = time.time() - last_beat
+        except Exception:
+            # Can't read heartbeat file — don't kill, just skip this check
+            continue
         if elapsed > HANG_TIMEOUT:
-            logger.error(f"INTERNAL WATCHDOG: No progress for {elapsed:.0f}s. Force exit!")
+            logger.error(f"INTERNAL WATCHDOG: No heartbeat for {elapsed:.0f}s. Force exit!")
             logger.error("The external watchdog.sh will restart us.")
             os._exit(1)  # Hard exit, watchdog.sh will restart
 
