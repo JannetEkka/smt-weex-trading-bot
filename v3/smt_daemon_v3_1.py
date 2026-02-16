@@ -3081,18 +3081,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.88 - F&G SOFT BIAS + FASTER CYCLES + R:R GATE")
+    logger.info("SMT Daemon V3.1.89 - REMOVED R:R GATE + TREND-ADJUSTED MAX_TP")
     logger.info("=" * 60)
-    logger.info("V3.1.88 CHANGES:")
-    logger.info("  - F&G soft bias: +10% contrarian boost, no hard blocks")
-    logger.info("  -   FLOW caps moderated (0.85->0.70 in extreme F&G, was 0.55)")
-    logger.info("  -   Judge prompt softened, BTC SHORT shield removed")
-    logger.info("  - Trend-adjusted MAX_TP: 1.2-2.0% based on 5-candle momentum")
-    logger.info("  - R:R gate: trades need 1.5:1 reward:risk minimum")
-    logger.info("  - Signal check: 5min (was 10min). Final week — faster cycling")
-    logger.info("  - Cooldowns halved: SL 2x->1x, force 2x->1x, early 1.5x->0.75x")
-    logger.info("  - Regime score softened: ±2 -> ±1 (F&G one input, not override)")
-    logger.info("  - INHERITED: V3.1.87 regime-aware swap + V3.1.85 80% hard floor")
+    logger.info("V3.1.89 CHANGES:")
+    logger.info("  - REMOVED R:R gate: 1.5:1 requirement blocked 85% signals (SOL)")
+    logger.info("  - REMOVED trend-adjusted MAX_TP: crushed TP in trending markets")
+    logger.info("  - Chart-based TP/SL + ATR safety + 80% floor = sufficient protection")
+    logger.info("  - INHERITED: V3.1.88 F&G soft bias, 5min cycles, halved cooldowns")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
