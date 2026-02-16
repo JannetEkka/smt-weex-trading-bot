@@ -992,6 +992,22 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         ltf_resistances = _cluster_price_levels(raw_res_1h, entry_price, threshold_pct=0.3)
         ltf_supports = _cluster_price_levels(raw_sup_1h, entry_price, threshold_pct=0.3)
 
+        # V3.1.88: Trend-adjusted MAX_TP — shorter TP when strong recent momentum
+        # Strong moves tend to mean-revert at S/R faster. Take profits quicker.
+        try:
+            recent_closes = [float(c[4]) for c in candles_1h[:6]]  # Last 6 candles = 5-candle move
+            if len(recent_closes) >= 2:
+                _5c_return = abs((recent_closes[0] - recent_closes[-1]) / recent_closes[-1]) * 100
+                if _5c_return > 1.5:
+                    MAX_TP_PCT = 1.2
+                    print(f"  [CHART-SR] Trend-adjusted TP: 5C move {_5c_return:.1f}% -> MAX_TP=1.2%")
+                elif _5c_return > 0.8:
+                    MAX_TP_PCT = 1.5
+                    print(f"  [CHART-SR] Trend-adjusted TP: 5C move {_5c_return:.1f}% -> MAX_TP=1.5%")
+                # else: keep default 2.0%
+        except Exception:
+            pass
+
         # === MERGE: 4H levels are structural (preferred for SL), 1H fills gaps ===
         # For resistances/supports, combine both but track origin
         # 4H levels that don't overlap with 1H are "structural" — stronger
@@ -1317,9 +1333,10 @@ def get_enhanced_market_regime() -> dict:
     result["fear_greed"] = fg["value"]
     
     if fg["error"] is None:
-        if fg["value"] <= 20: score += 2; factors.append(f"EXTREME FEAR ({fg['value']}): contrarian BUY")
+        # V3.1.88: Softened F&G regime impact from ±2 to ±1 (soft bias, not hard override)
+        if fg["value"] <= 20: score += 1; factors.append(f"EXTREME FEAR ({fg['value']}): mild contrarian BUY bias")
         elif fg["value"] <= 35: score += 1; factors.append(f"Fear ({fg['value']})")
-        elif fg["value"] >= 80: score -= 2; factors.append(f"EXTREME GREED ({fg['value']}): contrarian SELL")
+        elif fg["value"] >= 80: score -= 1; factors.append(f"EXTREME GREED ({fg['value']}): mild contrarian SELL bias")
         elif fg["value"] >= 65: score -= 1; factors.append(f"Greed ({fg['value']})")
     
     # ===== Factor 4: Aggregate Funding =====
@@ -2298,25 +2315,24 @@ class FlowPersona:
             # Log for debugging
             print(f"  [FLOW] Taker ratio: {taker_ratio:.2f} | Extreme sell: {extreme_selling} | Heavy sell: {heavy_selling}")
             
-            # V3.1.75 FIX: Cap SHORT confidence in capitulation (F&G < 15)
-            # Shorting into extreme fear = missing the bounce. F&G=9 IS capitulation, not just F&G=5.
+            # V3.1.88: Moderate F&G cap on FLOW signals (V3.1.75 was 0.85->0.55, now 0.85->0.70)
+            # Still allows counter-trend signals, just dampened slightly in extreme F&G
             fg_data = get_fear_greed_index()
             fg_val = fg_data.get("value", 50)
-            capitulation_short_cap = fg_val < 15  # V3.1.75: was 5, way too low - cap at F&G<15 (real capitulation)
-            
+
             if extreme_selling:
                 # V3.1.17: MASSIVE SELL PRESSURE - ignore depth entirely
-                if capitulation_short_cap:
-                    signals.append(("SHORT", 0.55, f"EXTREME taker selling: {taker_ratio:.2f} (CAPPED: F&G={fg_val})"))
-                    print(f"  [FLOW] CAPITULATION CAP: Extreme sell 0.85->0.55 (F&G={fg_val})")
+                if fg_val < 15:
+                    signals.append(("SHORT", 0.70, f"EXTREME taker selling: {taker_ratio:.2f} (F&G cap: 0.85->0.70)"))
+                    print(f"  [FLOW] F&G CAP: Extreme sell 0.85->0.70 (F&G={fg_val})")
                 else:
                     signals.append(("SHORT", 0.85, f"EXTREME taker selling: {taker_ratio:.2f}"))
                 # Don't even add depth signal - it's fake/spoofing
             elif heavy_selling:
                 # V3.1.17: Heavy selling - taker wins over depth
-                if capitulation_short_cap:
-                    signals.append(("SHORT", 0.40, f"Heavy taker selling: {taker_ratio:.2f} (CAPPED: F&G={fg_val})"))
-                    print(f"  [FLOW] CAPITULATION CAP: Heavy sell 0.70->0.40 (F&G={fg_val})")
+                if fg_val < 15:
+                    signals.append(("SHORT", 0.55, f"Heavy taker selling: {taker_ratio:.2f} (F&G cap: 0.70->0.55)"))
+                    print(f"  [FLOW] F&G CAP: Heavy sell 0.70->0.55 (F&G={fg_val})")
                 else:
                     signals.append(("SHORT", 0.70, f"Heavy taker selling: {taker_ratio:.2f}"))
                 # Depth signal at reduced weight
@@ -2324,23 +2340,16 @@ class FlowPersona:
                     signals.append(("SHORT", 0.3, "Ask depth confirms"))
                 # IGNORE bid depth when heavy selling
             elif extreme_buying:
-                # V3.1.75: Cap LONG confidence in extreme greed (mirror of SHORT cap in fear)
-                euphoria_long_cap = fg_val > 85
-                if euphoria_long_cap:
-                    signals.append(("LONG", 0.55, f"EXTREME taker buying: {taker_ratio:.2f} (CAPPED: F&G={fg_val} euphoria)"))
-                    print(f"  [FLOW] EUPHORIA CAP: Extreme buy 0.85->0.55 (F&G={fg_val})")
+                if fg_val > 85:
+                    signals.append(("LONG", 0.70, f"EXTREME taker buying: {taker_ratio:.2f} (F&G cap: 0.85->0.70)"))
+                    print(f"  [FLOW] F&G CAP: Extreme buy 0.85->0.70 (F&G={fg_val})")
                 else:
-                    if is_bearish:
-                        print(f"  [FLOW] BEARISH regime: Extreme buying {taker_ratio:.2f} (letting signal through)")
                     signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
             elif heavy_buying:
-                euphoria_long_cap = fg_val > 85
-                if euphoria_long_cap:
-                    signals.append(("LONG", 0.40, f"Heavy taker buying: {taker_ratio:.2f} (CAPPED: F&G={fg_val} euphoria)"))
-                    print(f"  [FLOW] EUPHORIA CAP: Heavy buy 0.70->0.40 (F&G={fg_val})")
+                if fg_val > 85:
+                    signals.append(("LONG", 0.55, f"Heavy taker buying: {taker_ratio:.2f} (F&G cap: 0.70->0.55)"))
+                    print(f"  [FLOW] F&G CAP: Heavy buy 0.70->0.55 (F&G={fg_val})")
                 else:
-                    if is_bearish:
-                        print(f"  [FLOW] BEARISH regime: Heavy buying {taker_ratio:.2f} (letting signal through)")
                     signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
                 if depth["bid_strength"] > 1.3:
                     signals.append(("LONG", 0.3, "Bid depth confirms"))
@@ -2817,12 +2826,13 @@ HOW TO DECIDE:
 USE THIS DATA: If a pair has <10% win rate, be VERY skeptical. Lower your confidence.
 If a pair has >15% win rate, it has proven itself - trust stronger signals on it.
 
-FEAR & GREED (CONTRARIAN - THIS IS A HARD RULE):
-- F&G < 15 (CAPITULATION): ONLY suggest LONG. Extreme fear = panic selling = bounces are violent. Shorting capitulation is suicide. Code will block any SHORT you suggest.
-- F&G < 30 (FEAR): Strongly favor LONG. Fear = accumulation zone. Only SHORT if WHALE+FLOW both strongly confirm selling.
-- F&G > 85 (EUPHORIA): ONLY suggest SHORT. Extreme greed = blow-off top incoming. Buying euphoria is suicide. Code will block any LONG you suggest.
-- F&G > 70 (GREED): Strongly favor SHORT. Greed = distribution zone. Only LONG if WHALE+FLOW both strongly confirm buying.
+FEAR & GREED (SOFT BIAS - V3.1.88):
+- F&G < 15 (EXTREME FEAR): Slightly favor LONG (contrarian bounce possible), but allow SHORT if WHALE+FLOW+SENTIMENT confirm bearish. Sustained fear ≠ imminent bounce. Trust the signals.
+- F&G < 30 (FEAR): Mild LONG bias. SHORT is fine if signals confirm.
+- F&G > 85 (EXTREME GREED): Slightly favor SHORT (contrarian top possible), but allow LONG if WHALE+FLOW+SENTIMENT confirm bullish.
+- F&G > 70 (GREED): Mild SHORT bias. LONG is fine if signals confirm.
 - F&G 30-70 (NEUTRAL ZONE): Use WHALE+FLOW signals normally, no directional bias.
+IMPORTANT: F&G is ONE input, not a hard rule. If 3+ personas say SHORT in extreme fear, trust them - the market IS bearish.
 
 TRADE HISTORY CONTEXT:
 {trade_history_summary}
@@ -3620,7 +3630,19 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     except Exception:
         pass
 
-    print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | Method: {chart_sr['method']}")
+    # V3.1.88: R:R gate — reject trades with reward:risk < 1.5:1
+    _rr_ratio = tp_pct_raw / sl_pct_raw if sl_pct_raw > 0 else 0
+    if _rr_ratio < 1.5:
+        print(f"  [R:R GATE] REJECTED: TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}% = {_rr_ratio:.2f}:1 (need 1.5:1)")
+        upload_ai_log_to_weex(
+            stage=f"R:R Gate: {symbol} rejected",
+            input_data={"tp_pct": tp_pct_raw, "sl_pct": sl_pct_raw, "rr_ratio": round(_rr_ratio, 2)},
+            output_data={"action": "REJECTED", "reason": "R:R too low"},
+            explanation=f"Trade rejected: TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}% = {_rr_ratio:.2f}:1. Minimum 1.5:1 R:R required."
+        )
+        return {"executed": False, "reason": f"R:R too low: {_rr_ratio:.2f}:1 (TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}%)"}
+
+    print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | R:R {_rr_ratio:.1f}:1 | Method: {chart_sr['method']}")
     
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
     # Orphan TP/SL triggers from previous trades block leverage changes on WEEX.
@@ -3701,16 +3723,17 @@ COOLDOWN_HOURS = {
     3: 1,   # T3 base: DOGE/XRP/ADA ~0.3%/hr, need 1.2h min
 }
 
-# V3.1.73: Cooldown multipliers by exit reason
+# V3.1.88: Halved post-loss cooldowns for competition (7 days left, need faster re-entry)
+# Was: SL=2x, force=2x, early=1.5x. Now: SL=1x, force=1x, early=0.75x
 COOLDOWN_MULTIPLIERS = {
-    "sl_hit": 2.0,       # SL hit = clear trend reversal, need 2x cooldown
-    "force_stop": 2.0,   # Force exit = bad trade, need time
-    "early_exit": 1.5,   # Early exit at loss = trend fading
-    "max_hold": 0.5,     # Timeout = direction unclear, short cooldown
-    "profit_lock": 0.0,  # Won! No cooldown, re-enter on next signal
-    "tp_hit": 0.0,       # Full TP hit, re-enter ASAP
-    "regime_exit": 1.0,  # Regime change, standard cooldown
-    "default": 1.0,      # Unknown reason, standard cooldown
+    "sl_hit": 1.0,       # SL hit = was 2x, halved for competition speed
+    "force_stop": 1.0,   # Force exit = was 2x, halved
+    "early_exit": 0.75,  # Early exit at loss = was 1.5x, halved
+    "max_hold": 0.5,     # Timeout = direction unclear, short cooldown (unchanged)
+    "profit_lock": 0.0,  # Won! No cooldown, re-enter on next signal (unchanged)
+    "tp_hit": 0.0,       # Full TP hit, re-enter ASAP (unchanged)
+    "regime_exit": 0.5,  # Regime change = was 1x, halved
+    "default": 0.5,      # Unknown reason = was 1x, halved
 }
 
 # ============================================================
