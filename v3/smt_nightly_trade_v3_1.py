@@ -3643,7 +3643,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         return {"executed": False, "reason": f"R:R too low: {_rr_ratio:.2f}:1 (TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}%)"}
 
     print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | R:R {_rr_ratio:.1f}:1 | Method: {chart_sr['method']}")
-    
+
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
     # Orphan TP/SL triggers from previous trades block leverage changes on WEEX.
     try:

@@ -704,7 +704,6 @@ def check_trading_signals():
                 status_str = f" [{', '.join(status_parts)}]" if status_parts else ""
                 logger.info(f"  {pair} (T{tier}): {signal} ({confidence:.0%}){status_str}")
 
-<<<<<<< HEAD
                 # V3.1.88: Log WHY signal is WAIT (from analyzer) for observability
                 if signal == "WAIT" and confidence == 0:
                     _cycle_wait += 1
@@ -718,13 +717,8 @@ def check_trading_signals():
                     _cycle_signals += 1
                     _cycle_above_80 += 1
 
-                # V3.1.74: EXTREME FEAR BTC SHIELD - BTC is too slow for shorts in fear bounces
-                # F&G < 20 = contrarian BUY signal. BTC shorts at 20x leverage lose on fear bounces.
-                # Altcoins (SOL, DOGE etc) are volatile enough for shorts to work.
-=======
                 # V3.1.88: Removed BTC SHORT fear shield - allow BTC shorts if signals confirm
                 # Previous: blocked BTC SHORT when F&G<20. Now trust Judge decision.
->>>>>>> origin/claude/review-trading-signals-mSbUR
                 if signal == "SHORT" and pair == "BTC" and _fg_value < 20:
                     logger.info(f"    -> F&G NOTE: BTC SHORT in fear (F&G={_fg_value}). Allowing per V3.1.88 soft bias.")
 
@@ -3087,17 +3081,6 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-<<<<<<< HEAD
-    logger.info("SMT Daemon V3.1.88 - DAEMON OBSERVABILITY")
-    logger.info("=" * 60)
-    logger.info("V3.1.88 CHANGES (DAEMON OBSERVABILITY):")
-    logger.info("  - FIX 17: F&G value + regime label logged every signal cycle")
-    logger.info("  - FIX 17: WAIT reason logged per pair (from analyzer reasoning)")
-    logger.info("  - FIX 17: below-80% signals flagged explicitly")
-    logger.info("  - FIX 17: SLOTS FULL / NO SWAP TARGET logged when swap blocked")
-    logger.info("  - FIX 17: Cycle-end summary (signals/blocked/opportunities)")
-    logger.info("  - INHERITED: V3.1.87 regime-aware swap gate + V3.1.85 80% floor")
-=======
     logger.info("SMT Daemon V3.1.88 - F&G SOFT BIAS + FASTER CYCLES + R:R GATE")
     logger.info("=" * 60)
     logger.info("V3.1.88 CHANGES:")
@@ -3110,7 +3093,6 @@ def run_daemon():
     logger.info("  - Cooldowns halved: SL 2x->1x, force 2x->1x, early 1.5x->0.75x")
     logger.info("  - Regime score softened: ±2 -> ±1 (F&G one input, not override)")
     logger.info("  - INHERITED: V3.1.87 regime-aware swap + V3.1.85 80% hard floor")
->>>>>>> origin/claude/review-trading-signals-mSbUR
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
@@ -3121,6 +3103,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     logger.info("Cooldowns: ENFORCED (V3.1.81) + blacklist after force_stop")
     logger.info("Slot Swap: ENABLED (V3.1.88) - 83% min conf, 45min age, regime-aware PnL gate")
+    logger.info("F&G: SOFT BIAS (V3.1.88) - contrarian +10% boost, no hard blocks")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
