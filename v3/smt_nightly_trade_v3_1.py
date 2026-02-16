@@ -2953,9 +2953,9 @@ Respond with JSON ONLY (no markdown, no backticks):
                     and whale_vote.get("confidence", 0) >= 0.60):
                     flow_whale_aligned = True
 
-            # V3.1.78: Confidence-scaled sizing (12-18%) bounded by equity tier position count
-            # Scale: 12% base, 15% high-conf, 18% ultra. But cap so all slots fit in ~85% of equity.
-            base_size = balance * 0.12
+            # V3.1.90: COMPETITION PUSH - 25% base (was 12%). Per-slot cap (28.3%) clips higher tiers.
+            # Scale: 25% base, 31.25% high-conf, 37.5% ultra. Cap so all slots fit in ~85% of equity.
+            base_size = balance * 0.25
             if confidence >= 0.90 and flow_whale_aligned:
                 position_usdt = base_size * 1.5  # 18% of balance - ULTRA
                 print(f"  [SIZING] ULTRA: 90%+ conf + FLOW/WHALE aligned -> 18%")
