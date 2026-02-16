@@ -2347,8 +2347,14 @@ class FlowPersona:
                 elif taker_ratio < 0.8:
                     signals.append(("SHORT", 0.5, f"Taker sell pressure: {taker_ratio:.2f}"))
                 
-                if depth["bid_strength"] > 1.3:
+                # V3.1.89: Graduated depth signals — extreme imbalance (3x+) gets stronger score
+                if depth["bid_strength"] > 3.0:
+                    signals.append(("LONG", 0.6, f"EXTREME bid depth: {depth['bid_strength']:.2f}x"))
+                elif depth["bid_strength"] > 1.3:
                     signals.append(("LONG", 0.4, "Strong bid depth"))
+
+                if depth["ask_strength"] > 3.0:
+                    signals.append(("SHORT", 0.6, f"EXTREME ask depth: {depth['ask_strength']:.2f}x"))
                 elif depth["ask_strength"] > 1.3:
                     signals.append(("SHORT", 0.4, "Strong ask depth"))
             
@@ -2379,14 +2385,14 @@ class FlowPersona:
                     "reasoning": "; ".join(s[2] for s in signals if s[0] == "NEUTRAL"),
                 }
             
-            if long_score > short_score and long_score > 0.4:
+            if long_score > short_score and long_score >= 0.4:
                 return {
                     "persona": self.name,
                     "signal": "LONG",
                     "confidence": min(0.85, long_score),
                     "reasoning": "; ".join(s[2] for s in signals if s[0] == "LONG"),
                 }
-            elif short_score > long_score and short_score > 0.4:
+            elif short_score > long_score and short_score >= 0.4:
                 return {
                     "persona": self.name,
                     "signal": "SHORT",
@@ -3702,17 +3708,18 @@ COOLDOWN_HOURS = {
     3: 1,   # T3 base: DOGE/XRP/ADA ~0.3%/hr, need 1.2h min
 }
 
-# V3.1.88: Halved post-loss cooldowns for competition (7 days left, need faster re-entry)
-# Was: SL=2x, force=2x, early=1.5x. Now: SL=1x, force=1x, early=0.75x
+# V3.1.89: Per-symbol cooldowns REMOVED. The 80% confidence floor, chop filter,
+# consecutive loss block, and force-stop blacklist are sufficient entry gates.
+# Cooldowns were blocking legitimate re-entries after reversals.
 COOLDOWN_MULTIPLIERS = {
-    "sl_hit": 1.0,       # SL hit = was 2x, halved for competition speed
-    "force_stop": 1.0,   # Force exit = was 2x, halved
-    "early_exit": 0.75,  # Early exit at loss = was 1.5x, halved
-    "max_hold": 0.5,     # Timeout = direction unclear, short cooldown (unchanged)
-    "profit_lock": 0.0,  # Won! No cooldown, re-enter on next signal (unchanged)
-    "tp_hit": 0.0,       # Full TP hit, re-enter ASAP (unchanged)
-    "regime_exit": 0.5,  # Regime change = was 1x, halved
-    "default": 0.5,      # Unknown reason = was 1x, halved
+    "sl_hit": 0.0,
+    "force_stop": 0.0,
+    "early_exit": 0.0,
+    "max_hold": 0.0,
+    "profit_lock": 0.0,
+    "tp_hit": 0.0,
+    "regime_exit": 0.0,
+    "default": 0.0,
 }
 
 # ============================================================
