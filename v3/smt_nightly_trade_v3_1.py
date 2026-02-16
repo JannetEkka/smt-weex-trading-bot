@@ -992,21 +992,8 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         ltf_resistances = _cluster_price_levels(raw_res_1h, entry_price, threshold_pct=0.3)
         ltf_supports = _cluster_price_levels(raw_sup_1h, entry_price, threshold_pct=0.3)
 
-        # V3.1.88: Trend-adjusted MAX_TP — shorter TP when strong recent momentum
-        # Strong moves tend to mean-revert at S/R faster. Take profits quicker.
-        try:
-            recent_closes = [float(c[4]) for c in candles_1h[:6]]  # Last 6 candles = 5-candle move
-            if len(recent_closes) >= 2:
-                _5c_return = abs((recent_closes[0] - recent_closes[-1]) / recent_closes[-1]) * 100
-                if _5c_return > 1.5:
-                    MAX_TP_PCT = 1.2
-                    print(f"  [CHART-SR] Trend-adjusted TP: 5C move {_5c_return:.1f}% -> MAX_TP=1.2%")
-                elif _5c_return > 0.8:
-                    MAX_TP_PCT = 1.5
-                    print(f"  [CHART-SR] Trend-adjusted TP: 5C move {_5c_return:.1f}% -> MAX_TP=1.5%")
-                # else: keep default 2.0%
-        except Exception:
-            pass
+        # V3.1.89: Removed trend-adjusted MAX_TP — it crushed TP in trending markets
+        # and conflicted with chart-based S/R levels. Keep base 2.0% cap.
 
         # === MERGE: 4H levels are structural (preferred for SL), 1H fills gaps ===
         # For resistances/supports, combine both but track origin
@@ -3630,18 +3617,10 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     except Exception:
         pass
 
-    # V3.1.88: R:R gate — reject trades with reward:risk < 1.5:1
+    # V3.1.89: Removed R:R gate — the 1.5:1 requirement conflicted with chart-based
+    # TP/SL and ATR safety, blocking high-confidence signals (e.g. 85% SOL SHORT).
+    # Trust the 80% confidence floor + chart S/R levels instead.
     _rr_ratio = tp_pct_raw / sl_pct_raw if sl_pct_raw > 0 else 0
-    if _rr_ratio < 1.5:
-        print(f"  [R:R GATE] REJECTED: TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}% = {_rr_ratio:.2f}:1 (need 1.5:1)")
-        upload_ai_log_to_weex(
-            stage=f"R:R Gate: {symbol} rejected",
-            input_data={"tp_pct": tp_pct_raw, "sl_pct": sl_pct_raw, "rr_ratio": round(_rr_ratio, 2)},
-            output_data={"action": "REJECTED", "reason": "R:R too low"},
-            explanation=f"Trade rejected: TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}% = {_rr_ratio:.2f}:1. Minimum 1.5:1 R:R required."
-        )
-        return {"executed": False, "reason": f"R:R too low: {_rr_ratio:.2f}:1 (TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}%)"}
-
     print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | R:R {_rr_ratio:.1f}:1 | Method: {chart_sr['method']}")
 
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
