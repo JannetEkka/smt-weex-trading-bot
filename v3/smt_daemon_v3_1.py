@@ -1208,8 +1208,8 @@ def check_trading_signals():
                 else:
                     logger.info(f"SESSION [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} >= {session_min_conf:.0%}, proceeding {opportunity['pair']}")
                 
-                # V3.1.88: F&G SOFT BIAS + REGIME VETO
-                # F&G: contrarian direction gets +10% confidence boost (no hard block)
+                # V3.1.89: F&G LOG-ONLY + REGIME VETO
+                # F&G: log contrarian context for transparency, NO confidence boost
                 # Regime: BEARISH/BULLISH veto requires WHALE+FLOW override (not WHALE alone)
                 try:
                     _regime_now = get_market_regime_for_exit()
@@ -1220,23 +1220,11 @@ def check_trading_signals():
                 _opp_signal = opportunity["decision"]["decision"]
                 _regime_vetoed = False
 
-                # V3.1.88: F&G soft contrarian bias — boost contrarian direction by 10%, allow anti-contrarian
+                # V3.1.89: F&G log-only — no confidence boost, trade on raw signal quality
                 if opp_fear_greed < 15:
-                    if _opp_signal == "LONG":
-                        _fg_boost = round(opp_confidence * 0.10, 4)
-                        opp_confidence = min(opp_confidence + _fg_boost, 0.95)
-                        opportunity["decision"]["confidence"] = opp_confidence
-                        logger.info(f"F&G BOOST: {opportunity['pair']} LONG +{_fg_boost:.1%} (contrarian in extreme fear F&G={opp_fear_greed}) -> {opp_confidence:.0%}")
-                    elif _opp_signal == "SHORT":
-                        logger.info(f"F&G NOTE: {opportunity['pair']} SHORT in extreme fear (F&G={opp_fear_greed}). No boost, allowing.")
+                    logger.info(f"F&G CONTEXT: {opportunity['pair']} {_opp_signal} in extreme fear (F&G={opp_fear_greed}). No boost applied, raw conf={opp_confidence:.0%}")
                 elif opp_fear_greed > 85:
-                    if _opp_signal == "SHORT":
-                        _fg_boost = round(opp_confidence * 0.10, 4)
-                        opp_confidence = min(opp_confidence + _fg_boost, 0.95)
-                        opportunity["decision"]["confidence"] = opp_confidence
-                        logger.info(f"F&G BOOST: {opportunity['pair']} SHORT +{_fg_boost:.1%} (contrarian in extreme greed F&G={opp_fear_greed}) -> {opp_confidence:.0%}")
-                    elif _opp_signal == "LONG":
-                        logger.info(f"F&G NOTE: {opportunity['pair']} LONG in extreme greed (F&G={opp_fear_greed}). No boost, allowing.")
+                    logger.info(f"F&G CONTEXT: {opportunity['pair']} {_opp_signal} in extreme greed (F&G={opp_fear_greed}). No boost applied, raw conf={opp_confidence:.0%}")
 
                 # V3.1.75 FIX #7: Regime veto requires WHALE+FLOW agreement to override (not WHALE alone)
                 if not _regime_vetoed and _regime_label == "BEARISH" and _opp_signal == "LONG":
@@ -3098,7 +3086,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     logger.info("Cooldowns: ENFORCED (V3.1.81) + blacklist after force_stop")
     logger.info("Slot Swap: ENABLED (V3.1.88) - 83% min conf, 45min age, regime-aware PnL gate")
-    logger.info("F&G: SOFT BIAS (V3.1.88) - contrarian +10% boost, no hard blocks")
+    logger.info("F&G: LOG-ONLY (V3.1.89) - no confidence boost, raw signals only")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
