@@ -182,6 +182,13 @@ Current: V3.1.87. Next change should be V3.1.88.
 Never add session discounts, contrarian boosts, or any other override that
 lowers the trading threshold below 80%. Quality over quantity wins competitions.
 
+## Claude Code Rules (MANDATORY)
+
+1. **Plan mode = plan ONLY.** Never write code, create commits, or push during plan mode. Plan mode is for research and writing the plan file — nothing else.
+2. **Always confirm before commit/push.** Never commit or push code without explicit user approval. Present the changes, wait for "go ahead" or equivalent.
+3. **Do what you said.** If you propose approach X, implement approach X. Never silently switch to approach Y. If you realize a different approach is better mid-implementation, stop and confirm the change with the user first.
+4. **No surprise deployments.** This is a live trading bot handling real money in a competition. Every change must be reviewed and approved before it touches the branch.
+
 ## Files to Ignore
 
 - `v3/*.bak*`, `v3/*.patch` — old backups, don't modify
