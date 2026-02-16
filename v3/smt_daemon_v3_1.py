@@ -164,7 +164,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # ============================================================
 
 # Timing
-SIGNAL_CHECK_INTERVAL = 10 * 60  # V3.1.84: 10 min (was 15). Competition needs faster turnover.
+SIGNAL_CHECK_INTERVAL = 5 * 60  # V3.1.88: 5 min (was 10). Competition final week — maximize opportunities.
 POSITION_MONITOR_INTERVAL = 2 * 60  # 2 minutes (check more often for tier 3)
 HEALTH_CHECK_INTERVAL = 60
 CLEANUP_CHECK_INTERVAL = 30
@@ -635,9 +635,9 @@ def check_trading_signals():
             from smt_nightly_trade_v3_1 import get_fear_greed_index
             _fg_check = get_fear_greed_index()
             _fg_value = _fg_check.get("value", 50)
+            # V3.1.88: Hedging allowed in all F&G conditions - removed capitulation LONG-only forcing
             if _fg_value < 15:
-                HEDGE_CONFIDENCE_THRESHOLD = 0.0  # Gemini decides hedging  # V3.1.45: Allow hedges at 95%+ even in capitulation
-                logger.info(f"CAPITULATION: F&G={_fg_value} < 15, hedging DISABLED (pick a side)")
+                logger.info(f"EXTREME FEAR: F&G={_fg_value} < 15, hedging ALLOWED (V3.1.88 - trust signals)")
         except:
             pass
         # V3.1.88: Always log F&G in cycle header for observability
@@ -717,13 +717,10 @@ def check_trading_signals():
                     _cycle_signals += 1
                     _cycle_above_80 += 1
 
-                # V3.1.74: EXTREME FEAR BTC SHIELD - BTC is too slow for shorts in fear bounces
-                # F&G < 20 = contrarian BUY signal. BTC shorts at 20x leverage lose on fear bounces.
-                # Altcoins (SOL, DOGE etc) are volatile enough for shorts to work.
+                # V3.1.88: Removed BTC SHORT fear shield - allow BTC shorts if signals confirm
+                # Previous: blocked BTC SHORT when F&G<20. Now trust Judge decision.
                 if signal == "SHORT" and pair == "BTC" and _fg_value < 20:
-                    logger.info(f"    -> FEAR SHIELD: BTC SHORT blocked (F&G={_fg_value}). Contrarian BUY only for BTC in extreme fear.")
-                    signal = "WAIT"
-                    confidence = 0
+                    logger.info(f"    -> F&G NOTE: BTC SHORT in fear (F&G={_fg_value}). Allowing per V3.1.88 soft bias.")
 
                 # V3.1.81: CONSECUTIVE LOSS OVERRIDE - if we've force-stopped 2+ times
                 # on the same symbol in the same direction within 24h, BLOCK the trade.
@@ -1021,12 +1018,8 @@ def check_trading_signals():
             long_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "LONG")
             short_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "SHORT")
             MAX_SAME_DIRECTION = 5  # V3.1.55: was 99, caused all-LONG pileup  # V3.1.42: Recovery - match Gemini Judge rule 9
-            # V3.1.43: Allow 7 LONGs during Capitulation (F&G < 15)
-            if trade_opportunities:
-                first_fg = trade_opportunities[0]["decision"].get("fear_greed", 50)
-                if first_fg < 15:
-                    MAX_SAME_DIRECTION = 7  # V3.1.56: capitulation allows 7
-                    logger.info(f"CAPITULATION MODE: F&G={first_fg}, keeping hard cap at BASE_SLOTS={BASE_SLOTS}")
+            # V3.1.88: Removed capitulation 7-LONG override. Standard 5 same-direction cap in all conditions.
+            # Previous: F&G<15 allowed 7 LONGs, causing all-LONG pileup in sustained bear markets.
             
             for opportunity in trade_opportunities:
                 confidence = opportunity["decision"]["confidence"]
@@ -1215,10 +1208,9 @@ def check_trading_signals():
                 else:
                     logger.info(f"SESSION [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} >= {session_min_conf:.0%}, proceeding {opportunity['pair']}")
                 
-                # V3.1.75: REGIME VETO + F&G SANITY CHECK
-                # Rule 1: F&G < 15 = CAPITULATION = LONG ONLY (no shorts into bounces)
-                # Rule 2: F&G > 85 = EUPHORIA = SHORT ONLY (no longs into tops)
-                # Rule 3: Regime-based veto with WHALE+FLOW override (not WHALE alone)
+                # V3.1.88: F&G SOFT BIAS + REGIME VETO
+                # F&G: contrarian direction gets +10% confidence boost (no hard block)
+                # Regime: BEARISH/BULLISH veto requires WHALE+FLOW override (not WHALE alone)
                 try:
                     _regime_now = get_market_regime_for_exit()
                 except Exception as _re:
@@ -1228,13 +1220,23 @@ def check_trading_signals():
                 _opp_signal = opportunity["decision"]["decision"]
                 _regime_vetoed = False
 
-                # V3.1.75 FIX #1: F&G HARD BLOCK - common sense, no exceptions
-                if opp_fear_greed < 15 and _opp_signal == "SHORT":
-                    _regime_vetoed = True
-                    logger.warning(f"F&G VETO: F&G={opp_fear_greed} < 15 (CAPITULATION), blocking SHORT on {opportunity['pair']}. Shorting into extreme fear is suicidal.")
-                elif opp_fear_greed > 85 and _opp_signal == "LONG":
-                    _regime_vetoed = True
-                    logger.warning(f"F&G VETO: F&G={opp_fear_greed} > 85 (EUPHORIA), blocking LONG on {opportunity['pair']}. Buying into extreme greed is suicidal.")
+                # V3.1.88: F&G soft contrarian bias — boost contrarian direction by 10%, allow anti-contrarian
+                if opp_fear_greed < 15:
+                    if _opp_signal == "LONG":
+                        _fg_boost = round(opp_confidence * 0.10, 4)
+                        opp_confidence = min(opp_confidence + _fg_boost, 0.95)
+                        opportunity["decision"]["confidence"] = opp_confidence
+                        logger.info(f"F&G BOOST: {opportunity['pair']} LONG +{_fg_boost:.1%} (contrarian in extreme fear F&G={opp_fear_greed}) -> {opp_confidence:.0%}")
+                    elif _opp_signal == "SHORT":
+                        logger.info(f"F&G NOTE: {opportunity['pair']} SHORT in extreme fear (F&G={opp_fear_greed}). No boost, allowing.")
+                elif opp_fear_greed > 85:
+                    if _opp_signal == "SHORT":
+                        _fg_boost = round(opp_confidence * 0.10, 4)
+                        opp_confidence = min(opp_confidence + _fg_boost, 0.95)
+                        opportunity["decision"]["confidence"] = opp_confidence
+                        logger.info(f"F&G BOOST: {opportunity['pair']} SHORT +{_fg_boost:.1%} (contrarian in extreme greed F&G={opp_fear_greed}) -> {opp_confidence:.0%}")
+                    elif _opp_signal == "LONG":
+                        logger.info(f"F&G NOTE: {opportunity['pair']} LONG in extreme greed (F&G={opp_fear_greed}). No boost, allowing.")
 
                 # V3.1.75 FIX #7: Regime veto requires WHALE+FLOW agreement to override (not WHALE alone)
                 if not _regime_vetoed and _regime_label == "BEARISH" and _opp_signal == "LONG":
@@ -1277,7 +1279,7 @@ def check_trading_signals():
                         stage=f"Regime Veto: {_opp_signal} {opportunity['pair']} blocked",
                         input_data={"regime": _regime_label, "signal": _opp_signal, "pair": opportunity['pair'], "fear_greed": opp_fear_greed},
                         output_data={"action": "VETOED", "reason": f"F&G={opp_fear_greed}, regime={_regime_label}"},
-                        explanation=f"Sanity filter: blocked {_opp_signal} on {opportunity['pair']}. F&G={opp_fear_greed}, regime={_regime_label}. Contrarian logic: no shorts in capitulation, no longs in euphoria."
+                        explanation=f"Regime veto: blocked {_opp_signal} on {opportunity['pair']}. Regime={_regime_label}, F&G={opp_fear_greed}."
                     )
                     continue
 
@@ -2179,9 +2181,8 @@ and occupy 2 slots instead of 1. Close the side with worse PnL. No exceptions.
 RULE 2 - DIRECTIONAL CONCENTRATION LIMIT:
 Max 5 positions in the same direction normally. If 6+ LONGs or 6+ SHORTs, close the WEAKEST ones
 (lowest PnL% or highest loss) until we have max 5.
-EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move all alts together.
-CRITICAL (V3.1.75): In F&G < 15, close any SHORT positions — shorting into capitulation is suicidal.
-In F&G > 85 (Euphoria), close any LONG positions — buying euphoria is suicidal.
+V3.1.88: F&G does NOT force direction. Both LONGs and SHORTs are valid in any F&G range if signals support them.
+Do NOT close positions solely because of F&G value. Evaluate each position on its own merit (PnL, time held, signal strength).
 
 RULE 3 - LET WINNERS REACH TP:
 DO NOT close winning positions early. WEEX has TP orders at 2.5-3.5%. Let them trigger.
@@ -3080,15 +3081,18 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.88 - DAEMON OBSERVABILITY")
+    logger.info("SMT Daemon V3.1.88 - F&G SOFT BIAS + FASTER CYCLES + R:R GATE")
     logger.info("=" * 60)
-    logger.info("V3.1.88 CHANGES (DAEMON OBSERVABILITY):")
-    logger.info("  - FIX 17: F&G value + regime label logged every signal cycle")
-    logger.info("  - FIX 17: WAIT reason logged per pair (from analyzer reasoning)")
-    logger.info("  - FIX 17: below-80% signals flagged explicitly")
-    logger.info("  - FIX 17: SLOTS FULL / NO SWAP TARGET logged when swap blocked")
-    logger.info("  - FIX 17: Cycle-end summary (signals/blocked/opportunities)")
-    logger.info("  - INHERITED: V3.1.87 regime-aware swap gate + V3.1.85 80% floor")
+    logger.info("V3.1.88 CHANGES:")
+    logger.info("  - F&G soft bias: +10% contrarian boost, no hard blocks")
+    logger.info("  -   FLOW caps moderated (0.85->0.70 in extreme F&G, was 0.55)")
+    logger.info("  -   Judge prompt softened, BTC SHORT shield removed")
+    logger.info("  - Trend-adjusted MAX_TP: 1.2-2.0% based on 5-candle momentum")
+    logger.info("  - R:R gate: trades need 1.5:1 reward:risk minimum")
+    logger.info("  - Signal check: 5min (was 10min). Final week — faster cycling")
+    logger.info("  - Cooldowns halved: SL 2x->1x, force 2x->1x, early 1.5x->0.75x")
+    logger.info("  - Regime score softened: ±2 -> ±1 (F&G one input, not override)")
+    logger.info("  - INHERITED: V3.1.87 regime-aware swap + V3.1.85 80% hard floor")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
@@ -3099,6 +3103,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     logger.info("Cooldowns: ENFORCED (V3.1.81) + blacklist after force_stop")
     logger.info("Slot Swap: ENABLED (V3.1.88) - 83% min conf, 45min age, regime-aware PnL gate")
+    logger.info("F&G: SOFT BIAS (V3.1.88) - contrarian +10% boost, no hard blocks")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
