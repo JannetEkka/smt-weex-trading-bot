@@ -441,8 +441,8 @@ def run_with_retry(func, *args, max_retries=MAX_RETRIES, **kwargs):
 # V3.1.82: SLOT SWAP HELPER
 # ============================================================
 
-def _find_weakest_position(open_positions, new_symbol, position_map):
-    """V3.1.84: Find the weakest position that can be swapped out for a stronger signal.
+def _find_weakest_position(open_positions, new_symbol, position_map, fear_greed=50):
+    """V3.1.87: Find the weakest position that can be swapped out for a stronger signal.
 
     Returns dict with position info if a viable swap target exists, None otherwise.
 
@@ -450,12 +450,21 @@ def _find_weakest_position(open_positions, new_symbol, position_map):
     - Require PnL < -0.5% (was < +0.5%). Don't kill barely-negative positions.
     - Require position age >= 45 minutes. Young trades haven't had time to develop.
     - The old logic swapped -0.18% BTC after 20min for -$25.9 loss + fees. Never again.
+
+    V3.1.87: Regime-aware swap gate.
+    - Normal: -0.5% (don't kill positions that might recover)
+    - Capitulation (F&G < 20): -0.25% (opportunity cost of blocked slots > swap cost)
     """
     weakest = None
     weakest_pnl_pct = 999
     now_ms = int(time.time() * 1000)
     MIN_AGE_MS = 45 * 60 * 1000  # 45 minutes minimum before eligible for swap
-    MIN_PNL_FOR_SWAP = -0.5      # Must be losing at least -0.5% to be swappable
+    # V3.1.87: Regime-aware swap threshold
+    if fear_greed < 20:
+        MIN_PNL_FOR_SWAP = -0.25  # Capitulation: opportunity cost > swap cost
+        logger.info(f"  [SWAP] Regime gate: F&G={fear_greed}, threshold={MIN_PNL_FOR_SWAP}%")
+    else:
+        MIN_PNL_FOR_SWAP = -0.5   # Normal: don't kill positions that might recover
 
     for pos in open_positions:
         pos_symbol = pos.get("symbol", "")
@@ -793,7 +802,7 @@ def check_trading_signals():
                             trade_type = "new"
                         elif confidence >= 0.83:
                             # V3.1.84: SLOT SWAP - 83% min (was 75%). Don't swap for marginal signals.
-                            _weakest = _find_weakest_position(open_positions, symbol, position_map)
+                            _weakest = _find_weakest_position(open_positions, symbol, position_map, fear_greed=_fg_value)
                             if _weakest:
                                 can_trade_this = True
                                 trade_type = "slot_swap"
@@ -824,7 +833,7 @@ def check_trading_signals():
                             trade_type = "new"
                         elif confidence >= 0.83:
                             # V3.1.84: SLOT SWAP - 83% min (was 75%). Don't swap for marginal signals.
-                            _weakest = _find_weakest_position(open_positions, symbol, position_map)
+                            _weakest = _find_weakest_position(open_positions, symbol, position_map, fear_greed=_fg_value)
                             if _weakest:
                                 can_trade_this = True
                                 trade_type = "slot_swap"
@@ -1056,7 +1065,7 @@ def check_trading_signals():
 
                 # V3.1.82: SLOT SWAP - close weakest position to free slot for stronger signal
                 if trade_type_check == "slot_swap":
-                    _swap_target = _find_weakest_position(open_positions, opportunity["pair_info"]["symbol"], position_map)
+                    _swap_target = _find_weakest_position(open_positions, opportunity["pair_info"]["symbol"], position_map, fear_greed=_fg_value)
                     if _swap_target:
                         _swap_sym = _swap_target["symbol"]
                         _swap_side = _swap_target["side"]
@@ -3030,15 +3039,15 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.86 - MULTI-TIMEFRAME TP/SL")
+    logger.info("SMT Daemon V3.1.87 - REGIME-AWARE SWAP GATE")
     logger.info("=" * 60)
-    logger.info("V3.1.86 CHANGES (MULTI-TIMEFRAME TP/SL):")
-    logger.info("  - FIX 15: MTF S/R - 4H candles (8 days) for structural levels")
-    logger.info("  -   Old: 50x1H only (2 days). After spikes, SL placed on crash noise")
-    logger.info("  -   New: 4H structural S/R preferred for SL. 1H fills gaps for TP")
-    logger.info("  -   SL on real 4H support, not random 1H swing lows from a crash")
-    logger.info("  - INHERITED: V3.1.85 80% hard floor + MIN_SL 1.0%")
-    logger.info("  - COMPETITION: 5 days left, quality over quantity")
+    logger.info("V3.1.87 CHANGES (REGIME-AWARE SWAP GATE):")
+    logger.info("  - FIX 16: Swap PnL threshold adapts to market regime")
+    logger.info("  -   Normal (F&G >= 20): -0.5% (don't kill recovering positions)")
+    logger.info("  -   Capitulation (F&G < 20): -0.25% (opportunity cost > swap cost)")
+    logger.info("  -   Stops 12h lockouts from weak LONGs blocking stronger signals")
+    logger.info("  - INHERITED: V3.1.86 MTF TP/SL + V3.1.85 80% hard floor")
+    logger.info("  - COMPETITION: 7 days left, maximize slot efficiency")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
@@ -3048,7 +3057,7 @@ def run_daemon():
         logger.info(f"  Tier {tier}: {', '.join(pairs)}")
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     logger.info("Cooldowns: ENFORCED (V3.1.81) + blacklist after force_stop")
-    logger.info("Slot Swap: ENABLED (V3.1.84) - 83% min conf, 45min age, -0.5% PnL threshold")
+    logger.info("Slot Swap: ENABLED (V3.1.87) - 83% min conf, 45min age, regime-aware PnL gate")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
