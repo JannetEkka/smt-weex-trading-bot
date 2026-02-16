@@ -892,16 +892,43 @@ def _cluster_price_levels(levels: list, ref_price: float, threshold_pct: float =
     return clusters
 
 
+def _find_swing_levels(candles: list) -> tuple:
+    """Extract swing high/low pivot levels from candle data.
+    Returns (raw_resistances, raw_supports) lists."""
+    highs = [float(c[2]) for c in candles]
+    lows = [float(c[3]) for c in candles]
+
+    raw_resistances = []
+    for i in range(2, len(candles) - 2):
+        if (highs[i] > highs[i-1] and highs[i] > highs[i+1] and
+            highs[i] > highs[i-2] and highs[i] > highs[i+2]):
+            raw_resistances.append(highs[i])
+
+    raw_supports = []
+    for i in range(2, len(candles) - 2):
+        if (lows[i] < lows[i-1] and lows[i] < lows[i+1] and
+            lows[i] < lows[i-2] and lows[i] < lows[i+2]):
+            raw_supports.append(lows[i])
+
+    # Add recent 12-candle extremes as additional S/R
+    if len(highs) >= 12:
+        raw_resistances.append(max(highs[:12]))
+        raw_supports.append(min(lows[:12]))
+
+    return raw_resistances, raw_supports
+
+
 def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict:
-    """V3.1.84: Chart-based TP/SL using support/resistance from swing highs/lows.
+    """V3.1.86: Multi-timeframe chart-based TP/SL using support/resistance.
 
-    Like a human trader looking at a 1H chart:
-    1. Find swing highs (resistance) and swing lows (support) from recent candles
-    2. For LONG: TP at nearest resistance above entry, SL below nearest support
-    3. For SHORT: TP at nearest support below entry, SL above nearest resistance
-    4. Apply competition bounds to ensure fast turnover
+    Like a human trader checking BOTH the 1H and 4H charts:
+    1. 4H candles (50 = ~8 days) → structural S/R levels (strong)
+    2. 1H candles (50 = ~2 days) → recent S/R levels (weak)
+    3. 4H levels preferred for SL (real structure holds better)
+    4. Combined levels for TP (nearest valid target)
+    5. Apply competition bounds for fast turnover
 
-    Returns dict with tp_pct, sl_pct, method ("chart" or "fallback"), levels found.
+    Returns dict with tp_pct, sl_pct, method ("chart_mtf"/"chart"/"fallback"), levels found.
     """
     global _sr_cache, _sr_cache_time
 
@@ -910,8 +937,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
     cache_key = f"{symbol}_{signal}"
     if now - _sr_cache_time < 600 and cache_key in _sr_cache:
         cached = _sr_cache[cache_key]
-        # Recalculate pcts for current entry price (may differ from cached)
-        if cached.get("method") == "chart":
+        if cached.get("method") in ("chart_mtf", "chart"):
             return cached
 
     if now - _sr_cache_time >= 600:
@@ -922,80 +948,105 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         "tp_pct": None, "sl_pct": None,
         "tp_price": None, "sl_price": None,
         "method": "fallback",
-        "levels": {"resistances": [], "supports": []}
+        "levels": {"resistances": [], "supports": [], "htf_resistances": [], "htf_supports": []}
     }
 
-    # Competition bounds - tight for fast turnover
+    # Competition bounds
     MIN_TP_PCT = 0.8   # Min 0.8% TP (covers fees at 20x + profit)
     MAX_TP_PCT = 2.0   # Max 2.0% TP (competition: faster cycles)
-    MIN_SL_PCT = 1.0   # V3.1.85: Raised 0.5%->1.0%. At 20x = 20% max loss. Gives room to breathe.
+    MIN_SL_PCT = 1.0   # V3.1.85: At 20x = 20% max loss
     MAX_SL_PCT = 2.0   # Max 2.0% SL (max risk per trade)
 
-    try:
-        # Fetch 1H candles for S/R detection (50 candles = ~2 days)
-        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1h&limit=50"
-        r = requests.get(url, timeout=10)
-        candles = r.json()
+    htf_resistances = []
+    htf_supports = []
+    ltf_resistances = []
+    ltf_supports = []
 
-        if not isinstance(candles, list) or len(candles) < 20:
-            print(f"  [CHART-SR] {symbol}: Insufficient candle data ({len(candles) if isinstance(candles, list) else 0})")
+    try:
+        # === HIGHER TIMEFRAME: 4H candles (50 = ~8 days of structure) ===
+        try:
+            url_4h = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=4h&limit=50"
+            r_4h = requests.get(url_4h, timeout=10)
+            candles_4h = r_4h.json()
+
+            if isinstance(candles_4h, list) and len(candles_4h) >= 10:
+                raw_res_4h, raw_sup_4h = _find_swing_levels(candles_4h)
+                htf_resistances = _cluster_price_levels(raw_res_4h, entry_price, threshold_pct=0.4)
+                htf_supports = _cluster_price_levels(raw_sup_4h, entry_price, threshold_pct=0.4)
+                print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 4H: {len(htf_resistances)}R / {len(htf_supports)}S levels (8-day structure)")
+            else:
+                print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 4H: Insufficient data, using 1H only")
+        except Exception as e4h:
+            print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 4H fetch failed ({e4h}), using 1H only")
+
+        # === LOWER TIMEFRAME: 1H candles (50 = ~2 days of recent action) ===
+        url_1h = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1h&limit=50"
+        r_1h = requests.get(url_1h, timeout=10)
+        candles_1h = r_1h.json()
+
+        if not isinstance(candles_1h, list) or len(candles_1h) < 20:
+            print(f"  [CHART-SR] {symbol}: Insufficient 1H candle data")
             return result
 
-        highs = [float(c[2]) for c in candles]
-        lows = [float(c[3]) for c in candles]
-        closes = [float(c[4]) for c in candles]
+        raw_res_1h, raw_sup_1h = _find_swing_levels(candles_1h)
+        ltf_resistances = _cluster_price_levels(raw_res_1h, entry_price, threshold_pct=0.3)
+        ltf_supports = _cluster_price_levels(raw_sup_1h, entry_price, threshold_pct=0.3)
 
-        # --- SWING HIGH detection (pivot highs = resistance) ---
-        # A swing high: high[i] > high of 2 candles on each side
-        raw_resistances = []
-        for i in range(2, len(candles) - 2):
-            if (highs[i] > highs[i-1] and highs[i] > highs[i+1] and
-                highs[i] > highs[i-2] and highs[i] > highs[i+2]):
-                raw_resistances.append(highs[i])
+        # === MERGE: 4H levels are structural (preferred for SL), 1H fills gaps ===
+        # For resistances/supports, combine both but track origin
+        # 4H levels that don't overlap with 1H are "structural" — stronger
+        all_resistances = list(htf_resistances)
+        for r in ltf_resistances:
+            # Only add 1H level if not within 0.4% of any 4H level (avoid duplicates)
+            is_dup = any(abs(r - h) / entry_price * 100 < 0.4 for h in htf_resistances)
+            if not is_dup:
+                all_resistances.append(r)
 
-        # --- SWING LOW detection (pivot lows = support) ---
-        raw_supports = []
-        for i in range(2, len(candles) - 2):
-            if (lows[i] < lows[i-1] and lows[i] < lows[i+1] and
-                lows[i] < lows[i-2] and lows[i] < lows[i+2]):
-                raw_supports.append(lows[i])
+        all_supports = list(htf_supports)
+        for s in ltf_supports:
+            is_dup = any(abs(s - h) / entry_price * 100 < 0.4 for h in htf_supports)
+            if not is_dup:
+                all_supports.append(s)
 
-        # Add recent 12-candle extremes as additional S/R
-        recent_high = max(highs[:12])
-        recent_low = min(lows[:12])
-        raw_resistances.append(recent_high)
-        raw_supports.append(recent_low)
+        result["levels"]["resistances"] = [round(r, 8) for r in sorted(all_resistances)]
+        result["levels"]["supports"] = [round(s, 8) for s in sorted(all_supports, reverse=True)]
+        result["levels"]["htf_resistances"] = [round(r, 8) for r in sorted(htf_resistances)]
+        result["levels"]["htf_supports"] = [round(s, 8) for s in sorted(htf_supports, reverse=True)]
 
-        # Cluster nearby levels (within 0.3% = same zone)
-        resistances = _cluster_price_levels(raw_resistances, entry_price, threshold_pct=0.3)
-        supports = _cluster_price_levels(raw_supports, entry_price, threshold_pct=0.3)
-
-        result["levels"]["resistances"] = [round(r, 8) for r in sorted(resistances)]
-        result["levels"]["supports"] = [round(s, 8) for s in sorted(supports, reverse=True)]
-
+        has_4h = len(htf_resistances) > 0 or len(htf_supports) > 0
         tp_found = False
         sl_found = False
 
         if signal == "LONG":
-            # TP: nearest resistance ABOVE entry (with min buffer)
-            tp_candidates = [r for r in resistances if r > entry_price * (1 + MIN_TP_PCT / 100)]
+            # TP: nearest resistance ABOVE entry from combined levels
+            tp_candidates = [r for r in all_resistances if r > entry_price * (1 + MIN_TP_PCT / 100)]
             if tp_candidates:
-                tp_price = min(tp_candidates)  # Nearest resistance
+                tp_price = min(tp_candidates)
                 tp_pct = ((tp_price - entry_price) / entry_price) * 100
-                # Place TP slightly below resistance (95% of the way)
-                tp_pct = tp_pct * 0.95
+                tp_pct = tp_pct * 0.95  # Slightly below resistance
                 tp_pct = max(tp_pct, MIN_TP_PCT)
                 tp_pct = min(tp_pct, MAX_TP_PCT)
                 result["tp_pct"] = round(tp_pct, 2)
                 result["tp_price"] = round(entry_price * (1 + tp_pct / 100), 8)
                 tp_found = True
 
-            # SL: nearest support BELOW entry (with min buffer)
-            sl_candidates = [s for s in supports if s < entry_price * (1 - MIN_SL_PCT / 100)]
-            if sl_candidates:
-                sl_price = max(sl_candidates)  # Nearest support
+            # SL: PREFER 4H support (structural), fallback to 1H
+            sl_candidates_4h = [s for s in htf_supports if s < entry_price * (1 - MIN_SL_PCT / 100)]
+            sl_candidates_1h = [s for s in ltf_supports if s < entry_price * (1 - MIN_SL_PCT / 100)]
+
+            if sl_candidates_4h:
+                sl_price = max(sl_candidates_4h)  # Nearest 4H support
                 sl_pct = ((entry_price - sl_price) / entry_price) * 100
-                # Place SL slightly below support (105% of the distance)
+                sl_pct = sl_pct * 1.05  # Slightly below support
+                sl_pct = max(sl_pct, MIN_SL_PCT)
+                sl_pct = min(sl_pct, MAX_SL_PCT)
+                result["sl_pct"] = round(sl_pct, 2)
+                result["sl_price"] = round(entry_price * (1 - sl_pct / 100), 8)
+                sl_found = True
+                print(f"  [CHART-SR] SL from 4H structural support ${sl_price:.4f}")
+            elif sl_candidates_1h:
+                sl_price = max(sl_candidates_1h)
+                sl_pct = ((entry_price - sl_price) / entry_price) * 100
                 sl_pct = sl_pct * 1.05
                 sl_pct = max(sl_pct, MIN_SL_PCT)
                 sl_pct = min(sl_pct, MAX_SL_PCT)
@@ -1004,10 +1055,10 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 sl_found = True
 
         elif signal == "SHORT":
-            # TP: nearest support BELOW entry
-            tp_candidates = [s for s in supports if s < entry_price * (1 - MIN_TP_PCT / 100)]
+            # TP: nearest support BELOW entry from combined levels
+            tp_candidates = [s for s in all_supports if s < entry_price * (1 - MIN_TP_PCT / 100)]
             if tp_candidates:
-                tp_price = max(tp_candidates)  # Nearest support
+                tp_price = max(tp_candidates)
                 tp_pct = ((entry_price - tp_price) / entry_price) * 100
                 tp_pct = tp_pct * 0.95
                 tp_pct = max(tp_pct, MIN_TP_PCT)
@@ -1016,10 +1067,22 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 result["tp_price"] = round(entry_price * (1 - tp_pct / 100), 8)
                 tp_found = True
 
-            # SL: nearest resistance ABOVE entry
-            sl_candidates = [r for r in resistances if r > entry_price * (1 + MIN_SL_PCT / 100)]
-            if sl_candidates:
-                sl_price = min(sl_candidates)  # Nearest resistance
+            # SL: PREFER 4H resistance (structural), fallback to 1H
+            sl_candidates_4h = [r for r in htf_resistances if r > entry_price * (1 + MIN_SL_PCT / 100)]
+            sl_candidates_1h = [r for r in ltf_resistances if r > entry_price * (1 + MIN_SL_PCT / 100)]
+
+            if sl_candidates_4h:
+                sl_price = min(sl_candidates_4h)  # Nearest 4H resistance
+                sl_pct = ((sl_price - entry_price) / entry_price) * 100
+                sl_pct = sl_pct * 1.05
+                sl_pct = max(sl_pct, MIN_SL_PCT)
+                sl_pct = min(sl_pct, MAX_SL_PCT)
+                result["sl_pct"] = round(sl_pct, 2)
+                result["sl_price"] = round(entry_price * (1 + sl_pct / 100), 8)
+                sl_found = True
+                print(f"  [CHART-SR] SL from 4H structural resistance ${sl_price:.4f}")
+            elif sl_candidates_1h:
+                sl_price = min(sl_candidates_1h)
                 sl_pct = ((sl_price - entry_price) / entry_price) * 100
                 sl_pct = sl_pct * 1.05
                 sl_pct = max(sl_pct, MIN_SL_PCT)
@@ -1029,18 +1092,21 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 sl_found = True
 
         if tp_found and sl_found:
-            result["method"] = "chart"
-            print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} {signal}: "
+            result["method"] = "chart_mtf" if has_4h else "chart"
+            method_label = "MTF" if has_4h else "1H"
+            print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} {signal} [{method_label}]: "
                   f"TP {result['tp_pct']:.2f}% (${result['tp_price']:.4f}), "
                   f"SL {result['sl_pct']:.2f}% (${result['sl_price']:.4f}) "
-                  f"| R: {len(resistances)} levels, S: {len(supports)} levels")
+                  f"| 4H: {len(htf_resistances)}R/{len(htf_supports)}S, 1H: {len(ltf_resistances)}R/{len(ltf_supports)}S")
         elif tp_found:
+            result["method"] = "chart_mtf" if has_4h else "chart"
             print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()}: TP found ({result['tp_pct']:.2f}%), SL fallback")
         elif sl_found:
+            result["method"] = "chart_mtf" if has_4h else "chart"
             print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()}: SL found ({result['sl_pct']:.2f}%), TP fallback")
         else:
             print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()}: No clear S/R, using fallback "
-                  f"| R: {len(resistances)} levels, S: {len(supports)} levels")
+                  f"| 4H: {len(htf_resistances)}R/{len(htf_supports)}S, 1H: {len(ltf_resistances)}R/{len(ltf_supports)}S")
 
     except Exception as e:
         print(f"  [CHART-SR] Error for {symbol}: {e}")
@@ -3479,7 +3545,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
     chart_sr = find_chart_based_tp_sl(symbol, signal, current_price)
 
-    if chart_sr["method"] == "chart" and chart_sr["tp_pct"] and chart_sr["sl_pct"]:
+    if chart_sr["method"] in ("chart", "chart_mtf") and chart_sr["tp_pct"] and chart_sr["sl_pct"]:
         # CHART-BASED: Real S/R levels from candle swing highs/lows
         tp_pct_raw = chart_sr["tp_pct"]
         sl_pct_raw = chart_sr["sl_pct"]
@@ -3487,7 +3553,8 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         sl_price = chart_sr["sl_price"]
         tp_pct = tp_pct_raw / 100
         sl_pct = sl_pct_raw / 100
-        print(f"  [TP/SL] CHART-BASED: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
+        mtf_label = "MTF" if chart_sr["method"] == "chart_mtf" else "1H"
+        print(f"  [TP/SL] CHART-BASED [{mtf_label}]: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
     else:
         # FALLBACK: Use competition-tightened percentages (NOT the old wide 3.0-3.5%)
         if _in_competition:

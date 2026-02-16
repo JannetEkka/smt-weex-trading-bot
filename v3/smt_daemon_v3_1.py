@@ -3030,15 +3030,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.85 - HARD 80% CONFIDENCE FLOOR")
+    logger.info("SMT Daemon V3.1.86 - MULTI-TIMEFRAME TP/SL")
     logger.info("=" * 60)
-    logger.info("V3.1.85 CHANGES (HARD 80% FLOOR):")
-    logger.info("  - FIX 14: HARD 80% CONFIDENCE FLOOR - no exceptions, no discounts")
-    logger.info("  -   Session floors REMOVED (was 70-82% by hour)")
-    logger.info("  -   Contrarian boost REMOVED (was 65% in extreme F&G)")
-    logger.info("  -   Chop fallback raised to 80% (was 75%)")
-    logger.info("  -   Goal: $3.6k -> $20k via consistent small wins, not volume")
-    logger.info("  - INHERITED: V3.1.84 chart-based TP/SL + swap fix + orphan fix")
+    logger.info("V3.1.86 CHANGES (MULTI-TIMEFRAME TP/SL):")
+    logger.info("  - FIX 15: MTF S/R - 4H candles (8 days) for structural levels")
+    logger.info("  -   Old: 50x1H only (2 days). After spikes, SL placed on crash noise")
+    logger.info("  -   New: 4H structural S/R preferred for SL. 1H fills gaps for TP")
+    logger.info("  -   SL on real 4H support, not random 1H swing lows from a crash")
+    logger.info("  - INHERITED: V3.1.85 80% hard floor + MIN_SL 1.0%")
     logger.info("  - COMPETITION: 5 days left, quality over quantity")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
