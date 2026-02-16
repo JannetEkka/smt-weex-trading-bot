@@ -928,7 +928,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
     # Competition bounds - tight for fast turnover
     MIN_TP_PCT = 0.8   # Min 0.8% TP (covers fees at 20x + profit)
     MAX_TP_PCT = 2.0   # Max 2.0% TP (competition: faster cycles)
-    MIN_SL_PCT = 0.5   # Min 0.5% SL (too tight = noise stops)
+    MIN_SL_PCT = 1.0   # V3.1.85: Raised 0.5%->1.0%. At 20x = 20% max loss. Gives room to breathe.
     MAX_SL_PCT = 2.0   # Max 2.0% SL (max risk per trade)
 
     try:
