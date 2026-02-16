@@ -2595,6 +2595,28 @@ def sync_tracker_with_weex():
             tracker.save_state()
             logger.info(f"  Cleared {len(_stale_cds)} stale cooldown(s): {', '.join(s.replace('cmt_','').upper() for s in _stale_cds)}")
 
+        # V3.1.83: Cancel orphan trigger orders on symbols with NO open position.
+        # When positions are manually closed or force-closed, TP/SL trigger orders
+        # can be left behind on WEEX. These orphan triggers cause:
+        #   1. Leverage set failures ("open orders" blocking)
+        #   2. Old SL/TP executing at wrong prices on new positions
+        #   3. The DOGE SL bug: bot set $0.0999 but WEEX showed $0.0936 (old trigger)
+        _all_trading_syms = {info["symbol"] for info in TRADING_PAIRS.values()}
+        _orphan_cleaned = 0
+        for _check_sym in _all_trading_syms:
+            if _check_sym not in _weex_syms:
+                # No open position on this symbol — any trigger orders are orphans
+                try:
+                    _orphan_result = cancel_all_orders_for_symbol(_check_sym)
+                    if _orphan_result.get("cancelled"):
+                        _n_cancelled = len(_orphan_result["cancelled"])
+                        _orphan_cleaned += _n_cancelled
+                        logger.warning(f"  Cancelled {_n_cancelled} orphan trigger(s) on {_check_sym.replace('cmt_','').upper()} (no open position)")
+                except Exception:
+                    pass
+        if _orphan_cleaned > 0:
+            logger.warning(f"  Total orphan triggers cleaned: {_orphan_cleaned}")
+
     except Exception as e:
         logger.error(f"Sync error: {e}")
 
@@ -2997,14 +3019,16 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.83 - COMPETITION TP FIX")
+    logger.info("SMT Daemon V3.1.83 - ORPHAN TRIGGER FIX + COMPETITION TP")
     logger.info("=" * 60)
-    logger.info("V3.1.83 CHANGES (COMPETITION COMPOUNDING):")
-    logger.info("  - FIX 9: COMPETITION TP - no F&G widening during competition (base TPs only)")
+    logger.info("V3.1.83 CHANGES (CRITICAL BUG FIX):")
+    logger.info("  - FIX 9: ORPHAN TRIGGER CLEANUP - cancel TP/SL triggers before closing positions")
+    logger.info("  -   Bug: close_position_manually() never cancelled trigger orders")
+    logger.info("  -   Impact: old SL/TP persisted, wrong SL on new trades (DOGE $0.0936 vs $0.0999)")
+    logger.info("  -   Fix: cancel triggers in close_position_manually + pre-trade + startup sync")
+    logger.info("  - FIX 10: COMPETITION TP - no F&G widening during competition (base TPs only)")
     logger.info("  -   Was: F&G<15 -> TP x1.5 (4.5%). Now: TP stays at base (3.0-3.5%)")
-    logger.info("  -   Rationale: tighter TPs hit more often = faster compounding to $20k")
     logger.info("  - INHERITED: V3.1.82 slot swap + PM + sync debug")
-    logger.info("  - INHERITED: V3.1.81 cooldown enforce + blacklist + SL cap")
     logger.info("  - COMPETITION: Ends Feb 23")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():

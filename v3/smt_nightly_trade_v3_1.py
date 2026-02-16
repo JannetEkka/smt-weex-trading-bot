@@ -3346,8 +3346,17 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         tp_price = current_price * (1 - tp_pct)
         sl_price = current_price * (1 + sl_pct)
     
+    # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
+    # Orphan TP/SL triggers from previous trades block leverage changes on WEEX.
+    try:
+        _pre_cleanup = cancel_all_orders_for_symbol(symbol)
+        if _pre_cleanup.get("cancelled"):
+            print(f"  [PRE-TRADE] Cancelled {len(_pre_cleanup['cancelled'])} orphan orders on {symbol}")
+    except Exception:
+        pass
+
     set_leverage(symbol, safe_leverage)
-    
+
     print(f"  [TRADE] {signal} {symbol}: {size} @ ${current_price:.4f}")
     print(f"  [TRADE] Tier {tier} ({tier_config['name']}): TP ${tp_price:.4f} ({tp_pct*100:.1f}%), SL ${sl_price:.4f} ({sl_pct*100:.1f}%)")
     
@@ -3743,6 +3752,17 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
 
 
 def close_position_manually(symbol: str, side: str, size: float) -> Dict:
+    # V3.1.83: ALWAYS cancel trigger orders (TP/SL) BEFORE closing position.
+    # Without this, orphan triggers persist on WEEX after close, causing:
+    #   1. Leverage set failures on next trade ("open orders" blocking)
+    #   2. Old SL triggers executing at wrong prices on new positions
+    #   3. Ghost TP/SL from previous trades interfering with current ones
+    try:
+        cleanup = cancel_all_orders_for_symbol(symbol)
+        if cleanup.get("cancelled"):
+            print(f"  [CLOSE] Cancelled {len(cleanup['cancelled'])} orphan orders for {symbol} before closing")
+    except Exception as e:
+        print(f"  [CLOSE] Warning: trigger cleanup failed for {symbol}: {e}")
     close_type = "3" if side == "LONG" else "4"
     return place_order(symbol, close_type, size)
 
