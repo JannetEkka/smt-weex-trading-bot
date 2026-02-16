@@ -3299,25 +3299,39 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         sl_pct_raw = tier_config["sl_pct"]
         print(f"  [ATR-SL] Error ({e}), using tier SL: {sl_pct_raw}%")
     
-    # V3.1.82: F&G TP SCALING RE-ENABLED (was removed in V3.1.78 along with broken R:R floor).
-    # At F&G=12 we need wider TPs — fear bounces are violent, 3.5% leaves money on the table.
-    # Competition needs every % — $770/win at 5.25% vs $513/win at 3.5%.
+    # V3.1.83: COMPETITION TP FIX — never widen TPs during competition.
+    # Previous x1.5 scaling at F&G<15 pushed TPs to 4.5% which rarely hits in fear markets.
+    # Compounding needs TURNOVER: 3% TP hits 2-3x more often than 4.5%, more wins = faster growth.
+    # $3,870 -> $20k needs ~6 perfect cycles. Tighter TPs = more cycles per day.
     tp_pct_raw = tier_config["tp_pct"]
     try:
         _fg_regime = REGIME_CACHE.get("regime", 300)
         _fg_val = _fg_regime.get("fear_greed", 50) if _fg_regime else 50
-        if _fg_val < 15:
-            tp_pct_raw = round(tp_pct_raw * 1.5, 2)
-            print(f"  [TP-SCALE] CAPITULATION F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x1.5)")
-        elif _fg_val < 30:
-            tp_pct_raw = round(tp_pct_raw * 1.25, 2)
-            print(f"  [TP-SCALE] FEAR F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x1.25)")
-        elif _fg_val > 80:
-            tp_pct_raw = round(tp_pct_raw * 0.50, 2)
-            print(f"  [TP-SCALE] EXTREME GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.5)")
-        elif _fg_val > 60:
-            tp_pct_raw = round(tp_pct_raw * 0.65, 2)
-            print(f"  [TP-SCALE] GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.65)")
+        _in_competition = COMPETITION_START <= datetime.now(timezone.utc) <= COMPETITION_END
+        if _in_competition:
+            # Competition: NEVER widen TPs. Only tighten in greed.
+            if _fg_val > 80:
+                tp_pct_raw = round(tp_pct_raw * 0.50, 2)
+                print(f"  [TP-SCALE] COMP+EXTREME GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.5)")
+            elif _fg_val > 60:
+                tp_pct_raw = round(tp_pct_raw * 0.65, 2)
+                print(f"  [TP-SCALE] COMP+GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.65)")
+            else:
+                print(f"  [TP-SCALE] COMPETITION: TP {tp_pct_raw}% (base, no F&G widening)")
+        else:
+            # Normal (non-competition): full F&G scaling
+            if _fg_val < 15:
+                tp_pct_raw = round(tp_pct_raw * 1.5, 2)
+                print(f"  [TP-SCALE] CAPITULATION F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x1.5)")
+            elif _fg_val < 30:
+                tp_pct_raw = round(tp_pct_raw * 1.25, 2)
+                print(f"  [TP-SCALE] FEAR F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x1.25)")
+            elif _fg_val > 80:
+                tp_pct_raw = round(tp_pct_raw * 0.50, 2)
+                print(f"  [TP-SCALE] EXTREME GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.5)")
+            elif _fg_val > 60:
+                tp_pct_raw = round(tp_pct_raw * 0.65, 2)
+                print(f"  [TP-SCALE] GREED F&G={_fg_val}: TP {tier_config['tp_pct']}% -> {tp_pct_raw}% (x0.65)")
     except Exception:
         pass  # Keep base tier TP on error
     print(f"  [ATR-SL] SL: {sl_pct_raw:.2f}% | TP: {tp_pct_raw:.2f}% (Tier {tier})")

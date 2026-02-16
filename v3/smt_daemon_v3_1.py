@@ -2997,13 +2997,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.82 - SLOT SWAP + PM COMPETITION MODE")
+    logger.info("SMT Daemon V3.1.83 - COMPETITION TP FIX")
     logger.info("=" * 60)
-    logger.info("V3.1.82 CHANGES (SLOT OPTIMIZATION):")
-    logger.info("  - FIX 6: SLOT SWAP - close weakest position when 3/3 full + strong signal (>=75%)")
-    logger.info("  - FIX 7: PM COMPETITION MODE - Rule 6 override when slots full + better opportunity")
-    logger.info("  - FIX 8: SYNC DEBUG - logs opened_at for all tracked positions on startup")
-    logger.info("  - INHERITED: V3.1.81 cooldown enforce + blacklist + sync fix + SL cap")
+    logger.info("V3.1.83 CHANGES (COMPETITION COMPOUNDING):")
+    logger.info("  - FIX 9: COMPETITION TP - no F&G widening during competition (base TPs only)")
+    logger.info("  -   Was: F&G<15 -> TP x1.5 (4.5%). Now: TP stays at base (3.0-3.5%)")
+    logger.info("  -   Rationale: tighter TPs hit more often = faster compounding to $20k")
+    logger.info("  - INHERITED: V3.1.82 slot swap + PM + sync debug")
+    logger.info("  - INHERITED: V3.1.81 cooldown enforce + blacklist + SL cap")
     logger.info("  - COMPETITION: Ends Feb 23")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
