@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.97 - Trust The Ensemble (80% Floor + Chop Only)
+SMT Trading Daemon V3.1.98 - Trust The Ensemble (80% Floor + Chop Only)
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
