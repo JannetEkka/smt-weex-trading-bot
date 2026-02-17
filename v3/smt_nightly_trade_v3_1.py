@@ -3860,18 +3860,31 @@ class TradeTracker:
                 if symbol in self.cooldowns:
                     del self.cooldowns[symbol]
 
-            # V3.1.81: FORCE STOP BLACKLIST - hard block re-entry after force_stop/early_exit
-            # This prevents the zombie re-entry loop where the system closes at a loss
-            # then immediately re-opens the same trade on the next signal check.
+            # V3.1.91: LOSS BLACKLIST - block re-entry after ANY losing close
+            # V3.1.81 only tracked force_stop/early_exit. But SL hits via WEEX triggers
+            # (reason "tp_sl_hit") and PM closes (reason "portfolio_manager_*") with negative
+            # PnL were never recorded — so DOGE could get re-entered 4x in one day.
+            # Now ALL losses count toward both blacklist AND consecutive loss tracking.
             plain_sym = symbol.split(":")[0] if ":" in symbol else symbol
-            if "force_stop" in reason or "force_exit" in reason or "early_exit" in reason:
+            is_force = "force_stop" in reason or "force_exit" in reason or "early_exit" in reason
+            is_loss = pnl_pct < -0.1  # Any meaningful loss (SL hit, PM close, etc.)
+
+            if is_force:
+                # Original: hard blacklist 4-12h for force exits
                 max_hold = trade.get("max_hold_hours", 8)
-                blacklist_hours = max(max_hold, 4)  # At least 4h, or full max_hold
+                blacklist_hours = max(max_hold, 4)
                 blacklist_until = datetime.now(timezone.utc) + timedelta(hours=blacklist_hours)
                 self.force_stop_blacklist[plain_sym] = blacklist_until.isoformat()
                 print(f"  [BLACKLIST] {plain_sym.replace('cmt_','').upper()} blocked for {blacklist_hours}h after {cd_type}")
+            elif is_loss:
+                # V3.1.91: SL hits and PM losses get 2h blacklist
+                blacklist_hours = 2
+                blacklist_until = datetime.now(timezone.utc) + timedelta(hours=blacklist_hours)
+                self.force_stop_blacklist[plain_sym] = blacklist_until.isoformat()
+                print(f"  [BLACKLIST] {plain_sym.replace('cmt_','').upper()} blocked for {blacklist_hours}h after SL/loss ({reason})")
 
-                # V3.1.81: Track consecutive force stops for F&G override logic
+            # V3.1.91: Track ALL losses for consecutive loss counting (was force_stop only)
+            if is_force or is_loss:
                 direction = trade.get("side", "UNKNOWN")
                 if plain_sym not in self.recent_force_stops:
                     self.recent_force_stops[plain_sym] = []

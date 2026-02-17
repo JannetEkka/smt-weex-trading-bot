@@ -2189,11 +2189,10 @@ At 20x leverage: TP hit at 2.5% = $690 profit. Closing at 0.75% = $207. That's 3
 A trade at +1.5% pulling back to +0.7% is 60% of the way to TP — that's a NORMAL pullback, not a close signal.
 Only close a winner if: (a) it peaked green then went NEGATIVE (thesis broken), or (b) it peaked PAST TP but exchange order didn't fill (TP overrun).
 
-RULE 3b - TRAJECTORY-BASED EXIT (V3.1.59):
-If a position's PnL trajectory shows 5+ readings of steady decline from a peak > 1.0%
-(e.g. +1.8% -> +1.5% -> +1.2% -> +0.9% -> +0.6%), the trade thesis may be invalidating.
-Consider closing to lock partial profit UNLESS Cryptoracle sentiment still supports the direction.
-If Cryptoracle momentum is positive for our direction, let it ride despite the fade.
+RULE 3b - WINNERS ARE UNTOUCHABLE (V3.1.91):
+Code will block any attempt to close a profitable position. Do not suggest closing winners.
+Focus your analysis on LOSING positions only. Winners ride to TP or SL — that's the system.
+Closing a winner at +1.24% instead of letting 3.5% TP hit costs us $500+ per trade.
 
 RULE 4 - F&G EXTREME FEAR (UPDATED V3.1.55):
 If F&G < 20 (extreme fear), be patient with positions BUT you CAN still close if:
@@ -2304,10 +2303,17 @@ If nothing should be closed, return:
                     size = float(p.get("size", 0))
                     pnl = float(p.get("unrealized_pnl", 0))
                     entry = float(p.get("entry_price", 0))
-                    
+
                     if size <= 0:
                         continue
-                    
+
+                    # V3.1.91: PROTECT WINNERS — never close profitable positions
+                    # TP/SL triggers on WEEX handle profit-taking. Gemini closing winners
+                    # at +1.24% instead of letting 3.5% TP hit cost us $500+ per trade.
+                    if pnl > 0:
+                        logger.info(f"[PORTFOLIO] PROTECTED: {sym_clean} {close_side} is profitable (+${pnl:.2f}). Let TP handle it.")
+                        break
+
                     logger.warning(f"[PORTFOLIO] Closing {sym_clean} {close_side}: {close_reason}")
                     
                     close_result = close_position_manually(sym, close_side, size)
@@ -3080,15 +3086,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.90 - COMPETITION PUSH: 25% base margin")
+    logger.info("SMT Daemon V3.1.91 - STOP BLEEDING: Loss streak block + Protect winners")
     logger.info("=" * 60)
-    logger.info("V3.1.90 CHANGES:")
-    logger.info("  - Base margin sizing increased from 12% to 25% of balance")
-    logger.info("  - Confidence tiers: 25% base / 31.25% high / 37.5% ultra")
-    logger.info("  - Per-slot cap (28.3%) clips higher tiers naturally")
-    logger.info("  - All safety rails unchanged (80% floor, 50% ceiling, SL bounds)")
-    logger.info("  - FIX 17: Cycle-end summary (signals/blocked/opportunities)")
-    logger.info("  - INHERITED: V3.1.87 regime-aware swap gate + V3.1.85 80% floor")
+    logger.info("V3.1.91 CHANGES:")
+    logger.info("  - ALL losses now count toward streak block (was force_stop only)")
+    logger.info("  - SL hits and PM losses get 2h blacklist (force_stops still 4-12h)")
+    logger.info("  - Gemini PM blocked from closing winning positions (code guard)")
+    logger.info("  - Rule 3b trajectory exit REMOVED — winners ride to TP or SL")
+    logger.info("  - INHERITED: V3.1.90 25% base margin, V3.1.87 swap gate, V3.1.85 80% floor")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
