@@ -3487,7 +3487,7 @@ class MultiPersonaAnalyzer:
 
             if not confirm['confirmed']:
                 old_conf = final.get('confidence', 0)
-                new_conf = old_conf - confirm['penalty']
+                new_conf = round(old_conf - confirm['penalty'], 4)  # V3.1.103: avoid float precision (0.85-0.05=0.7999...)
                 print(f"  [CONFIRM] Penalty: -{confirm['penalty']*100:.0f}% ({old_conf*100:.0f}% -> {new_conf*100:.0f}%)")
 
                 if new_conf < MIN_CONFIDENCE_TO_TRADE:

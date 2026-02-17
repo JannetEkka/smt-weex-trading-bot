@@ -3267,9 +3267,10 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.102 - Trust The Ensemble (80%% Floor + Chop Only)")
+    logger.info("SMT Daemon V3.1.103 - Trust The Ensemble (80%% Floor + Chop Only)")
     logger.info("=" * 60)
-    logger.info("V3.1.102 CHANGES:")
+    logger.info("V3.1.103 CHANGES:")
+    logger.info("  - V3.1.103: Fix float precision in confirm gate (0.85-0.05=0.7999 bug, blocked valid 80%% trades)")
     logger.info("  - V3.1.102: Stale position auto-close (PM: sideways >2h, PnL near zero, free slot)")
     logger.info("  - V3.1.101: Entry confirmation gate (block early entries where price opposes signal)")
     logger.info("  - V3.1.101: Per-pair CHOP timeframe (BTC uses 1H ADX(14), others stay 15m)")
