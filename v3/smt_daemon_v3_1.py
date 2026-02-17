@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.102 - Trust The Ensemble (80% Floor + Chop Only)
+SMT Trading Daemon V3.1.105 - Trust The Ensemble (80% Floor + Chop Only)
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -3311,15 +3311,17 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.104 - Trust The Ensemble (80%% Floor + Chop Only)")
+    logger.info("SMT Daemon V3.1.105 - Trust The Ensemble (80%% Floor + Chop Only)")
     logger.info("=" * 60)
-    logger.info("V3.1.104 CHANGES:")
+    logger.info("V3.1.105 CHANGES:")
+    logger.info("  - V3.1.105: All pairs on 5m chop candles (BTC/ETH/BNB=48, LTC/SOL/DOGE/ADA=42, XRP=60)")
+    logger.info("  - V3.1.105: ADX(14) on 5m — thresholds (18,25) match 1H standard, BB(40) always computes")
     logger.info("  - V3.1.104: REMOVED entry confirmation gate (fired at reversals, fought ensemble)")
     logger.info("  - V3.1.104: Signal persistence — same direction 2+ cycles overrides MEDIUM chop")
     logger.info("  - V3.1.103: Fix float precision in confirm gate (0.85-0.05=0.7999 bug, blocked valid 80%% trades)")
     logger.info("  - V3.1.102: Stale position auto-close (PM: sideways >2h, PnL near zero, free slot)")
     logger.info("  - V3.1.101: Entry confirmation gate (block early entries where price opposes signal)")
-    logger.info("  - V3.1.101: Per-pair CHOP timeframe (BTC uses 1H ADX(14), others stay 15m)")
+    logger.info("  - V3.1.101: Per-pair CHOP timeframe (BTC uses 1H ADX(14), others stay 15m) [superseded by V3.1.105]")
     logger.info("  - V3.1.100: Opposite swap TP proximity gate + deferred flip queue")
     logger.info("  - V3.1.99: Flat 1.1%% TP cap all pairs, chart SL +0.5%% buffer, MAX_SL 2.5%%")
     logger.info("  - NUKED: F&G veto, regime veto, freshness filter, consecutive loss block")

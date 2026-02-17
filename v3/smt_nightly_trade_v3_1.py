@@ -714,17 +714,18 @@ def detect_sideways_market(symbol: str) -> dict:
     }
 
     try:
-        # V3.1.101: Per-pair CHOP timeframe — match each pair's natural rhythm
-        # BTC moves in institutional blocks; 15m/30m is noise. Use 1H for clearer trend read.
+        # V3.1.105: Per-pair CHOP timeframe — all on 5m, tuned to each pair's observed chop window
+        # Chart analysis: blue chips chop 2-4h, retail pairs 1.5-3h, XRP extends 5h+
+        # All use ADX(14) on 5m — min 42 candles ensures BB(40) always computes
         PAIR_CHOP_TIMEFRAME = {
-            "BTC":  ("1h", 24),    # Institutional blocks, need 1H. 24x1H = 24h. ADX(14) standard.
-            "ETH":  ("15m", 60),   # Fine on 15m
-            "BNB":  ("15m", 60),
-            "LTC":  ("15m", 60),
-            "XRP":  ("15m", 60),
-            "SOL":  ("15m", 60),   # Retail-driven, 15m captures well
-            "DOGE": ("15m", 60),
-            "ADA":  ("15m", 60),
+            "BTC":  ("5m", 48),   # 4h lookback — institutional, chops 2-4h
+            "ETH":  ("5m", 48),   # 4h lookback — blue chip, chops 2-4h
+            "BNB":  ("5m", 48),   # 4h lookback — mirrors ETH behavior
+            "LTC":  ("5m", 42),   # 3.5h lookback — mid-cap, chops 1.5-2h
+            "XRP":  ("5m", 60),   # 5h lookback — extended ranger, 5h+ chops
+            "SOL":  ("5m", 42),   # 3.5h lookback — volatile, chops 1-2h
+            "DOGE": ("5m", 42),   # 3.5h lookback — meme, chops fast
+            "ADA":  ("5m", 42),   # 3.5h lookback — retail, chops fast
         }
 
         pair_name = None
@@ -738,11 +739,11 @@ def detect_sideways_market(symbol: str) -> dict:
         r = requests.get(url, timeout=10)
         candles = r.json()
 
-        # V3.1.101: min candles depends on timeframe and ADX period
-        if granularity == "1h":
+        # V3.1.105: min candles depends on timeframe and ADX period
+        if granularity in ("1h", "5m"):
             min_candles = 16  # ADX(14) needs 15+ candles
         else:
-            min_candles = 30  # ADX(28) needs 29+ candles
+            min_candles = 30  # ADX(28) needs 29+ candles (15m legacy fallback)
         if not isinstance(candles, list) or len(candles) < min_candles:
             result["error"] = "Insufficient candle data"
             _chop_cache[symbol] = result
@@ -757,8 +758,8 @@ def detect_sideways_market(symbol: str) -> dict:
         # ---- 1. ADX CALCULATION ----
         # ADX measures trend STRENGTH regardless of direction
         # V3.1.94: Period 28 on 15M candles. Thresholds lowered ~3pt (15M DX deflation)
-        # V3.1.101: Period 14 for 1H (industry standard ADX), 28 for 15m
-        period = 14 if granularity == "1h" else 28
+        # V3.1.105: Period 14 for 5m and 1H (standard ADX, enough data points), 28 for 15m legacy
+        period = 14 if granularity in ("1h", "5m") else 28
         if len(closes) >= period + 1:
             plus_dm_list = []
             minus_dm_list = []
@@ -861,11 +862,11 @@ def detect_sideways_market(symbol: str) -> dict:
         reasons = []
 
         # ADX scoring — V3.1.94: thresholds lowered ~3pt for 15M DX deflation
-        # V3.1.101: 1H ADX(14) reads higher — use standard thresholds
-        if granularity == "1h":
-            adx_very_weak, adx_weak = 18, 25  # Standard ADX(14) thresholds for 1H
+        # V3.1.105: 5m uses ADX(14) same as 1H — standard thresholds apply
+        if granularity in ("1h", "5m"):
+            adx_very_weak, adx_weak = 18, 25  # Standard ADX(14) thresholds
         else:
-            adx_very_weak, adx_weak = 12, 17  # 15m with period=28
+            adx_very_weak, adx_weak = 12, 17  # 15m with period=28 (legacy)
 
         if adx < adx_very_weak:
             chop_signals += 2
@@ -898,16 +899,22 @@ def detect_sideways_market(symbol: str) -> dict:
 
         # V3.1.93/94: TIER-AWARE RECENCY CHECK — if market was choppy overall but has
         # resolved into a trend recently, reduce the consistency penalty.
-        # V3.1.94: Windows expressed in candle counts
-        # V3.1.101: Adjusted for 1H candles (BTC)
+        # V3.1.105: 5m candles — recency window ~30-50% of full lookback (in candle counts)
         if granularity == "1h":
-            recent_lookback = min(6, lookback)    # 6h — 1H candles for BTC
+            recent_lookback = min(6, lookback)    # 6h — 1H candles (legacy)
+        elif granularity == "5m":
+            if tier == 3:
+                recent_lookback = min(12, lookback)   # 1h of 5m — fast movers
+            elif tier == 1:
+                recent_lookback = min(20, lookback)   # 1.67h of 5m — blue chips
+            else:
+                recent_lookback = min(16, lookback)   # 1.33h of 5m — mid caps
         elif tier == 3:
-            recent_lookback = min(12, lookback)   # 3h (12 x 15m) — fast movers
+            recent_lookback = min(12, lookback)   # 3h (12 x 15m) — fast movers (legacy)
         elif tier == 1:
-            recent_lookback = min(20, lookback)   # 5h (20 x 15m) — blue chips
+            recent_lookback = min(20, lookback)   # 5h (20 x 15m) — blue chips (legacy)
         else:
-            recent_lookback = min(16, lookback)   # 4h (16 x 15m) — mid caps
+            recent_lookback = min(16, lookback)   # 4h (16 x 15m) — mid caps (legacy)
 
         recent_cons = consistency  # Default: same as full window
         if directions and recent_lookback >= 3 and len(directions) >= recent_lookback:
