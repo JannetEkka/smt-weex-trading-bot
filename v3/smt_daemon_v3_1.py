@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.92 - PLAN MARGIN: Equity-based sizing + ATR-aware TP caps
+SMT Trading Daemon V3.1.93 - PM Signal Awareness + Tier-Aware Chop Recency
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -405,6 +405,9 @@ analyzer = MultiPersonaAnalyzer()
 _last_trade_opened_at = 0  # unix timestamp
 GLOBAL_TRADE_COOLDOWN = 900  # V3.1.66c: 15 minutes (was 30min, too slow for competition)
 
+# V3.1.93: Last signal cycle summary for PM context
+_last_signal_summary = {}
+
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -660,6 +663,9 @@ def check_trading_signals():
         _cycle_above_80 = 0      # Signals at 80%+ (tradeable)
         _cycle_blocked = 0       # Blocked by cooldown/blacklist/loss-streak
         _cycle_wait = 0          # Analyzer returned WAIT
+        # V3.1.93: Track signal landscape for PM
+        _best_unexecuted = None  # Best signal that couldn't trade (slots full, already positioned, etc.)
+        _chop_blocked_pairs = []
         for pair, pair_info in TRADING_PAIRS.items():
             symbol = pair_info["symbol"]
             tier = pair_info.get("tier", 2)
@@ -747,6 +753,12 @@ def check_trading_signals():
                                      "adx": _chop_data.get("adx", 0), "bb_width": _chop_data.get("bb_width_pct", 0)},
                         explanation=f"Chop filter blocked {pair} entry. Market is sideways/range-bound: {_chop_data.get('reason', 'N/A')}. Slot freed for next trending candidate at 75%+ confidence."
                     )
+                    # V3.1.93: Track chop-blocked signal details for PM
+                    _chop_blocked_pairs.append({
+                        "pair": pair,
+                        "direction": decision.get("chop_original_decision", signal),
+                        "pre_chop_conf": decision.get("chop_pre_penalty_confidence", 0),
+                    })
 
 # Telegram alerts for ALL tradeable signals
 #                if signal in ("LONG", "SHORT") and confidence >= 0.75:
@@ -873,10 +885,15 @@ def check_trading_signals():
                             # V3.1.88: Log when slots full and signal too weak for swap
                             logger.info(f"    -> SLOTS FULL: {confidence:.0%} < 83% swap threshold ({weex_position_count}/{effective_max_positions})")
 
+                # V3.1.93: Track best non-executed signal for PM context
+                if signal in ("LONG", "SHORT") and confidence >= 0.80 and not can_trade_this:
+                    if _best_unexecuted is None or confidence > _best_unexecuted.get("confidence", 0):
+                        _best_unexecuted = {"pair": pair, "direction": signal, "confidence": confidence}
+
                 # Build comprehensive vote details with FULL reasoning
                 vote_details = []
                 market_analysis = ""
-                
+
                 persona_votes = decision.get("persona_votes", [])
                 
                 # If no persona_votes, try to get from vote_summary
@@ -1461,6 +1478,15 @@ def check_trading_signals():
         # V3.1.88: Cycle-end summary for observability
         _opp_count = len(trade_opportunities) if trade_opportunities else 0
         logger.info(f"--- Cycle summary: {_cycle_signals} signals ({_cycle_above_80} at 80%+), {_cycle_wait} WAIT, {_cycle_blocked} blocked, {_opp_count} opportunities ---")
+        # V3.1.93: Update signal summary for PM
+        global _last_signal_summary
+        _last_signal_summary = {
+            "timestamp": time.time(),
+            "signals_above_80": _cycle_above_80,
+            "chop_blocked": _chop_blocked_pairs,
+            "best_unexecuted": _best_unexecuted,
+            "all_wait": _cycle_above_80 == 0 and chop_blocked_count == 0,
+        }
         save_local_log(ai_log, run_timestamp)
         
     except Exception as e:
@@ -2135,6 +2161,35 @@ def gemini_portfolio_review():
         weex_position_count = len(positions)
         effective_max_positions = get_max_positions_for_equity(equity)
 
+        # V3.1.93: Build signal landscape context for PM
+        signal_landscape = ""
+        _sig_age = time.time() - _last_signal_summary.get("timestamp", 0)
+        if _last_signal_summary and _sig_age < 900:  # Only use if < 15 min old
+            sig = _last_signal_summary
+            if sig.get("all_wait"):
+                _chop_str = ""
+                if sig.get("chop_blocked"):
+                    _chop_names = [f"{c['pair']} {c['direction']} (was {c['pre_chop_conf']:.0%} pre-chop)" for c in sig["chop_blocked"]]
+                    _chop_str = f"\nChop-blocked: {', '.join(_chop_names)}"
+                signal_landscape = f"""=== SIGNAL LANDSCAPE (last cycle) ===
+NO TRADEABLE SIGNALS: All 8 pairs returned WAIT or were blocked.{_chop_str}
+IMPLICATION: If you close a position now, the freed slot will likely sit empty.
+Factor this into Rule 9 decisions — an occupied slot (even at -0.5%) may be better than an empty one.
+"""
+            elif sig.get("signals_above_80", 0) > 0:
+                _best = sig.get("best_unexecuted")
+                _best_str = f"Best waiting: {_best['pair']} {_best['direction']} at {_best['confidence']:.0%}" if _best else "All 80%+ signals were executed"
+                signal_landscape = f"""=== SIGNAL LANDSCAPE (last cycle) ===
+Tradeable signals: {sig['signals_above_80']} pair(s) at 80%+ confidence
+{_best_str}
+IMPLICATION: Replacement candidates exist. Freeing a slot for a stronger signal is reasonable.
+"""
+            else:
+                signal_landscape = """=== SIGNAL LANDSCAPE (last cycle) ===
+Some signals found but none reached 80% trading threshold.
+IMPLICATION: Freed slots may sit empty for 1-2 cycles. Be conservative with Rule 9 closures.
+"""
+
         prompt = f"""You are the AI Portfolio Manager for a crypto futures trading bot in a LIVE competition with REAL money.
 Your job is DISCIPLINED portfolio management. Apply the rules strictly and without emotion.
 - Let WINNERS run to their TP targets. Do NOT close winning positions early.
@@ -2169,6 +2224,7 @@ Each position shows its last 5 PnL readings (newest last).
 Look for: fading from peak (consider tightening), accelerating (let run), flat (stale trade).
 If Cryptoracle sentiment supports the position direction, be more patient even if fading.
 
+{signal_landscape}
 === MANDATORY RULES (V3.1.59 - 47+ iterations of battle-tested experience) ===
 
 RULE 1 - OPPOSITE SIDE RESOLUTION (HIGHEST PRIORITY):
@@ -3086,13 +3142,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.92 - PLAN MARGIN: Equity-based sizing + ATR-aware TP caps")
+    logger.info("SMT Daemon V3.1.93 - PM Signal Awareness + Tier-Aware Chop Recency")
     logger.info("=" * 60)
-    logger.info("V3.1.92 CHANGES:")
-    logger.info("  - Position sizing now uses EQUITY (balance + UPnL), not just balance")
-    logger.info("  - Safety floors: never below balance, capped at 2.5x balance, 15% margin guard")
-    logger.info("  - ATR-aware TP cap: min(3.0%, 2x ATR) replaces hard 2.0% cap")
-    logger.info("  - INHERITED: V3.1.91 loss streak block, V3.1.90 25% base, V3.1.85 80% floor")
+    logger.info("V3.1.93 CHANGES:")
+    logger.info("  - PM now sees signal landscape: knows if freed slots can be filled")
+    logger.info("  - Chop filter: tier-aware recency (T3=4h, T2=6h, T1=8h) prevents stale chop blocks")
+    logger.info("  - Chop metadata: pre-penalty confidence tracked for PM context")
+    logger.info("  - INHERITED: V3.1.92 equity sizing, V3.1.91 loss streak, V3.1.85 80% floor")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]

@@ -784,8 +784,8 @@ def detect_sideways_market(symbol: str) -> dict:
         # Counts how many consecutive candles move in the same direction
         # Trending market: most candles agree. Choppy: alternating up/down
         lookback = min(12, len(closes) - 1)
+        directions = []  # V3.1.93: init here so recency check can access it
         if lookback >= 6:
-            directions = []
             for i in range(lookback):
                 # Compare close to open (candle direction)
                 if closes[i] > opens[i]:
@@ -845,10 +845,42 @@ def detect_sideways_market(symbol: str) -> dict:
             chop_signals += 1
             reasons.append(f"BB={bb_width:.1f}% (tight, T{tier} thresh={bb_tight})")
 
+        # V3.1.93: TIER-AWARE RECENCY CHECK — if market was choppy overall but has
+        # resolved into a trend recently, reduce the consistency penalty.
+        # Tier 3 pairs (SOL/DOGE/ADA) move fast and can resolve in 4h.
+        # Tier 1 (ETH/BNB) are slow movers, need 8h to confirm trend resolution.
+        if tier == 3:
+            recent_lookback = min(4, lookback)   # 4h — small caps resolve fast
+        elif tier == 1:
+            recent_lookback = min(8, lookback)   # 8h — blue chips need more data
+        else:
+            recent_lookback = min(6, lookback)   # 6h — mid caps default
+
+        recent_cons = consistency  # Default: same as full window
+        if directions and recent_lookback >= 3 and len(directions) >= recent_lookback:
+            recent_dirs = directions[:recent_lookback]  # Most recent candles (newest first)
+            recent_flips = 0
+            for ri in range(len(recent_dirs) - 1):
+                if recent_dirs[ri] != 0 and recent_dirs[ri+1] != 0 and recent_dirs[ri] != recent_dirs[ri+1]:
+                    recent_flips += 1
+            recent_max = recent_lookback - 1
+            recent_cons = 1.0 - (recent_flips / recent_max) if recent_max > 0 else 0.5
+            result["recent_consistency"] = round(recent_cons, 2)
+
         # Directional consistency scoring
+        # V3.1.93: Recent consistency override — if trend has resolved, reduce penalty
         if consistency < 0.3:
-            chop_signals += 2
-            reasons.append(f"Dir={consistency:.0%} (flip-flopping)")
+            if recent_cons >= 0.6:
+                # Was choppy but recent candles trending. Trend resolved — no penalty.
+                reasons.append(f"Dir={consistency:.0%} (was choppy, recent={recent_cons:.0%} T{tier} trending)")
+            elif recent_cons >= 0.4:
+                # Partially resolved. Mild penalty instead of severe.
+                chop_signals += 1
+                reasons.append(f"Dir={consistency:.0%} (resolving, recent={recent_cons:.0%})")
+            else:
+                # Still choppy even recently. Full penalty.
+                chop_signals += 2
+                reasons.append(f"Dir={consistency:.0%} (flip-flopping)")
         elif consistency < 0.45:
             chop_signals += 1
             reasons.append(f"Dir={consistency:.0%} (mixed)")
@@ -3337,12 +3369,15 @@ class MultiPersonaAnalyzer:
                     # HIGH CHOP: Hard block - this market is going nowhere
                     print(f"  [CHOP_FILTER] BLOCKED {orig_decision}: {chop['reason']}")
                     final['chop_original_decision'] = orig_decision
+                    final['chop_pre_penalty_confidence'] = final.get('confidence', 0)  # V3.1.93
                     final['decision'] = 'WAIT'
                     final['confidence'] = 0
                     final['chop_blocked'] = True
                 elif severity == "medium":
                     # MEDIUM CHOP: Confidence penalty (-15%), may still pass if very strong signal
                     old_conf = final.get('confidence', 0)
+                    final['chop_original_decision'] = final['decision']  # V3.1.93
+                    final['chop_pre_penalty_confidence'] = old_conf  # V3.1.93
                     new_conf = old_conf - 0.15
                     print(f"  [CHOP_FILTER] PENALTY {final['decision']}: {chop['reason']} (conf {old_conf:.0%} -> {new_conf:.0%})")
                     final['confidence'] = new_conf
