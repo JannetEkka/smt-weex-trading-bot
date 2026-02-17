@@ -239,6 +239,9 @@ try:
         check_position_status, cancel_all_orders_for_symbol,
         close_position_manually, execute_runner_partial_close,
         TradeTracker,
+
+        # V3.1.98: Chart SR for signal-flip exits
+        find_chart_based_tp_sl,
         
         # Competition
         get_competition_status,
@@ -412,10 +415,12 @@ _last_signal_summary = {}
 _last_pair_signals = {}
 
 # V3.1.98: Signal-flip exit thresholds (tighter than normal early_exit when signals reverse)
+# Chart SR break: if price broke support/resistance AND signals flipped → shorter time gate
+# Fallback: if no SR levels found, use fixed -0.5% loss with tier time gates
 SIGNAL_FLIP_EXIT = {
-    1: {"min_hours": 2.0, "min_loss_pct": -0.5, "min_signal_conf": 0.75},   # T1: -0.5% after 2h (normal: -1.0% after 6h)
-    2: {"min_hours": 1.5, "min_loss_pct": -0.5, "min_signal_conf": 0.75},   # T2: -0.5% after 1.5h (normal: -1.0% after 4h)
-    3: {"min_hours": 1.0, "min_loss_pct": -0.5, "min_signal_conf": 0.75},   # T3: -0.5% after 1h (normal: -1.0% after 3h)
+    1: {"min_hours": 2.0, "sr_min_hours": 0.5, "fallback_loss_pct": -0.5, "min_signal_conf": 0.75},
+    2: {"min_hours": 1.5, "sr_min_hours": 0.5, "fallback_loss_pct": -0.5, "min_signal_conf": 0.75},
+    3: {"min_hours": 1.0, "sr_min_hours": 0.5, "fallback_loss_pct": -0.5, "min_signal_conf": 0.75},
 }
 
 
@@ -1640,7 +1645,8 @@ def monitor_positions():
                     exit_reason = f"max_hold_T{tier} ({hours_open:.1f}h > {max_hold}h)"
 
                 # 2. V3.1.98: Signal-flip exit — signals reversed against position
-                # Tighter thresholds than normal early_exit when ensemble says wrong side
+                # Uses chart S/R levels: if price broke support (LONG) or resistance (SHORT)
+                # AND ensemble confirms the flip → cut early. Fallback to -0.5% if no SR found.
                 elif not should_exit:
                     _flip_cfg = SIGNAL_FLIP_EXIT.get(tier, SIGNAL_FLIP_EXIT[2])
                     _last_sig = _last_pair_signals.get(real_symbol, {})
@@ -1650,13 +1656,49 @@ def monitor_positions():
                     if (_sig_age < 900  # Signal fresh (< 15 min)
                         and _last_sig.get("direction") in ("LONG", "SHORT")
                         and _last_sig["direction"] != _pos_side  # Opposite direction
-                        and _last_sig.get("confidence", 0) >= _flip_cfg["min_signal_conf"]
-                        and hours_open >= _flip_cfg["min_hours"]
-                        and pnl_pct <= _flip_cfg["min_loss_pct"]):
-                        should_exit = True
-                        exit_reason = (f"signal_flip_T{tier} ({_pos_side} pos vs {_last_sig['direction']} "
-                                       f"signal@{_last_sig['confidence']:.0%}, {pnl_pct:.2f}% after {hours_open:.1f}h)")
-                        state.early_exits += 1
+                        and _last_sig.get("confidence", 0) >= _flip_cfg["min_signal_conf"]):
+
+                        # Try chart-based SR invalidation first
+                        _sr_broke = False
+                        _sr_level = None
+                        try:
+                            _chart_sr = find_chart_based_tp_sl(real_symbol, _pos_side, entry_price)
+                            _sr_levels = _chart_sr.get("levels", {})
+
+                            if _pos_side == "LONG":
+                                # Nearest support below entry — if price broke it, structure failed
+                                _supports = [s for s in _sr_levels.get("supports", []) if s < entry_price]
+                                if _supports:
+                                    _sr_level = _supports[0]  # Already sorted descending
+                                    if current_price < _sr_level:
+                                        _sr_broke = True
+                            else:  # SHORT
+                                # Nearest resistance above entry — if price broke it, structure failed
+                                _resistances = [r for r in _sr_levels.get("resistances", []) if r > entry_price]
+                                if _resistances:
+                                    _sr_level = _resistances[0]  # Already sorted ascending
+                                    if current_price > _sr_level:
+                                        _sr_broke = True
+                        except Exception as _sr_err:
+                            logger.debug(f"[SIGNAL_FLIP] SR check failed for {real_symbol}: {_sr_err}")
+
+                        if _sr_broke and hours_open >= _flip_cfg["sr_min_hours"]:
+                            # Chart SR broke + signal flipped → cut (30min min hold)
+                            should_exit = True
+                            _sr_dist = abs(current_price - _sr_level) / entry_price * 100
+                            exit_reason = (f"signal_flip_SR_T{tier} ({_pos_side} broke "
+                                           f"{'support' if _pos_side == 'LONG' else 'resistance'} "
+                                           f"${_sr_level:.4f} by {_sr_dist:.2f}%, "
+                                           f"{_last_sig['direction']}@{_last_sig['confidence']:.0%}, "
+                                           f"{pnl_pct:.2f}% after {hours_open:.1f}h)")
+                            state.early_exits += 1
+                        elif hours_open >= _flip_cfg["min_hours"] and pnl_pct <= _flip_cfg["fallback_loss_pct"]:
+                            # No SR break or no SR data — fallback to fixed -0.5% + tier time gate
+                            should_exit = True
+                            exit_reason = (f"signal_flip_T{tier} ({_pos_side} vs {_last_sig['direction']} "
+                                           f"signal@{_last_sig['confidence']:.0%}, "
+                                           f"{pnl_pct:.2f}% after {hours_open:.1f}h)")
+                            state.early_exits += 1
 
                 # 3. Early exit if losing after tier-specific hours
                 elif hours_open >= early_exit_hours and pnl_pct <= early_exit_loss:
@@ -3116,15 +3158,16 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.98 - Signal-Flip Exits (Cut Losers When Signals Reverse)")
+    logger.info("SMT Daemon V3.1.98 - Signal-Flip Exits (Chart SR + Ensemble Reversal)")
     logger.info("=" * 60)
     logger.info("V3.1.98 CHANGES:")
-    logger.info("  - NEW: Signal-flip exit — cut losing positions when ensemble reverses against them")
-    logger.info("  - T1: -0.5%% after 2h | T2: -0.5%% after 1.5h | T3: -0.5%% after 1h")
-    logger.info("  - Requires opposite signal at 75%%+ confidence, fresh (<15min)")
-    logger.info("  - No Gemini call — purely mechanical using cached signal cycle data")
+    logger.info("  - NEW: Signal-flip exit — cut losers when ensemble reverses + chart structure breaks")
+    logger.info("  - PRIMARY: Price broke support/resistance AND 75%%+ opposite signal → cut (30min min)")
+    logger.info("  - FALLBACK: No SR break but losing -0.5%%+ AND signal flipped → tier-based time gate")
+    logger.info("  -   T1: 2h | T2: 1.5h | T3: 1h (normal early_exit: 6h/4h/3h)")
+    logger.info("  - No Gemini call — uses chart SR cache + signal cycle data")
     logger.info("  - KEPT: 80%% confidence floor, chop filter, slots, margin guard, TP/SL")
-    logger.info("  - PHILOSOPHY: Ensemble decides entries AND informs exits.")
+    logger.info("  - PHILOSOPHY: Ensemble decides entries, chart + ensemble inform exits.")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
