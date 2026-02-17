@@ -1021,33 +1021,11 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         "levels": {"resistances": [], "supports": [], "htf_resistances": [], "htf_supports": []}
     }
 
-    # Competition bounds
+    # Competition bounds (V3.1.94: flat TP cap + wider SL ceiling)
     MIN_TP_PCT = 0.8   # Min 0.8% TP (covers fees at 20x + profit)
+    MAX_TP_PCT = 1.1   # V3.1.94: Flat 1.1% TP cap for all pairs — bank fast
     MIN_SL_PCT = 1.0   # V3.1.85: At 20x = 20% max loss
-    MAX_SL_PCT = 2.0   # Max 2.0% SL (max risk per trade)
-
-    # V3.1.92: ATR-aware TP cap — let chart TPs breathe on volatile pairs
-    # Formula: min(3.0%, max(2.0%, ATR * 2)). Reuses cached get_pair_atr().
-    try:
-        _atr_for_tp = get_pair_atr(symbol)
-        _atr_pct_tp = _atr_for_tp.get("atr_pct", 0)
-        if _atr_pct_tp > 0:
-            MAX_TP_PCT = min(3.0, max(2.0, _atr_pct_tp * 2.0))
-            print(f"  [TP-CAP] {symbol.replace('cmt_','').upper()} ATR={_atr_pct_tp:.2f}% -> MAX_TP={MAX_TP_PCT:.1f}%")
-        else:
-            MAX_TP_PCT = 2.0  # Fallback if ATR unavailable
-    except Exception:
-        MAX_TP_PCT = 2.0  # Fallback
-
-    # V3.1.98: Per-pair TP cap (module-level PAIR_TP_CAP)
-    if symbol in PAIR_TP_CAP:
-        MAX_TP_PCT = min(MAX_TP_PCT, PAIR_TP_CAP[symbol])
-        print(f"  [TP-CAP] {symbol.replace('cmt_','').upper()} pair cap -> MAX_TP={MAX_TP_PCT:.1f}%")
-
-    # V3.1.98: Per-pair SL floor (module-level PAIR_SL_FLOOR) — widen MAX_SL for volatile pairs
-    if symbol in PAIR_SL_FLOOR:
-        MAX_SL_PCT = max(MAX_SL_PCT, PAIR_SL_FLOOR[symbol])
-        print(f"  [SL-FLOOR] {symbol.replace('cmt_','').upper()} pair floor -> MAX_SL={MAX_SL_PCT:.1f}%")
+    MAX_SL_PCT = 2.5   # V3.1.94: Raised from 2.0% to accommodate +0.5% SL buffer
 
     htf_resistances = []
     htf_supports = []
@@ -1133,16 +1111,18 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 sl_price = max(sl_candidates_4h)  # Nearest 4H support
                 sl_pct = ((entry_price - sl_price) / entry_price) * 100
                 sl_pct = sl_pct * 1.05  # Slightly below support
+                sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
                 sl_pct = max(sl_pct, MIN_SL_PCT)
                 sl_pct = min(sl_pct, MAX_SL_PCT)
                 result["sl_pct"] = round(sl_pct, 2)
                 result["sl_price"] = round(entry_price * (1 - sl_pct / 100), 8)
                 sl_found = True
-                print(f"  [CHART-SR] SL from 4H structural support ${sl_price:.4f}")
+                print(f"  [CHART-SR] SL from 4H structural support ${sl_price:.4f} (+0.5% buffer)")
             elif sl_candidates_1h:
                 sl_price = max(sl_candidates_1h)
                 sl_pct = ((entry_price - sl_price) / entry_price) * 100
                 sl_pct = sl_pct * 1.05
+                sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
                 sl_pct = max(sl_pct, MIN_SL_PCT)
                 sl_pct = min(sl_pct, MAX_SL_PCT)
                 result["sl_pct"] = round(sl_pct, 2)
@@ -1170,16 +1150,18 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 sl_price = min(sl_candidates_4h)  # Nearest 4H resistance
                 sl_pct = ((sl_price - entry_price) / entry_price) * 100
                 sl_pct = sl_pct * 1.05
+                sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
                 sl_pct = max(sl_pct, MIN_SL_PCT)
                 sl_pct = min(sl_pct, MAX_SL_PCT)
                 result["sl_pct"] = round(sl_pct, 2)
                 result["sl_price"] = round(entry_price * (1 + sl_pct / 100), 8)
                 sl_found = True
-                print(f"  [CHART-SR] SL from 4H structural resistance ${sl_price:.4f}")
+                print(f"  [CHART-SR] SL from 4H structural resistance ${sl_price:.4f} (+0.5% buffer)")
             elif sl_candidates_1h:
                 sl_price = min(sl_candidates_1h)
                 sl_pct = ((sl_price - entry_price) / entry_price) * 100
                 sl_pct = sl_pct * 1.05
+                sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
                 sl_pct = max(sl_pct, MIN_SL_PCT)
                 sl_pct = min(sl_pct, MAX_SL_PCT)
                 result["sl_pct"] = round(sl_pct, 2)
@@ -1222,20 +1204,9 @@ COMPETITION_FALLBACK_SL = {
     3: 1.5,   # Tier 3: 1.8% → 1.5%
 }
 
-# V3.1.98: Per-pair TP/SL overrides (chart-analyzed, not tier-based)
-# TP_CAP: maximum TP% (tighter = bank faster)
-# SL_FLOOR: minimum SL% (wider = survive wicks)
-PAIR_TP_CAP = {
-    "cmt_bnbusdt": 1.0,   # BNB: anti-chop (V3.1.94)
-    "cmt_solusdt": 1.5,   # SOL: sharp bounces, bank quick
-    "cmt_ltcusdt": 1.2,   # LTC: clean mover
-    "cmt_xrpusdt": 1.5,   # XRP: bank before reversal
-}
-PAIR_SL_FLOOR = {
-    "cmt_solusdt": 2.5,   # SOL: survives 2% wicks
-    "cmt_ltcusdt": 2.5,   # LTC: generous structural room
-    "cmt_xrpusdt": 2.0,   # XRP: moderate room
-}
+# V3.1.94: Per-pair overrides removed — flat 1.1% TP cap + chart SL (+0.5% buffer) for all
+PAIR_TP_CAP = {}
+PAIR_SL_FLOOR = {}
 
 
 def detect_whale_absorption(whale_vote: dict, flow_vote: dict, regime: dict) -> dict:
@@ -3741,8 +3712,8 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         _atr_pct_check = _atr_check.get("atr_pct", 0)
         if _atr_pct_check > 0:
             _min_atr_sl = round(_atr_pct_check * 0.8, 2)  # At least 0.8x ATR
-            _pair_sl_max = PAIR_SL_FLOOR.get(symbol, 2.0)
-            if sl_pct_raw < _min_atr_sl and _min_atr_sl <= _pair_sl_max:
+            _sl_max = 2.5  # V3.1.94: matches MAX_SL_PCT
+            if sl_pct_raw < _min_atr_sl and _min_atr_sl <= _sl_max:
                 print(f"  [ATR-SAFETY] SL {sl_pct_raw:.2f}% < 0.8x ATR ({_min_atr_sl:.2f}%), widening to {_min_atr_sl:.2f}%")
                 sl_pct_raw = _min_atr_sl
                 sl_pct = sl_pct_raw / 100
@@ -3753,25 +3724,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     except Exception:
         pass
 
-    # V3.1.98: Per-pair TP/SL overrides — FINAL authority on TP cap and SL floor
-    # Applied after both chart-based and fallback paths, and after ATR safety net
-    _pair_overridden = False
-    if symbol in PAIR_TP_CAP and tp_pct_raw > PAIR_TP_CAP[symbol]:
-        tp_pct_raw = PAIR_TP_CAP[symbol]
-        _pair_overridden = True
-    if symbol in PAIR_SL_FLOOR and sl_pct_raw < PAIR_SL_FLOOR[symbol]:
-        sl_pct_raw = PAIR_SL_FLOOR[symbol]
-        _pair_overridden = True
-    if _pair_overridden:
-        tp_pct = tp_pct_raw / 100
-        sl_pct = sl_pct_raw / 100
-        if signal == "LONG":
-            tp_price = current_price * (1 + tp_pct)
-            sl_price = current_price * (1 - sl_pct)
-        else:
-            tp_price = current_price * (1 - tp_pct)
-            sl_price = current_price * (1 + sl_pct)
-        print(f"  [PAIR-OVERRIDE] {symbol.replace('cmt_','').upper()}: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}%")
+    # V3.1.94: Per-pair overrides removed — flat 1.1% TP + chart SL (+0.5%) for all
 
     # V3.1.89: Removed R:R gate — the 1.5:1 requirement conflicted with chart-based
     # TP/SL and ATR safety, blocking high-confidence signals (e.g. 85% SOL SHORT).
