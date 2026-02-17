@@ -4112,6 +4112,13 @@ class TradeTracker:
                 return True
         return False
 
+    def last_force_stop_time(self, symbol: str) -> Optional[str]:
+        """V3.1.95: Get ISO timestamp of most recent loss event for symbol"""
+        plain_sym = symbol.split(":")[0] if ":" in symbol else symbol
+        if plain_sym not in self.recent_force_stops or not self.recent_force_stops[plain_sym]:
+            return None
+        return self.recent_force_stops[plain_sym][-1].get("time")
+
     def get_active_symbols(self) -> List[str]:
         return list(self.active_trades.keys())
 

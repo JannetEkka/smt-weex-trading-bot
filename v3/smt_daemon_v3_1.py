@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.94 - 15M Chop Filter + Micro-Body Threshold + Displacement
+SMT Trading Daemon V3.1.95 - Fix PM Force-Stop vs Blacklist Conflict
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -1993,12 +1993,21 @@ def gemini_portfolio_review():
         grace_positions = []
         for p in positions:
             sym = p.get('symbol', '')
-            # V3.1.81: NEVER hide recently force-stopped symbols from PM
-            # The grace period was allowing zombie re-entries to avoid PM scrutiny
+            # V3.1.81: Don't hide recently force-stopped symbols from PM
+            # V3.1.95: BUT if position opened AFTER the last loss, it's a legitimate
+            # new entry (blacklist expired, all filters passed) — give normal grace
             if tracker.was_recently_force_stopped(sym, within_hours=4):
-                logger.info(f'[PORTFOLIO] NO GRACE: {sym.replace("cmt_","").upper()} was recently force-stopped, PM must review')
-                grace_positions.append(p)
-                continue
+                _last_fs = tracker.last_force_stop_time(sym)
+                _trade = tracker.get_active_trade(sym)
+                _opened_at = _trade.get('opened_at', '') if _trade else ''
+                if _last_fs and _opened_at and _opened_at > _last_fs:
+                    # V3.1.95: Position opened after loss — legitimate entry, normal grace
+                    logger.info(f'[PORTFOLIO] GRACE OK: {sym.replace("cmt_","").upper()} opened after last loss, normal grace period')
+                else:
+                    # Original V3.1.81: zombie re-entry or no timing data — PM must review
+                    logger.info(f'[PORTFOLIO] NO GRACE: {sym.replace("cmt_","").upper()} was recently force-stopped, PM must review')
+                    grace_positions.append(p)
+                    continue
             trade = tracker.get_active_trade(sym)
             if trade and trade.get('opened_at'):
                 try:
@@ -2062,10 +2071,19 @@ def gemini_portfolio_review():
                         pnl_pct = (pnl / (margin if margin > 0 else 1)) * 100
             
             # V3.1.81: Flag recently force-stopped symbols so PM knows the history
+            # V3.1.95: Advisory only — don't force close legitimate new entries
             _fs_flag = ""
             if tracker.was_recently_force_stopped(p.get("symbol", ""), within_hours=4):
                 _fs_count = tracker.consecutive_losses(p.get("symbol", ""), side, hours=24)
-                _fs_flag = f" [FORCE_STOPPED x{_fs_count} in 24h - CLOSE THIS]"
+                _fs_trade = tracker.get_active_trade(p.get("symbol", ""))
+                _fs_opened = _fs_trade.get('opened_at', '') if _fs_trade else ''
+                _fs_last = tracker.last_force_stop_time(p.get("symbol", ""))
+                if _fs_last and _fs_opened and _fs_opened > _fs_last:
+                    # V3.1.95: Position opened after loss — new entry, advisory only
+                    _fs_flag = f" [HAD {_fs_count} LOSS(ES) in 24h — NEW ENTRY, EVALUATE ON MERITS]"
+                else:
+                    # Original: position predates the loss or no timing data — close recommended
+                    _fs_flag = f" [FORCE_STOPPED x{_fs_count} in 24h - CLOSE THIS]"
 
             pos_details.append(
                 f"- {sym} {side}: PnL=${pnl:.2f} ({pnl_pct:+.1f}%), entry=${entry:.4f}, margin=${margin:.1f}, held={hours_open:.1f}h, tier={tier}{_fs_flag}"
@@ -3142,14 +3160,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.94 - 15M Chop Filter + Micro-Body Threshold + Displacement")
+    logger.info("SMT Daemon V3.1.95 - Fix PM Force-Stop vs Blacklist Conflict")
     logger.info("=" * 60)
-    logger.info("V3.1.94 CHANGES:")
-    logger.info("  - Chop filter: 1h->15m candles (4x resolution, better for frequent trading)")
-    logger.info("  - Recalibrated: ADX(28), BB(40), Dir lookback 24, thresholds adjusted for 15m")
-    logger.info("  - NEW: Micro-body threshold (0.1%) filters noise candles as dojis")
-    logger.info("  - NEW: Net displacement override detects stair-step trending")
-    logger.info("  - INHERITED: V3.1.93 PM signal awareness, V3.1.92 equity sizing, V3.1.85 80% floor")
+    logger.info("V3.1.95 CHANGES:")
+    logger.info("  - FIX: PM no longer force-closes legitimate new entries after blacklist expiry")
+    logger.info("  - Grace period: positions opened AFTER last loss get normal grace (not bypassed)")
+    logger.info("  - PM flag: 'CLOSE THIS' -> advisory 'EVALUATE ON MERITS' for post-loss new entries")
+    logger.info("  - NEW: last_force_stop_time() helper for position vs loss timing comparison")
+    logger.info("  - INHERITED: V3.1.94 15m chop, V3.1.93 PM signal awareness, V3.1.85 80% floor")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
