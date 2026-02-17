@@ -715,9 +715,9 @@ def detect_sideways_market(symbol: str) -> dict:
 
     try:
         # V3.1.101: Per-pair CHOP timeframe — match each pair's natural rhythm
-        # BTC moves in institutional blocks; 15m is noise. Use 30m for clearer trend read.
+        # BTC moves in institutional blocks; 15m/30m is noise. Use 1H for clearer trend read.
         PAIR_CHOP_TIMEFRAME = {
-            "BTC":  ("30m", 30),   # Institutional blocks, 15m is noise. 30x30m = 15h
+            "BTC":  ("1h", 24),    # Institutional blocks, need 1H. 24x1H = 24h. ADX(14) standard.
             "ETH":  ("15m", 60),   # Fine on 15m
             "BNB":  ("15m", 60),
             "LTC":  ("15m", 60),
@@ -738,7 +738,11 @@ def detect_sideways_market(symbol: str) -> dict:
         r = requests.get(url, timeout=10)
         candles = r.json()
 
-        min_candles = 22 if granularity == "30m" else 45
+        # V3.1.101: min candles depends on timeframe and ADX period
+        if granularity == "1h":
+            min_candles = 16  # ADX(14) needs 15+ candles
+        else:
+            min_candles = 30  # ADX(28) needs 29+ candles
         if not isinstance(candles, list) or len(candles) < min_candles:
             result["error"] = "Insufficient candle data"
             _chop_cache[symbol] = result
@@ -750,10 +754,11 @@ def detect_sideways_market(symbol: str) -> dict:
         closes = [float(c[4]) for c in candles]
         opens = [float(c[1]) for c in candles]
 
-        # ---- 1. ADX CALCULATION (28-period on 15M = ~7h) ----
+        # ---- 1. ADX CALCULATION ----
         # ADX measures trend STRENGTH regardless of direction
         # V3.1.94: Period 28 on 15M candles. Thresholds lowered ~3pt (15M DX deflation)
-        period = 28
+        # V3.1.101: Period 14 for 1H (industry standard ADX), 28 for 15m
+        period = 14 if granularity == "1h" else 28
         if len(closes) >= period + 1:
             plus_dm_list = []
             minus_dm_list = []
@@ -856,11 +861,11 @@ def detect_sideways_market(symbol: str) -> dict:
         reasons = []
 
         # ADX scoring — V3.1.94: thresholds lowered ~3pt for 15M DX deflation
-        # V3.1.101: Higher thresholds for 30m (ADX reads higher on longer timeframes)
-        if granularity == "30m":
-            adx_very_weak, adx_weak = 15, 20
+        # V3.1.101: 1H ADX(14) reads higher — use standard thresholds
+        if granularity == "1h":
+            adx_very_weak, adx_weak = 18, 25  # Standard ADX(14) thresholds for 1H
         else:
-            adx_very_weak, adx_weak = 12, 17
+            adx_very_weak, adx_weak = 12, 17  # 15m with period=28
 
         if adx < adx_very_weak:
             chop_signals += 2
@@ -893,8 +898,11 @@ def detect_sideways_market(symbol: str) -> dict:
 
         # V3.1.93/94: TIER-AWARE RECENCY CHECK — if market was choppy overall but has
         # resolved into a trend recently, reduce the consistency penalty.
-        # V3.1.94: Windows expressed in 15M candles (~75% of original absolute time)
-        if tier == 3:
+        # V3.1.94: Windows expressed in candle counts
+        # V3.1.101: Adjusted for 1H candles (BTC)
+        if granularity == "1h":
+            recent_lookback = min(6, lookback)    # 6h — 1H candles for BTC
+        elif tier == 3:
             recent_lookback = min(12, lookback)   # 3h (12 x 15m) — fast movers
         elif tier == 1:
             recent_lookback = min(20, lookback)   # 5h (20 x 15m) — blue chips
