@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 8 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 
-**Current version: V3.1.90** — all production code is in `v3/`.
+**Current version: V3.1.91** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -169,14 +169,14 @@ python3 v3/smt_nightly_trade_v3_1.py --test
 3. **Gemini timeouts** — 90s timeout + 8s rate limit between calls. Use bulletproof wrapper.
 4. **Regime exits too aggressive** — Trust the 2% SL. Only regime-exit at 35%+ margin loss.
 5. **Late entries** — Freshness filter blocks entering after a move already happened
-6. **Consecutive losses** — Block re-entry after 2 force-stops same direction in 24h
+6. **Consecutive losses** — Block re-entry after 2 losses (any type) same direction in 24h (V3.1.91: counts ALL losses, not just force-stops)
 7. **AI log missing** — Every trade MUST upload logs or competition results won't count
 
 ## Version Naming
 
 Format: `V3.1.{N}` where N increments with each fix/feature.
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.1.90. Next change should be V3.1.91.
+Current: V3.1.91. Next change should be V3.1.92.
 
 **CRITICAL RULE (V3.1.85+): The 80% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that
