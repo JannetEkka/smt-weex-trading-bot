@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.90 - COMPETITION PUSH: 25% base margin (was 12%)
+SMT Trading Daemon V3.1.92 - PLAN MARGIN: Equity-based sizing + ATR-aware TP caps
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -3086,14 +3086,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.91 - STOP BLEEDING: Loss streak block + Protect winners")
+    logger.info("SMT Daemon V3.1.92 - PLAN MARGIN: Equity-based sizing + ATR-aware TP caps")
     logger.info("=" * 60)
-    logger.info("V3.1.91 CHANGES:")
-    logger.info("  - ALL losses now count toward streak block (was force_stop only)")
-    logger.info("  - SL hits and PM losses get 2h blacklist (force_stops still 4-12h)")
-    logger.info("  - Gemini PM blocked from closing winning positions (code guard)")
-    logger.info("  - Rule 3b trajectory exit REMOVED — winners ride to TP or SL")
-    logger.info("  - INHERITED: V3.1.90 25% base margin, V3.1.87 swap gate, V3.1.85 80% floor")
+    logger.info("V3.1.92 CHANGES:")
+    logger.info("  - Position sizing now uses EQUITY (balance + UPnL), not just balance")
+    logger.info("  - Safety floors: never below balance, capped at 2.5x balance, 15% margin guard")
+    logger.info("  - ATR-aware TP cap: min(3.0%, 2x ATR) replaces hard 2.0% cap")
+    logger.info("  - INHERITED: V3.1.91 loss streak block, V3.1.90 25% base, V3.1.85 80% floor")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
