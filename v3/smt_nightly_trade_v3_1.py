@@ -1039,6 +1039,14 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
     except Exception:
         MAX_TP_PCT = 2.0  # Fallback
 
+    # V3.1.94: Per-symbol TP cap overrides
+    PAIR_TP_CAP = {
+        "cmt_bnbusdt": 1.0,  # BNB: cap at 1% (half of default ~2%)
+    }
+    if symbol in PAIR_TP_CAP:
+        MAX_TP_PCT = min(MAX_TP_PCT, PAIR_TP_CAP[symbol])
+        print(f"  [TP-CAP] {symbol.replace('cmt_','').upper()} pair cap -> MAX_TP={MAX_TP_PCT:.1f}%")
+
     htf_resistances = []
     htf_supports = []
     ltf_resistances = []

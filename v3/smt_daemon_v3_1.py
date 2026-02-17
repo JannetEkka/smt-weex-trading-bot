@@ -3072,9 +3072,10 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.97 - Trust The Ensemble (80%% Floor + Chop Only)")
+    logger.info("SMT Daemon V3.1.98 - Trust The Ensemble (80%% Floor + Chop Only)")
     logger.info("=" * 60)
-    logger.info("V3.1.97 CHANGES:")
+    logger.info("V3.1.98 CHANGES:")
+    logger.info("  - V3.1.98: Per-symbol TP cap (BNB capped at 1%%)")
     logger.info("  - NUKED: F&G veto, regime veto, freshness filter, consecutive loss block")
     logger.info("  - NUKED: blacklist/cooldown entry block, global trade cooldown")
     logger.info("  - NUKED: PM (gemini_portfolio_review), regime_aware_exit_check")
