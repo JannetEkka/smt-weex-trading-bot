@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.99 - Trust The Ensemble (80% Floor + Chop Only)
+SMT Trading Daemon V3.1.100 - Trust The Ensemble (80% Floor + Chop Only)
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -168,6 +168,11 @@ SIGNAL_CHECK_INTERVAL = 10 * 60  # V3.1.84: 10 min (was 15). Competition needs f
 POSITION_MONITOR_INTERVAL = 2 * 60  # 2 minutes (check more often for tier 3)
 HEALTH_CHECK_INTERVAL = 60
 CLEANUP_CHECK_INTERVAL = 30
+
+# V3.1.100: Opposite Swap TP Proximity Gate
+OPPOSITE_MIN_AGE_MIN = 20          # Don't flip positions younger than 20 minutes
+OPPOSITE_TP_PROGRESS_BLOCK = 30    # Block flip if position is >= 30% toward TP
+DEFERRED_FLIP_MAX_AGE_MIN = 30     # Deferred signal expires after 30 minutes
 
 # Competition
 COMPETITION_START = datetime(2026, 2, 8, 15, 0, 0, tzinfo=timezone.utc)
@@ -657,6 +662,9 @@ def check_trading_signals():
                 position_map[symbol] = {}
             position_map[symbol][side] = pos
         
+        # V3.1.100: Execute deferred opposite flips for positions that closed
+        _execute_deferred_flips(position_map, balance)
+
         # ANALYZE ALL PAIRS
         # V3.1.88: Cycle stats counters for end-of-cycle summary
         _cycle_signals = 0       # Pairs that returned LONG/SHORT (any confidence)
@@ -793,9 +801,23 @@ def check_trading_signals():
                         short_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:SHORT")
                         existing_conf = short_trade.get("confidence", 0.75) if short_trade else 0.75
                         if confidence >= existing_conf:  # V3.1.74: >= (was > which blocked 85% vs 85% flips)
-                            can_trade_this = True
-                            trade_type = "opposite"
-                            logger.info(f"    -> OPPOSITE: LONG {confidence:.0%} >= SHORT {existing_conf:.0%}. Tighten SHORT SL + open LONG")
+                            # V3.1.100: Check TP proximity + age gates before flipping
+                            _opp_blocked, _opp_reason = _check_opposite_swap_gates(
+                                symbol=symbol, existing_side="SHORT", new_signal="LONG",
+                                new_confidence=confidence, opportunity={"pair_info": pair_info, "decision": decision}
+                            )
+                            if _opp_blocked:
+                                logger.info(f"    -> OPPOSITE BLOCKED: {_opp_reason}")
+                                upload_ai_log_to_weex(
+                                    stage=f"Opposite Blocked: {symbol.replace('cmt_','').upper()}",
+                                    input_data={"symbol": symbol, "existing_side": "SHORT", "new_signal": "LONG", "new_conf": confidence},
+                                    output_data={"action": "DEFERRED", "reason": _opp_reason},
+                                    explanation=f"AI blocked opposite flip on {symbol.replace('cmt_','').upper()}. {_opp_reason}. Signal queued for deferred execution after existing position closes."[:1000]
+                                )
+                            else:
+                                can_trade_this = True
+                                trade_type = "opposite"
+                                logger.info(f"    -> OPPOSITE: LONG {confidence:.0%} >= SHORT {existing_conf:.0%}. Tighten SHORT SL + open LONG")
                         else:
                             logger.info(f"    -> Has SHORT at {existing_conf:.0%}, LONG {confidence:.0%} not stronger. Hold.")
                             upload_ai_log_to_weex(
@@ -830,9 +852,23 @@ def check_trading_signals():
                         long_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:LONG")
                         existing_conf = long_trade.get("confidence", 0.75) if long_trade else 0.75
                         if confidence >= existing_conf:  # V3.1.74: >= (was > which blocked 85% vs 85% flips)
-                            can_trade_this = True
-                            trade_type = "opposite"
-                            logger.info(f"    -> OPPOSITE: SHORT {confidence:.0%} >= LONG {existing_conf:.0%}. Tighten LONG SL + open SHORT")
+                            # V3.1.100: Check TP proximity + age gates before flipping
+                            _opp_blocked, _opp_reason = _check_opposite_swap_gates(
+                                symbol=symbol, existing_side="LONG", new_signal="SHORT",
+                                new_confidence=confidence, opportunity={"pair_info": pair_info, "decision": decision}
+                            )
+                            if _opp_blocked:
+                                logger.info(f"    -> OPPOSITE BLOCKED: {_opp_reason}")
+                                upload_ai_log_to_weex(
+                                    stage=f"Opposite Blocked: {symbol.replace('cmt_','').upper()}",
+                                    input_data={"symbol": symbol, "existing_side": "LONG", "new_signal": "SHORT", "new_conf": confidence},
+                                    output_data={"action": "DEFERRED", "reason": _opp_reason},
+                                    explanation=f"AI blocked opposite flip on {symbol.replace('cmt_','').upper()}. {_opp_reason}. Signal queued for deferred execution after existing position closes."[:1000]
+                                )
+                            else:
+                                can_trade_this = True
+                                trade_type = "opposite"
+                                logger.info(f"    -> OPPOSITE: SHORT {confidence:.0%} >= LONG {existing_conf:.0%}. Tighten LONG SL + open SHORT")
                         else:
                             logger.info(f"    -> Has LONG at {existing_conf:.0%}, SHORT {confidence:.0%} not stronger. Hold.")
                             upload_ai_log_to_weex(
@@ -1838,6 +1874,149 @@ def get_pair_sizing_multiplier(symbol: str) -> float:
 
 # V3.1.60: Track symbols with recent SL tightens - prevent resolve_opposite from killing new trades
 _sl_tightened_symbols = {}
+
+# V3.1.100: Deferred opposite flip queue
+# When a flip is blocked due to TP proximity, store the signal here.
+# Format: {symbol: {"signal": "SHORT", "confidence": 0.85, "queued_at": datetime, "pair_info": {...}, "decision": {...}}}
+_deferred_opposite_queue = {}
+
+
+def _check_opposite_swap_gates(symbol, existing_side, new_signal, new_confidence, opportunity):
+    """V3.1.100: Gate opposite swaps based on TP proximity and position age.
+
+    Returns: (blocked: bool, reason: str)
+    """
+    global _deferred_opposite_queue
+
+    existing_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:{existing_side}")
+    if not existing_trade:
+        return False, ""  # No tracker data, allow swap
+
+    # Gate A: Minimum age — don't flip positions younger than 20 minutes
+    opened_at = existing_trade.get("opened_at")
+    if opened_at:
+        try:
+            age_min = (datetime.now(timezone.utc) - datetime.fromisoformat(opened_at)).total_seconds() / 60
+            if age_min < OPPOSITE_MIN_AGE_MIN:
+                return True, f"{existing_side} only {age_min:.0f}m old (need {OPPOSITE_MIN_AGE_MIN}m)"
+        except Exception:
+            pass  # If timestamp parsing fails, skip age gate
+
+    # Gate B: TP proximity — don't flip if position is >= 30% toward TP
+    entry_price = existing_trade.get("entry_price", 0)
+    tp_price = existing_trade.get("tp_price", 0)
+    if entry_price > 0 and tp_price > 0:
+        try:
+            current_price = get_price(symbol)
+            if current_price and current_price > 0:
+                if existing_side == "LONG":
+                    if tp_price > entry_price:
+                        progress = ((current_price - entry_price) / (tp_price - entry_price)) * 100
+                    else:
+                        progress = 0
+                else:  # SHORT
+                    if entry_price > tp_price:
+                        progress = ((entry_price - current_price) / (entry_price - tp_price)) * 100
+                    else:
+                        progress = 0
+
+                if progress >= OPPOSITE_TP_PROGRESS_BLOCK:
+                    # Queue the deferred flip
+                    _deferred_opposite_queue[symbol] = {
+                        "signal": new_signal,
+                        "confidence": new_confidence,
+                        "queued_at": datetime.now(timezone.utc),
+                        "pair_info": opportunity.get("pair_info", {}),
+                        "decision": opportunity.get("decision", {}),
+                        "blocked_side": existing_side,
+                        "tp_progress": progress,
+                    }
+                    return True, f"{existing_side} is {progress:.0f}% toward TP (threshold: {OPPOSITE_TP_PROGRESS_BLOCK}%), queued {new_signal} for deferred execution"
+        except Exception as e:
+            logger.debug(f"  [OPPOSITE GATE] Price check error for {symbol}: {e}")
+
+    return False, ""  # All gates passed, allow swap
+
+
+def _execute_deferred_flips(position_map, balance):
+    """V3.1.100: Execute queued opposite flips after old position closes.
+
+    Called at the start of each signal check cycle. If the blocked position
+    has closed (via TP/SL/monitor), executes the queued opposite signal.
+    """
+    global _deferred_opposite_queue, _last_trade_opened_at
+
+    if not _deferred_opposite_queue:
+        return
+
+    expired = []
+    executed = []
+
+    for symbol, queued in list(_deferred_opposite_queue.items()):
+        age_min = (datetime.now(timezone.utc) - queued["queued_at"]).total_seconds() / 60
+        pair_label = symbol.replace("cmt_", "").upper()
+
+        # Expired?
+        if age_min > DEFERRED_FLIP_MAX_AGE_MIN:
+            logger.info(f"  [DEFERRED] {pair_label} {queued['signal']} expired after {age_min:.0f}m")
+            expired.append(symbol)
+            continue
+
+        # Old position still open?
+        blocked_side = queued["blocked_side"]
+        sym_positions = position_map.get(symbol, {})
+        if blocked_side in sym_positions:
+            # Still open, keep waiting
+            logger.debug(f"  [DEFERRED] {pair_label}: {blocked_side} still open, waiting ({age_min:.0f}m queued)")
+            continue
+
+        # Old position closed! Execute the deferred flip
+        logger.info(f"  [DEFERRED EXECUTE] {pair_label}: {blocked_side} closed, executing queued {queued['signal']} ({queued['confidence']:.0%}, queued {age_min:.0f}m ago, was {queued.get('tp_progress', 0):.0f}% toward TP)")
+
+        try:
+            trade_result = run_with_retry(
+                execute_trade,
+                queued["pair_info"], queued["decision"], balance
+            )
+
+            if trade_result and trade_result.get("executed"):
+                logger.info(f"  [DEFERRED] Executed: {trade_result.get('order_id')}")
+                logger.info(f"  [DEFERRED] TP: {trade_result.get('tp_pct', 0):.1f}%, SL: {trade_result.get('sl_pct', 0):.1f}%")
+
+                # Store confidence + whale data like normal trades
+                trade_result["confidence"] = queued["confidence"]
+                whale_conf = 0.0
+                whale_dir = "NEUTRAL"
+                for pv in queued.get("decision", {}).get("persona_votes", []):
+                    if pv.get("persona") == "WHALE":
+                        whale_conf = pv.get("confidence", 0.0)
+                        whale_dir = pv.get("signal", "NEUTRAL")
+                        break
+                trade_result["whale_confidence"] = whale_conf
+                trade_result["whale_direction"] = whale_dir
+
+                tracker.add_trade(symbol, trade_result)
+                _last_trade_opened_at = time.time()
+
+                upload_ai_log_to_weex(
+                    stage=f"Deferred Flip: {pair_label} {queued['signal']}",
+                    input_data={"symbol": symbol, "signal": queued["signal"], "confidence": queued["confidence"], "queued_min_ago": round(age_min, 1), "blocked_side": blocked_side},
+                    output_data={"action": "DEFERRED_EXECUTED", "order_id": trade_result.get("order_id")},
+                    explanation=f"AI executed deferred {queued['signal']} on {pair_label}. Original flip was blocked {age_min:.0f}m ago because {blocked_side} was {queued.get('tp_progress', 0):.0f}% toward TP. {blocked_side} has now closed, entering {queued['signal']}."[:1000]
+                )
+            else:
+                reason = trade_result.get("reason", "unknown") if trade_result else "no result"
+                logger.info(f"  [DEFERRED] Trade not executed: {reason}")
+        except Exception as e:
+            logger.error(f"  [DEFERRED] Error executing {pair_label}: {e}")
+            import traceback as tb
+            logger.error(tb.format_exc())
+
+        executed.append(symbol)
+
+    # Cleanup expired + executed entries
+    for sym in expired + executed:
+        _deferred_opposite_queue.pop(sym, None)
 
 
 def cleanup_dust_positions():
