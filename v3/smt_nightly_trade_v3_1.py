@@ -967,9 +967,21 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
 
     # Competition bounds
     MIN_TP_PCT = 0.8   # Min 0.8% TP (covers fees at 20x + profit)
-    MAX_TP_PCT = 2.0   # Max 2.0% TP (competition: faster cycles)
     MIN_SL_PCT = 1.0   # V3.1.85: At 20x = 20% max loss
     MAX_SL_PCT = 2.0   # Max 2.0% SL (max risk per trade)
+
+    # V3.1.92: ATR-aware TP cap — let chart TPs breathe on volatile pairs
+    # Formula: min(3.0%, max(2.0%, ATR * 2)). Reuses cached get_pair_atr().
+    try:
+        _atr_for_tp = get_pair_atr(symbol)
+        _atr_pct_tp = _atr_for_tp.get("atr_pct", 0)
+        if _atr_pct_tp > 0:
+            MAX_TP_PCT = min(3.0, max(2.0, _atr_pct_tp * 2.0))
+            print(f"  [TP-CAP] {symbol.replace('cmt_','').upper()} ATR={_atr_pct_tp:.2f}% -> MAX_TP={MAX_TP_PCT:.1f}%")
+        else:
+            MAX_TP_PCT = 2.0  # Fallback if ATR unavailable
+    except Exception:
+        MAX_TP_PCT = 2.0  # Fallback
 
     htf_resistances = []
     htf_supports = []
@@ -1453,6 +1465,53 @@ MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
 MIN_CONFIDENCE_TO_TRADE = 0.80  # V3.1.77b: 85%->80%. With 3 slots, fill with best signals only.
 CHOP_FALLBACK_CONFIDENCE = 0.80  # V3.1.85: Raised to 80%. No sub-80% trades, period.
+
+# V3.1.92: Equity-based sizing with liquidation safety floors
+_sizing_equity_cache = {"sizing_base": 0, "equity": 0, "available": 0, "ts": 0}
+
+def get_sizing_base(balance: float) -> float:
+    """Get equity-aware sizing base with liquidation safety floors.
+
+    Sizes off equity (balance + UPnL) to leverage unrealized gains,
+    but with hard floors to prevent liquidation cascades.
+
+    Floors:
+    1. Never below balance (don't amplify losses)
+    2. Never above balance * 2.5 (cap runaway sizing)
+    3. If available margin < 15% of balance, returns 0 (skip trade)
+    """
+    global _sizing_equity_cache
+    now = time.time()
+
+    # Cache for 60s (one API call per signal cycle, not per pair)
+    if now - _sizing_equity_cache["ts"] < 60 and _sizing_equity_cache["sizing_base"] > 0:
+        return _sizing_equity_cache["sizing_base"]
+
+    try:
+        acct = get_account_equity()
+        equity = acct.get("equity", 0)
+        available = acct.get("available", 0)
+
+        if equity <= 0:
+            equity = balance  # API failed, fall back to balance
+
+        # FLOOR 1: If available margin < 15% of balance, signal "don't trade"
+        if available > 0 and available < balance * 0.15:
+            print(f"  [MARGIN GUARD] Available ${available:.0f} < 15% of balance ${balance:.0f}. Sizing blocked.")
+            _sizing_equity_cache = {"sizing_base": 0, "equity": equity, "available": available, "ts": now}
+            return 0
+
+        # FLOOR 2: Never size below balance (don't amplify losses when UPnL negative)
+        # CAP: Never size above balance * 2.5 (prevent runaway in extreme UPnL)
+        sizing_base = max(min(equity, balance * 2.5), balance)
+
+        print(f"  [SIZING] Equity: ${equity:.0f} | Balance: ${balance:.0f} | Sizing base: ${sizing_base:.0f} ({sizing_base/balance:.1f}x)")
+
+        _sizing_equity_cache = {"sizing_base": sizing_base, "equity": equity, "available": available, "ts": now}
+        return sizing_base
+    except Exception as e:
+        print(f"  [SIZING] Equity fetch failed ({e}), using balance ${balance:.0f}")
+        return balance
 
 # ============================================================
 # V3.1.78: TIER-BASED PARAMETERS (UPDATED!)
@@ -2970,21 +3029,25 @@ Respond with JSON ONLY (no markdown, no backticks):
                     and whale_vote.get("confidence", 0) >= 0.60):
                     flow_whale_aligned = True
 
-            # V3.1.90: COMPETITION PUSH - 25% base (was 12%). Per-slot cap (28.3%) clips higher tiers.
-            # Scale: 25% base, 31.25% high-conf, 37.5% ultra. Cap so all slots fit in ~85% of equity.
-            base_size = balance * 0.25
+            # V3.1.92: Equity-based sizing — use UPnL to size bigger (was balance-only V3.1.90)
+            # Scale: 25% base, 31.25% high-conf, 37.5% ultra. Cap so all slots fit in ~85% of sizing_base.
+            sizing_base = get_sizing_base(balance)
+            if sizing_base <= 0:
+                return self._wait_decision("Margin guard: available margin too low", persona_votes,
+                    [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
+            base_size = sizing_base * 0.25
             if confidence >= 0.90 and flow_whale_aligned:
-                position_usdt = base_size * 1.5  # 18% of balance - ULTRA
-                print(f"  [SIZING] ULTRA: 90%+ conf + FLOW/WHALE aligned -> 18%")
+                position_usdt = base_size * 1.5  # ULTRA
+                print(f"  [SIZING] ULTRA: 90%+ conf + FLOW/WHALE aligned -> {position_usdt/sizing_base*100:.0f}% of sizing_base")
             elif confidence > 0.85:
-                position_usdt = base_size * 1.25  # 15% of balance
+                position_usdt = base_size * 1.25  # HIGH
             else:
-                position_usdt = base_size * 1.0  # 12% of balance
+                position_usdt = base_size * 1.0  # NORMAL
 
             # V3.1.78: Bound by position count - prevent over-allocation at higher equity tiers
-            # At 6 slots, 18% each = 108% equity (bad). Cap per-position so total <= 85%.
+            # Slot count stays on BALANCE (conservative), but cap scales with sizing_base (equity-aware)
             max_slots = get_max_positions_for_equity(balance)
-            per_slot_cap = (balance * 0.85) / max(max_slots, 1)
+            per_slot_cap = (sizing_base * 0.85) / max(max_slots, 1)
             if position_usdt > per_slot_cap:
                 print(f"  [SIZING] Capped: ${position_usdt:.0f} -> ${per_slot_cap:.0f} ({max_slots} slots, 85% equity cap)")
                 position_usdt = per_slot_cap
@@ -2998,7 +3061,7 @@ Respond with JSON ONLY (no markdown, no backticks):
             position_usdt *= regime.get("size_multiplier", 1.0)
 
             position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
-            position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
+            position_usdt = min(position_usdt, sizing_base * MAX_SINGLE_POSITION_PCT)
             
             max_hold = tier_config["max_hold_hours"]
             
@@ -3490,13 +3553,19 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     if current_price == 0:
         return {"executed": False, "reason": "Could not get price"}
     
-    position_usdt = decision.get("recommended_position_usdt", balance * 0.07)
-    position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)
-    position_usdt = min(position_usdt, balance * MAX_SINGLE_POSITION_PCT)
+    # V3.1.92: Equity-based sizing (mirrors Judge sizing)
+    sizing_base = get_sizing_base(balance)
+    if sizing_base <= 0:
+        return {"executed": False, "reason": "Margin guard: available margin too low"}
+
+    position_usdt = decision.get("recommended_position_usdt", sizing_base * 0.07)
+    position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)   # Floor stays on balance
+    position_usdt = min(position_usdt, sizing_base * MAX_SINGLE_POSITION_PCT)  # Cap scales with equity
 
     # V3.1.78: Bound by equity tier position count (mirrors Judge sizing cap)
+    # Slot count stays on BALANCE (conservative), cap scales with sizing_base
     max_slots = get_max_positions_for_equity(balance)
-    per_slot_cap = (balance * 0.85) / max(max_slots, 1)
+    per_slot_cap = (sizing_base * 0.85) / max(max_slots, 1)
     if position_usdt > per_slot_cap:
         print(f"  [SIZING] Execute cap: ${position_usdt:.0f} -> ${per_slot_cap:.0f} ({max_slots} slots)")
         position_usdt = per_slot_cap

@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 8 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 
-**Current version: V3.1.91** — all production code is in `v3/`.
+**Current version: V3.1.92** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -91,6 +91,16 @@ POSITION_MONITOR_INTERVAL = 120      # 2min
 
 # Regime exit thresholds
 # Regime fight: 35% margin loss | Hard stop: 45% margin loss
+
+# Position sizing (V3.1.92: equity-based)
+# sizing_base = max(min(equity, balance * 2.5), balance)
+# base_size = sizing_base * 0.25 (confidence tiers: 1.0x / 1.25x / 1.5x)
+# per_slot_cap = (sizing_base * 0.85) / max_slots
+# Margin guard: skip trades if available margin < 15% of balance
+
+# TP caps (V3.1.92: ATR-aware)
+# MAX_TP_PCT = min(3.0%, max(2.0%, ATR * 2))
+# Volatile pairs (SOL/DOGE) get up to 3% TP, stable pairs (BTC) stay ~2-2.4%
 ```
 
 ## Trading Pairs & Tiers
@@ -176,7 +186,7 @@ python3 v3/smt_nightly_trade_v3_1.py --test
 
 Format: `V3.1.{N}` where N increments with each fix/feature.
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.1.91. Next change should be V3.1.92.
+Current: V3.1.92. Next change should be V3.1.93.
 
 **CRITICAL RULE (V3.1.85+): The 80% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that
