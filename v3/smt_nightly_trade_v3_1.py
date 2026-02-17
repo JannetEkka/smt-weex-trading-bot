@@ -2431,42 +2431,25 @@ class FlowPersona:
             # Log for debugging
             print(f"  [FLOW] Taker ratio: {taker_ratio:.2f} | Extreme sell: {extreme_selling} | Heavy sell: {heavy_selling}")
             
-            # V3.1.88: Moderate F&G cap on FLOW signals (V3.1.75 was 0.85->0.55, now 0.85->0.70)
-            # Still allows counter-trend signals, just dampened slightly in extreme F&G
-            fg_data = get_fear_greed_index()
-            fg_val = fg_data.get("value", 50)
+            # V3.1.96: REMOVED F&G cap on FLOW signals. The ensemble already handles
+            # extreme F&G via REGIME contrarian bias + Judge context. Capping FLOW
+            # before the Judge sees it weakens legitimate signals (e.g. ETH 85%->55%).
 
             if extreme_selling:
                 # V3.1.17: MASSIVE SELL PRESSURE - ignore depth entirely
-                if fg_val < 15:
-                    signals.append(("SHORT", 0.70, f"EXTREME taker selling: {taker_ratio:.2f} (F&G cap: 0.85->0.70)"))
-                    print(f"  [FLOW] F&G CAP: Extreme sell 0.85->0.70 (F&G={fg_val})")
-                else:
-                    signals.append(("SHORT", 0.85, f"EXTREME taker selling: {taker_ratio:.2f}"))
+                signals.append(("SHORT", 0.85, f"EXTREME taker selling: {taker_ratio:.2f}"))
                 # Don't even add depth signal - it's fake/spoofing
             elif heavy_selling:
                 # V3.1.17: Heavy selling - taker wins over depth
-                if fg_val < 15:
-                    signals.append(("SHORT", 0.55, f"Heavy taker selling: {taker_ratio:.2f} (F&G cap: 0.70->0.55)"))
-                    print(f"  [FLOW] F&G CAP: Heavy sell 0.70->0.55 (F&G={fg_val})")
-                else:
-                    signals.append(("SHORT", 0.70, f"Heavy taker selling: {taker_ratio:.2f}"))
+                signals.append(("SHORT", 0.70, f"Heavy taker selling: {taker_ratio:.2f}"))
                 # Depth signal at reduced weight
                 if depth["ask_strength"] > 1.3:
                     signals.append(("SHORT", 0.3, "Ask depth confirms"))
                 # IGNORE bid depth when heavy selling
             elif extreme_buying:
-                if fg_val > 85:
-                    signals.append(("LONG", 0.70, f"EXTREME taker buying: {taker_ratio:.2f} (F&G cap: 0.85->0.70)"))
-                    print(f"  [FLOW] F&G CAP: Extreme buy 0.85->0.70 (F&G={fg_val})")
-                else:
-                    signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
+                signals.append(("LONG", 0.85, f"EXTREME taker buying: {taker_ratio:.2f}"))
             elif heavy_buying:
-                if fg_val > 85:
-                    signals.append(("LONG", 0.55, f"Heavy taker buying: {taker_ratio:.2f} (F&G cap: 0.70->0.55)"))
-                    print(f"  [FLOW] F&G CAP: Heavy buy 0.70->0.55 (F&G={fg_val})")
-                else:
-                    signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
+                signals.append(("LONG", 0.70, f"Heavy taker buying: {taker_ratio:.2f}"))
                 if depth["bid_strength"] > 1.3:
                     signals.append(("LONG", 0.3, "Bid depth confirms"))
             else:
