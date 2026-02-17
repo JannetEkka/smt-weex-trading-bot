@@ -669,12 +669,15 @@ _chop_cache = {}
 _chop_cache_time = 0
 
 def detect_sideways_market(symbol: str) -> dict:
-    """V3.1.94: Multi-factor chop/sideways detection on 15M candles.
+    """V3.1.101: Multi-factor chop/sideways detection with per-pair timeframes.
 
-    Uses 15M candles (4x resolution vs old 1H) to calculate:
-    1. ADX (Average Directional Index, period=28) - trend strength over ~7h
-    2. Bollinger Band width (period=40) - volatility squeeze over ~10h
-    3. Directional consistency (lookback=24) - are candles flip-flopping over ~6h?
+    V3.1.94: Uses 15M candles (4x resolution vs old 1H) for most pairs.
+    V3.1.101: BTC uses 30M candles (institutional blocks, 15M is noise).
+
+    Calculates:
+    1. ADX (Average Directional Index, period=28) - trend strength
+    2. Bollinger Band width (period=40) - volatility squeeze
+    3. Directional consistency (lookback=24) - are candles flip-flopping?
     4. Micro-body threshold (0.1%) - filters noise candles as dojis
     5. Net displacement override - detects stair-step trending
 
@@ -711,11 +714,32 @@ def detect_sideways_market(symbol: str) -> dict:
     }
 
     try:
-        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=15m&limit=60"
+        # V3.1.101: Per-pair CHOP timeframe — match each pair's natural rhythm
+        # BTC moves in institutional blocks; 15m is noise. Use 30m for clearer trend read.
+        PAIR_CHOP_TIMEFRAME = {
+            "BTC":  ("30m", 30),   # Institutional blocks, 15m is noise. 30x30m = 15h
+            "ETH":  ("15m", 60),   # Fine on 15m
+            "BNB":  ("15m", 60),
+            "LTC":  ("15m", 60),
+            "XRP":  ("15m", 60),
+            "SOL":  ("15m", 60),   # Retail-driven, 15m captures well
+            "DOGE": ("15m", 60),
+            "ADA":  ("15m", 60),
+        }
+
+        pair_name = None
+        for _pair, _info in TRADING_PAIRS.items():
+            if _info["symbol"] == symbol:
+                pair_name = _pair
+                break
+
+        granularity, num_candles = PAIR_CHOP_TIMEFRAME.get(pair_name, ("15m", 60))
+        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity={granularity}&limit={num_candles}"
         r = requests.get(url, timeout=10)
         candles = r.json()
 
-        if not isinstance(candles, list) or len(candles) < 45:
+        min_candles = 22 if granularity == "30m" else 45
+        if not isinstance(candles, list) or len(candles) < min_candles:
             result["error"] = "Insufficient candle data"
             _chop_cache[symbol] = result
             return result
@@ -832,10 +856,16 @@ def detect_sideways_market(symbol: str) -> dict:
         reasons = []
 
         # ADX scoring — V3.1.94: thresholds lowered ~3pt for 15M DX deflation
-        if adx < 12:
+        # V3.1.101: Higher thresholds for 30m (ADX reads higher on longer timeframes)
+        if granularity == "30m":
+            adx_very_weak, adx_weak = 15, 20
+        else:
+            adx_very_weak, adx_weak = 12, 17
+
+        if adx < adx_very_weak:
             chop_signals += 2
             reasons.append(f"ADX={adx:.0f} (very weak trend)")
-        elif adx < 17:
+        elif adx < adx_weak:
             chop_signals += 1
             reasons.append(f"ADX={adx:.0f} (weak trend)")
 
@@ -923,7 +953,7 @@ def detect_sideways_market(symbol: str) -> dict:
             result["reason"] = f"OK: ADX={adx:.0f}, BB={bb_width:.1f}%, Dir={consistency:.0%}"
 
         disp_str = f", disp={net_displacement:.1f}%" if net_displacement > 0 else ""
-        print(f"  [CHOP-15M] {symbol.replace('cmt_','').upper()}: {result['reason']}{disp_str}")
+        print(f"  [CHOP-{granularity.upper()}] {symbol.replace('cmt_','').upper()}: {result['reason']}{disp_str}")
 
     except Exception as e:
         result["error"] = str(e)
@@ -931,6 +961,73 @@ def detect_sideways_market(symbol: str) -> dict:
 
     _chop_cache[symbol] = result
     return result
+
+
+# ============================================================
+# V3.1.101: ENTRY CONFIRMATION GATE
+# ============================================================
+# Check if recent 15m price action confirms signal direction.
+# Prevents early entries where ensemble detects direction but
+# price hasn't turned yet (e.g. SHORT while price still going up).
+
+def check_entry_confirmation(symbol: str, signal: str) -> dict:
+    """V3.1.101: Check if recent price action confirms signal direction.
+    Uses last 3 x 15m candles to detect if price is moving WITH or AGAINST the signal.
+    Returns: {"confirmed": bool, "penalty": float, "detail": str}
+    """
+    try:
+        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=15m&limit=3"
+        r = requests.get(url, timeout=10)
+        candles = r.json()
+
+        if not isinstance(candles, list) or len(candles) < 3:
+            return {"confirmed": True, "penalty": 0, "detail": "insufficient data, allowing"}
+
+        # candles[0] = most recent, candles[2] = oldest
+        # Each candle: [time, open, high, low, close, volume, value]
+        latest_close = float(candles[0][4])
+        latest_open = float(candles[0][1])
+        prev_close = float(candles[1][4])
+        prev_open = float(candles[1][1])
+
+        # Candle body direction (close vs open)
+        latest_green = latest_close > latest_open
+        prev_green = prev_close > prev_open
+
+        # Short-term momentum (last 30min: 2 candles)
+        momentum_30m = ((latest_close - prev_open) / prev_open) * 100
+
+        if signal == "LONG":
+            # For LONG: want green candles / upward momentum
+            opposing = (not latest_green) and (not prev_green)  # Both red
+            momentum_against = momentum_30m < -0.15  # Dropped 0.15%+ in 30min
+        else:  # SHORT
+            # For SHORT: want red candles / downward momentum
+            opposing = latest_green and prev_green  # Both green
+            momentum_against = momentum_30m > 0.15  # Rose 0.15%+ in 30min
+
+        if opposing and momentum_against:
+            # Price clearly moving OPPOSITE to signal — early entry
+            return {
+                "confirmed": False,
+                "penalty": 0.10,
+                "detail": f"OPPOSING: last 2 candles against {signal}, momentum {momentum_30m:+.2f}%"
+            }
+        elif opposing or momentum_against:
+            # Partial opposition — mild concern
+            return {
+                "confirmed": False,
+                "penalty": 0.05,
+                "detail": f"WEAK: partial opposition to {signal}, momentum {momentum_30m:+.2f}%"
+            }
+        else:
+            return {
+                "confirmed": True,
+                "penalty": 0,
+                "detail": f"CONFIRMED: price action aligns with {signal}, momentum {momentum_30m:+.2f}%"
+            }
+    except Exception as e:
+        return {"confirmed": True, "penalty": 0, "detail": f"error: {e}"}
 
 
 # ============================================================
@@ -3372,6 +3469,25 @@ class MultiPersonaAnalyzer:
                         final['chop_blocked'] = True
         else:
             final['chop_data'] = None
+
+        # V3.1.101: Entry confirmation gate — is price moving in signal direction?
+        # Prevents early entries where ensemble detects direction but price hasn't turned yet.
+        if final['decision'] in ("LONG", "SHORT"):
+            symbol = pair_info.get("symbol", f"cmt_{pair.lower()}usdt")
+            confirm = check_entry_confirmation(symbol, final['decision'])
+            print(f"  [CONFIRM] {pair}: {confirm['detail']}")
+
+            if not confirm['confirmed']:
+                old_conf = final.get('confidence', 0)
+                new_conf = old_conf - confirm['penalty']
+                print(f"  [CONFIRM] Penalty: -{confirm['penalty']*100:.0f}% ({old_conf*100:.0f}% -> {new_conf*100:.0f}%)")
+
+                if new_conf < MIN_CONFIDENCE_TO_TRADE:
+                    print(f"  [CONFIRM] BLOCKED: {new_conf*100:.0f}% < {MIN_CONFIDENCE_TO_TRADE*100:.0f}% floor. Price not confirming {final['decision']}.")
+                    final['decision'] = 'WAIT'
+                    final['confidence'] = 0
+                else:
+                    final['confidence'] = new_conf
 
         return final
 
