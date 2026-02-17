@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.95 - Fix PM Force-Stop vs Blacklist Conflict
+SMT Trading Daemon V3.1.96 - Remove F&G Hard Veto (Ensemble Handles It)
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -1245,13 +1245,12 @@ def check_trading_signals():
                 _opp_signal = opportunity["decision"]["decision"]
                 _regime_vetoed = False
 
-                # V3.1.75 FIX #1: F&G HARD BLOCK - common sense, no exceptions
-                if opp_fear_greed < 15 and _opp_signal == "SHORT":
-                    _regime_vetoed = True
-                    logger.warning(f"F&G VETO: F&G={opp_fear_greed} < 15 (CAPITULATION), blocking SHORT on {opportunity['pair']}. Shorting into extreme fear is suicidal.")
-                elif opp_fear_greed > 85 and _opp_signal == "LONG":
-                    _regime_vetoed = True
-                    logger.warning(f"F&G VETO: F&G={opp_fear_greed} > 85 (EUPHORIA), blocking LONG on {opportunity['pair']}. Buying into extreme greed is suicidal.")
+                # V3.1.96: REMOVED F&G hard block. Ensemble already factors in F&G:
+                # - FLOW caps confidence via F&G CAP (heavy sell 0.85->0.70 etc.)
+                # - REGIME adds contrarian bias at extreme F&G
+                # - Judge sees all F&G context before deciding
+                # Double-vetoing after the ensemble already adjusted is redundant
+                # and causes missed trades (e.g. ETH 82% SHORT blocked at F&G=10)
 
                 # V3.1.75 FIX #7: Regime veto requires WHALE+FLOW agreement to override (not WHALE alone)
                 if not _regime_vetoed and _regime_label == "BEARISH" and _opp_signal == "LONG":
@@ -2254,8 +2253,7 @@ RULE 2 - DIRECTIONAL CONCENTRATION LIMIT:
 Max 5 positions in the same direction normally. If 6+ LONGs or 6+ SHORTs, close the WEAKEST ones
 (lowest PnL% or highest loss) until we have max 5.
 EXCEPTION: If F&G < 15 (Capitulation), allow up to 7 LONGs. Violent bounces move all alts together.
-CRITICAL (V3.1.75): In F&G < 15, close any SHORT positions — shorting into capitulation is suicidal.
-In F&G > 85 (Euphoria), close any LONG positions — buying euphoria is suicidal.
+NOTE: Extreme F&G values are already factored into signal generation. Evaluate positions on their own merits.
 
 RULE 3 - LET WINNERS REACH TP:
 DO NOT close winning positions early. WEEX has TP orders at 2.5-3.5%. Let them trigger.
@@ -3160,14 +3158,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.95 - Fix PM Force-Stop vs Blacklist Conflict")
+    logger.info("SMT Daemon V3.1.96 - Remove F&G Hard Veto (Ensemble Handles It)")
     logger.info("=" * 60)
-    logger.info("V3.1.95 CHANGES:")
-    logger.info("  - FIX: PM no longer force-closes legitimate new entries after blacklist expiry")
-    logger.info("  - Grace period: positions opened AFTER last loss get normal grace (not bypassed)")
-    logger.info("  - PM flag: 'CLOSE THIS' -> advisory 'EVALUATE ON MERITS' for post-loss new entries")
-    logger.info("  - NEW: last_force_stop_time() helper for position vs loss timing comparison")
-    logger.info("  - INHERITED: V3.1.94 15m chop, V3.1.93 PM signal awareness, V3.1.85 80% floor")
+    logger.info("V3.1.96 CHANGES:")
+    logger.info("  - REMOVED: F&G hard block (no shorts in capitulation, no longs in euphoria)")
+    logger.info("  - Ensemble already factors F&G: FLOW caps, REGIME contrarian bias, Judge sees context")
+    logger.info("  - PM: removed 'close shorts in capitulation' instruction (evaluate on merits)")
+    logger.info("  - INHERITED: V3.1.95 PM force-stop fix, V3.1.94 15m chop, V3.1.85 80% floor")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
