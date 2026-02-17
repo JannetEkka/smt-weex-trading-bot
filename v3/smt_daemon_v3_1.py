@@ -408,6 +408,16 @@ GLOBAL_TRADE_COOLDOWN = 900  # V3.1.66c: 15 minutes (was 30min, too slow for com
 # V3.1.93: Last signal cycle summary for PM context
 _last_signal_summary = {}
 
+# V3.1.98: Per-pair signal cache for signal-flip exits
+_last_pair_signals = {}
+
+# V3.1.98: Signal-flip exit thresholds (tighter than normal early_exit when signals reverse)
+SIGNAL_FLIP_EXIT = {
+    1: {"min_hours": 2.0, "min_loss_pct": -0.5, "min_signal_conf": 0.75},   # T1: -0.5% after 2h (normal: -1.0% after 6h)
+    2: {"min_hours": 1.5, "min_loss_pct": -0.5, "min_signal_conf": 0.75},   # T2: -0.5% after 1.5h (normal: -1.0% after 4h)
+    3: {"min_hours": 1.0, "min_loss_pct": -0.5, "min_signal_conf": 0.75},   # T3: -0.5% after 1h (normal: -1.0% after 3h)
+}
+
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -697,7 +707,22 @@ def check_trading_signals():
 
                 confidence = decision.get("confidence", 0)
                 signal = decision.get("decision", "WAIT")
-                
+
+                # V3.1.98: Cache per-pair signal for signal-flip exits
+                # Priority: chop pre-penalty > judge raw (from _wait_decision) > final decision
+                _raw_signal = (decision.get("chop_original_decision")
+                               or decision.get("judge_raw_direction")
+                               or signal)
+                _raw_conf = (decision.get("chop_pre_penalty_confidence")
+                             or decision.get("judge_raw_confidence")
+                             or confidence)
+                if _raw_signal in ("LONG", "SHORT") and _raw_conf > 0:
+                    _last_pair_signals[symbol] = {
+                        "direction": _raw_signal,
+                        "confidence": _raw_conf,
+                        "timestamp": time.time(),
+                    }
+
                 # Build status string
                 status_parts = []
                 if has_long:
@@ -1613,14 +1638,33 @@ def monitor_positions():
                 if hours_open >= max_hold:
                     should_exit = True
                     exit_reason = f"max_hold_T{tier} ({hours_open:.1f}h > {max_hold}h)"
-                
-                # 2. Early exit if losing after tier-specific hours
+
+                # 2. V3.1.98: Signal-flip exit — signals reversed against position
+                # Tighter thresholds than normal early_exit when ensemble says wrong side
+                elif not should_exit:
+                    _flip_cfg = SIGNAL_FLIP_EXIT.get(tier, SIGNAL_FLIP_EXIT[2])
+                    _last_sig = _last_pair_signals.get(real_symbol, {})
+                    _sig_age = time.time() - _last_sig.get("timestamp", 0)
+                    _pos_side = trade.get("side", "LONG")
+
+                    if (_sig_age < 900  # Signal fresh (< 15 min)
+                        and _last_sig.get("direction") in ("LONG", "SHORT")
+                        and _last_sig["direction"] != _pos_side  # Opposite direction
+                        and _last_sig.get("confidence", 0) >= _flip_cfg["min_signal_conf"]
+                        and hours_open >= _flip_cfg["min_hours"]
+                        and pnl_pct <= _flip_cfg["min_loss_pct"]):
+                        should_exit = True
+                        exit_reason = (f"signal_flip_T{tier} ({_pos_side} pos vs {_last_sig['direction']} "
+                                       f"signal@{_last_sig['confidence']:.0%}, {pnl_pct:.2f}% after {hours_open:.1f}h)")
+                        state.early_exits += 1
+
+                # 3. Early exit if losing after tier-specific hours
                 elif hours_open >= early_exit_hours and pnl_pct <= early_exit_loss:
                     should_exit = True
                     exit_reason = f"early_exit_T{tier} ({pnl_pct:.2f}% after {hours_open:.1f}h)"
                     state.early_exits += 1
-                
-                # 3. Force exit on large loss (universal -4%)
+
+                # 4. Force exit on large loss (universal)
                 elif pnl_pct <= force_exit_loss:
                     should_exit = True
                     exit_reason = f"force_stop_T{tier} ({pnl_pct:.2f}%)"
@@ -3072,15 +3116,15 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.97 - Trust The Ensemble (80%% Floor + Chop Only)")
+    logger.info("SMT Daemon V3.1.98 - Signal-Flip Exits (Cut Losers When Signals Reverse)")
     logger.info("=" * 60)
-    logger.info("V3.1.97 CHANGES:")
-    logger.info("  - NUKED: F&G veto, regime veto, freshness filter, consecutive loss block")
-    logger.info("  - NUKED: blacklist/cooldown entry block, global trade cooldown")
-    logger.info("  - NUKED: PM (gemini_portfolio_review), regime_aware_exit_check")
-    logger.info("  - NUKED: FLOW F&G cap, BTC fear shield")
+    logger.info("V3.1.98 CHANGES:")
+    logger.info("  - NEW: Signal-flip exit — cut losing positions when ensemble reverses against them")
+    logger.info("  - T1: -0.5%% after 2h | T2: -0.5%% after 1.5h | T3: -0.5%% after 1h")
+    logger.info("  - Requires opposite signal at 75%%+ confidence, fresh (<15min)")
+    logger.info("  - No Gemini call — purely mechanical using cached signal cycle data")
     logger.info("  - KEPT: 80%% confidence floor, chop filter, slots, margin guard, TP/SL")
-    logger.info("  - PHILOSOPHY: Ensemble sees everything. 80%%+ and not choppy = TRADE.")
+    logger.info("  - PHILOSOPHY: Ensemble decides entries AND informs exits.")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]

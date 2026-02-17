@@ -3046,17 +3046,20 @@ Respond with JSON ONLY (no markdown, no backticks):
             # Safety: block if already have same direction
             if decision == "LONG" and has_long:
                 return self._wait_decision(f"Gemini says LONG but already have LONG on {pair}", persona_votes,
-                    [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
+                    [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes],
+                    raw_direction=decision, raw_confidence=confidence)
             if decision == "SHORT" and has_short:
                 return self._wait_decision(f"Gemini says SHORT but already have SHORT on {pair}", persona_votes,
-                    [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
-            
+                    [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes],
+                    raw_direction=decision, raw_confidence=confidence)
+
             # V3.1.63/V3.1.80: Minimum confidence floor (SNIPER) with fallback support
             # 75-79%: Pass through as fallback candidate (only used if chop filter frees a slot)
             # <75%: Hard block
             if confidence < CHOP_FALLBACK_CONFIDENCE:
                 return self._wait_decision(f"Gemini confidence too low: {confidence:.0%} < {CHOP_FALLBACK_CONFIDENCE:.0%}", persona_votes,
-                    [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
+                    [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes],
+                    raw_direction=decision, raw_confidence=confidence)
             
             # V3.1.59: Confidence-tiered position sizing with FLOW+WHALE alignment
             flow_whale_aligned = False
@@ -3246,10 +3249,13 @@ Respond with JSON ONLY (no markdown, no backticks):
             "vote_breakdown": {"long_score": round(long_score, 2), "short_score": round(short_score, 2), "neutral_score": 0},
         }
 
-    def _wait_decision(self, reason: str, persona_votes: List[Dict] = None, vote_summary: List[str] = None) -> Dict:
-        """Return WAIT decision with full vote details for logging"""
+    def _wait_decision(self, reason: str, persona_votes: List[Dict] = None, vote_summary: List[str] = None,
+                        raw_direction: str = None, raw_confidence: float = 0.0) -> Dict:
+        """Return WAIT decision with full vote details for logging
+        V3.1.98: Added raw_direction/raw_confidence to preserve Judge's original signal for signal-flip exits.
+        """
         votes_str = ', '.join(vote_summary) if vote_summary else "No votes"
-        
+
         # V3.1.39b: Log WAIT decisions to WEEX too (shows AI is analyzing even when not trading)
         try:
             upload_ai_log_to_weex(
@@ -3276,8 +3282,10 @@ Respond with JSON ONLY (no markdown, no backticks):
             "reasoning": f"{reason}. Votes: {votes_str}",
             "persona_votes": persona_votes or [],
             "whale_bias": 0.0,
-
             "vote_summary": vote_summary or [],
+            # V3.1.98: Preserve raw Judge direction for signal-flip exits
+            "judge_raw_direction": raw_direction,
+            "judge_raw_confidence": raw_confidence,
         }
 
 
