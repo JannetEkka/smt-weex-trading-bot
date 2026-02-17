@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 8 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 
-**Current version: V3.1.93** — all production code is in `v3/`.
+**Current version: V3.1.100** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -101,6 +101,12 @@ POSITION_MONITOR_INTERVAL = 120      # 2min
 # TP caps (V3.1.92: ATR-aware)
 # MAX_TP_PCT = min(3.0%, max(2.0%, ATR * 2))
 # Volatile pairs (SOL/DOGE) get up to 3% TP, stable pairs (BTC) stay ~2-2.4%
+
+# Opposite swap gates (V3.1.100)
+# OPPOSITE_MIN_AGE_MIN = 20       # Don't flip positions younger than 20 minutes
+# OPPOSITE_TP_PROGRESS_BLOCK = 30 # Block flip if position is >= 30% toward TP
+# DEFERRED_FLIP_MAX_AGE_MIN = 30  # Deferred signal expires after 30 minutes
+# When blocked, signal is queued. After old position closes, deferred flip auto-executes.
 ```
 
 ## Trading Pairs & Tiers
@@ -181,12 +187,13 @@ python3 v3/smt_nightly_trade_v3_1.py --test
 5. **Late entries** — Freshness filter blocks entering after a move already happened
 6. **Consecutive losses** — Block re-entry after 2 losses (any type) same direction in 24h (V3.1.91: counts ALL losses, not just force-stops)
 7. **AI log missing** — Every trade MUST upload logs or competition results won't count
+8. **Premature opposite flips** — V3.1.100 gates: don't flip if position >= 30% toward TP or < 20min old. Blocked signals queue for deferred execution.
 
 ## Version Naming
 
 Format: `V3.1.{N}` where N increments with each fix/feature.
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.1.93. Next change should be V3.1.94.
+Current: V3.1.100. Next change should be V3.1.101.
 
 **CRITICAL RULE (V3.1.85+): The 80% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that

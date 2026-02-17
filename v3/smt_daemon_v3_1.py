@@ -3251,9 +3251,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.99 - Trust The Ensemble (80%% Floor + Chop Only)")
+    logger.info("SMT Daemon V3.1.100 - Trust The Ensemble (80%% Floor + Chop Only)")
     logger.info("=" * 60)
-    logger.info("V3.1.99 CHANGES:")
+    logger.info("V3.1.100 CHANGES:")
+    logger.info("  - V3.1.100: Opposite swap TP proximity gate + deferred flip queue")
+    logger.info("  - Block flips when position >= 30%% toward TP (let it finish)")
+    logger.info("  - Min 20min age before opposite flip allowed")
+    logger.info("  - Blocked signals queued, auto-execute after old position closes (30min expiry)")
     logger.info("  - V3.1.99: Flat 1.1%% TP cap all pairs, chart SL +0.5%% buffer, MAX_SL 2.5%%")
     logger.info("  - NUKED: F&G veto, regime veto, freshness filter, consecutive loss block")
     logger.info("  - NUKED: blacklist/cooldown entry block, global trade cooldown")
