@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.96 - Remove F&G Hard Veto (Ensemble Handles It)
+SMT Trading Daemon V3.1.97 - Trust The Ensemble (80% Floor + Chop Only)
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -723,23 +723,8 @@ def check_trading_signals():
                     _cycle_signals += 1
                     _cycle_above_80 += 1
 
-                # V3.1.74: EXTREME FEAR BTC SHIELD - BTC is too slow for shorts in fear bounces
-                # F&G < 20 = contrarian BUY signal. BTC shorts at 20x leverage lose on fear bounces.
-                # Altcoins (SOL, DOGE etc) are volatile enough for shorts to work.
-                if signal == "SHORT" and pair == "BTC" and _fg_value < 20:
-                    logger.info(f"    -> FEAR SHIELD: BTC SHORT blocked (F&G={_fg_value}). Contrarian BUY only for BTC in extreme fear.")
-                    signal = "WAIT"
-                    confidence = 0
-
-                # V3.1.81: CONSECUTIVE LOSS OVERRIDE - if we've force-stopped 2+ times
-                # on the same symbol in the same direction within 24h, BLOCK the trade.
-                # This overrides F&G capitulation rules that force LONGs into a crash.
-                if signal in ("LONG", "SHORT"):
-                    _consec = tracker.consecutive_losses(symbol, signal, hours=24)
-                    if _consec >= 2:
-                        logger.warning(f"    -> LOSS STREAK BLOCK: {pair} {signal} blocked - {_consec} consecutive force-stops in 24h. Market is not bouncing.")
-                        signal = "WAIT"
-                        confidence = 0
+                # V3.1.97: REMOVED BTC fear shield, consecutive loss block.
+                # Ensemble already sees F&G + regime. 80% floor + chop filter are the only gates.
 
                 # V3.1.80: Track chop-blocked trades for fallback logic
                 if decision.get("chop_blocked"):
@@ -793,19 +778,8 @@ def check_trading_signals():
 #                    except Exception as e:
 #                        logger.error(f"[TELEGRAM] Alert failed: {e}")
                 
-                # V3.1.81: ENFORCE cooldown + blacklist (was display-only before!)
-                is_blacklisted = tracker.is_blacklisted(symbol)
-                if on_cooldown or is_blacklisted:
-                    _block_reason = []
-                    if on_cooldown:
-                        _block_reason.append(f"cooldown {cooldown_remaining:.1f}h")
-                    if is_blacklisted:
-                        _bl_remaining = tracker.get_blacklist_remaining(symbol)
-                        _block_reason.append(f"blacklisted {_bl_remaining:.1f}h")
-                    logger.info(f"    -> BLOCKED: {', '.join(_block_reason)}")
-                    _cycle_blocked += 1
-                    signal = "WAIT"
-                    confidence = 0
+                # V3.1.97: REMOVED blacklist/cooldown entry block.
+                # If ensemble says 80%+ and chop is clear, we trade.
 
                 # Determine tradability
                 can_trade_this = False
@@ -1245,68 +1219,8 @@ def check_trading_signals():
                 _opp_signal = opportunity["decision"]["decision"]
                 _regime_vetoed = False
 
-                # V3.1.96: REMOVED F&G hard block. Ensemble already factors in F&G:
-                # - FLOW caps confidence via F&G CAP (heavy sell 0.85->0.70 etc.)
-                # - REGIME adds contrarian bias at extreme F&G
-                # - Judge sees all F&G context before deciding
-                # Double-vetoing after the ensemble already adjusted is redundant
-                # and causes missed trades (e.g. ETH 82% SHORT blocked at F&G=10)
-
-                # V3.1.75 FIX #7: Regime veto requires WHALE+FLOW agreement to override (not WHALE alone)
-                if not _regime_vetoed and _regime_label == "BEARISH" and _opp_signal == "LONG":
-                    _whale_vote_check = next((v for v in opportunity["decision"].get("persona_votes", []) if v.get("persona") == "WHALE"), None)
-                    _flow_vote_check = next((v for v in opportunity["decision"].get("persona_votes", []) if v.get("persona") == "FLOW"), None)
-                    _whale_conf_check = _whale_vote_check.get("confidence", 0) if _whale_vote_check else 0
-                    _whale_dir_check = _whale_vote_check.get("signal", "NEUTRAL") if _whale_vote_check else "NEUTRAL"
-                    _flow_dir_check = _flow_vote_check.get("signal", "NEUTRAL") if _flow_vote_check else "NEUTRAL"
-                    _flow_conf_check = _flow_vote_check.get("confidence", 0) if _flow_vote_check else 0
-                    if _whale_dir_check == "LONG" and _whale_conf_check >= 0.70 and _flow_dir_check == "LONG" and _flow_conf_check >= 0.60:
-                        logger.info(f"REGIME VETO OVERRIDE: BEARISH but WHALE+FLOW both LONG (W={_whale_conf_check:.0%}, F={_flow_conf_check:.0%}), allowing {opportunity['pair']}")
-                    elif _whale_dir_check == "LONG" and _whale_conf_check >= 0.85:
-                        logger.info(f"REGIME VETO OVERRIDE: BEARISH but WHALE very strong LONG@{_whale_conf_check:.0%}, allowing {opportunity['pair']}")
-                    else:
-                        _regime_vetoed = True
-                        logger.warning(f"REGIME VETO: {_regime_label} market, blocking LONG on {opportunity['pair']} (whale={_whale_dir_check}@{_whale_conf_check:.0%}, flow={_flow_dir_check}@{_flow_conf_check:.0%})")
-                elif not _regime_vetoed and _regime_label == "BULLISH" and _opp_signal == "SHORT":
-                    _whale_vote_check = next((v for v in opportunity["decision"].get("persona_votes", []) if v.get("persona") == "WHALE"), None)
-                    _flow_vote_check = next((v for v in opportunity["decision"].get("persona_votes", []) if v.get("persona") == "FLOW"), None)
-                    _whale_conf_check = _whale_vote_check.get("confidence", 0) if _whale_vote_check else 0
-                    _whale_dir_check = _whale_vote_check.get("signal", "NEUTRAL") if _whale_vote_check else "NEUTRAL"
-                    _flow_dir_check = _flow_vote_check.get("signal", "NEUTRAL") if _flow_vote_check else "NEUTRAL"
-                    _flow_conf_check = _flow_vote_check.get("confidence", 0) if _flow_vote_check else 0
-                    if _whale_dir_check == "SHORT" and _whale_conf_check >= 0.70 and _flow_dir_check == "SHORT" and _flow_conf_check >= 0.60:
-                        logger.info(f"REGIME VETO OVERRIDE: BULLISH but WHALE+FLOW both SHORT (W={_whale_conf_check:.0%}, F={_flow_conf_check:.0%}), allowing {opportunity['pair']}")
-                    elif _whale_dir_check == "SHORT" and _whale_conf_check >= 0.85:
-                        logger.info(f"REGIME VETO OVERRIDE: BULLISH but WHALE very strong SHORT@{_whale_conf_check:.0%}, allowing {opportunity['pair']}")
-                    else:
-                        _regime_vetoed = True
-                        logger.warning(f"REGIME VETO: {_regime_label} market, blocking SHORT on {opportunity['pair']} (whale={_whale_dir_check}@{_whale_conf_check:.0%}, flow={_flow_dir_check}@{_flow_conf_check:.0%})")
-                elif not _regime_vetoed and _regime_label in ("SPIKE_UP",) and _opp_signal == "SHORT":
-                    _regime_vetoed = True
-                    logger.warning(f"REGIME VETO: SPIKE_UP, blocking SHORT on {opportunity['pair']}")
-                elif not _regime_vetoed and _regime_label in ("SPIKE_DOWN",) and _opp_signal == "LONG":
-                    _regime_vetoed = True
-                    logger.warning(f"REGIME VETO: SPIKE_DOWN, blocking LONG on {opportunity['pair']}")
-
-                if _regime_vetoed:
-                    upload_ai_log_to_weex(
-                        stage=f"Regime Veto: {_opp_signal} {opportunity['pair']} blocked",
-                        input_data={"regime": _regime_label, "signal": _opp_signal, "pair": opportunity['pair'], "fear_greed": opp_fear_greed},
-                        output_data={"action": "VETOED", "reason": f"F&G={opp_fear_greed}, regime={_regime_label}"},
-                        explanation=f"Sanity filter: blocked {_opp_signal} on {opportunity['pair']}. F&G={opp_fear_greed}, regime={_regime_label}. Contrarian logic: no shorts in capitulation, no longs in euphoria."
-                    )
-                    continue
-
-                # V3.1.68: INTER-CYCLE COOLDOWN (not intra-cycle)
-                # Only block if the last trade was from a PREVIOUS cycle
-                _now_cooldown = time.time()
-                _cooldown_elapsed = _now_cooldown - _last_trade_opened_at
-                if _cooldown_elapsed < GLOBAL_TRADE_COOLDOWN and _cooldown_elapsed > 120:
-                    # More than 2min since last trade = different cycle, apply cooldown
-                    _cd_remaining = GLOBAL_TRADE_COOLDOWN - _cooldown_elapsed
-                    logger.info(f"GLOBAL COOLDOWN: {_cd_remaining:.0f}s remaining, skipping {opportunity['pair']}")
-                    continue
-                # Within same cycle (< 2min gap) = allow multiple trades
+                # V3.1.97: REMOVED regime veto, F&G veto, global cooldown.
+                # Ensemble sees regime + F&G. 80% floor + chop filter are the only gates.
 
                 tier = opportunity["tier"]
                 tier_config = get_tier_config(tier)
@@ -3158,13 +3072,15 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.96 - Remove F&G Hard Veto (Ensemble Handles It)")
+    logger.info("SMT Daemon V3.1.97 - Trust The Ensemble (80%% Floor + Chop Only)")
     logger.info("=" * 60)
-    logger.info("V3.1.96 CHANGES:")
-    logger.info("  - REMOVED: F&G hard block (no shorts in capitulation, no longs in euphoria)")
-    logger.info("  - Ensemble already factors F&G: FLOW caps, REGIME contrarian bias, Judge sees context")
-    logger.info("  - PM: removed 'close shorts in capitulation' instruction (evaluate on merits)")
-    logger.info("  - INHERITED: V3.1.95 PM force-stop fix, V3.1.94 15m chop, V3.1.85 80% floor")
+    logger.info("V3.1.97 CHANGES:")
+    logger.info("  - NUKED: F&G veto, regime veto, freshness filter, consecutive loss block")
+    logger.info("  - NUKED: blacklist/cooldown entry block, global trade cooldown")
+    logger.info("  - NUKED: PM (gemini_portfolio_review), regime_aware_exit_check")
+    logger.info("  - NUKED: FLOW F&G cap, BTC fear shield")
+    logger.info("  - KEPT: 80%% confidence floor, chop filter, slots, margin guard, TP/SL")
+    logger.info("  - PHILOSOPHY: Ensemble sees everything. 80%%+ and not choppy = TRADE.")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
@@ -3224,10 +3140,11 @@ def run_daemon():
                 _mark_progress()
                 resolve_opposite_sides()  # V3.1.55: Close losing side when both exist
                 _mark_progress()  # V3.1.74: mark after resolve
-                regime_aware_exit_check()  # V3.1.9: Check for regime-fighting positions
-                _mark_progress()  # V3.1.74: mark after regime check
-                gemini_portfolio_review()  # V3.1.55: Gemini reviews portfolio with whale-aware rules
-                _mark_progress()  # V3.1.74: mark after PM review
+                # V3.1.97: DISABLED regime exit + PM. TP/SL on WEEX handle exits.
+                # regime_aware_exit_check()
+                _mark_progress()
+                # gemini_portfolio_review()
+                _mark_progress()
                 last_position = now
             
             if now - last_cleanup >= CLEANUP_CHECK_INTERVAL:

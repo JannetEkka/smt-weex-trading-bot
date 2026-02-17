@@ -3338,28 +3338,7 @@ class MultiPersonaAnalyzer:
         if final['decision'] in ("LONG", "SHORT"):
             print(f"  [JUDGE] TP: {final.get('take_profit_percent')}%, SL: {final.get('stop_loss_percent')}%, Max Hold: {final.get('hold_time_hours')}h")
         
-        # V3.1.71: TREND FRESHNESS FILTER - don't enter late in a move
-        if final['decision'] in ("LONG", "SHORT"):
-            _regime = get_enhanced_market_regime()
-            btc_1h = _regime.get('btc_1h', 0)  # V3.1.74: was 'change_1h' (wrong key, always 0)
-            btc_4h = _regime.get('btc_4h', 0)  # V3.1.74: was 'change_4h' (wrong key, always 0)
-            decision = final['decision']
-            # Late SHORT: 4h already dumped hard, 1h recovering = we missed the move
-            if decision == "SHORT" and btc_4h < -1.5 and btc_1h > 0.2:
-                print(f"  [FRESHNESS] BLOCKED SHORT: 4h={btc_4h:+.1f}% (dumped), 1h={btc_1h:+.1f}% (recovering). Late entry.")
-                final['decision'] = 'WAIT'
-                final['confidence'] = 0
-            # Late LONG: 4h already pumped hard, 1h fading = we missed the move
-            elif decision == "LONG" and btc_4h > 1.5 and btc_1h < -0.2:
-                print(f"  [FRESHNESS] BLOCKED LONG: 4h={btc_4h:+.1f}% (pumped), 1h={btc_1h:+.1f}% (fading). Late entry.")
-                final['decision'] = 'WAIT'
-                final['confidence'] = 0
-            # Fresh flip: 4h was down but 1h recovering = good LONG entry
-            elif decision == "LONG" and btc_4h < -0.5 and btc_1h > 0.3:
-                print(f"  [FRESHNESS] FRESH FLIP LONG: 4h={btc_4h:+.1f}%, 1h={btc_1h:+.1f}%. Good entry timing.")
-            # Fresh flip: 4h was up but 1h dumping = good SHORT entry
-            elif decision == "SHORT" and btc_4h > 0.5 and btc_1h < -0.3:
-                print(f"  [FRESHNESS] FRESH FLIP SHORT: 4h={btc_4h:+.1f}%, 1h={btc_1h:+.1f}%. Good entry timing.")
+        # V3.1.97: REMOVED freshness filter. Ensemble sees momentum data already.
 
         # V3.1.80: CHOP FILTER - don't enter choppy/sideways markets
         # Daily trading needs trending markets. Choppy = ping-pong = SL hits.
