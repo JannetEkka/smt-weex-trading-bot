@@ -3478,24 +3478,10 @@ class MultiPersonaAnalyzer:
         else:
             final['chop_data'] = None
 
-        # V3.1.101: Entry confirmation gate — is price moving in signal direction?
-        # Prevents early entries where ensemble detects direction but price hasn't turned yet.
-        if final['decision'] in ("LONG", "SHORT"):
-            symbol = pair_info.get("symbol", f"cmt_{pair.lower()}usdt")
-            confirm = check_entry_confirmation(symbol, final['decision'])
-            print(f"  [CONFIRM] {pair}: {confirm['detail']}")
-
-            if not confirm['confirmed']:
-                old_conf = final.get('confidence', 0)
-                new_conf = round(old_conf - confirm['penalty'], 4)  # V3.1.103: avoid float precision (0.85-0.05=0.7999...)
-                print(f"  [CONFIRM] Penalty: -{confirm['penalty']*100:.0f}% ({old_conf*100:.0f}% -> {new_conf*100:.0f}%)")
-
-                if new_conf < MIN_CONFIDENCE_TO_TRADE:
-                    print(f"  [CONFIRM] BLOCKED: {new_conf*100:.0f}% < {MIN_CONFIDENCE_TO_TRADE*100:.0f}% floor. Price not confirming {final['decision']}.")
-                    final['decision'] = 'WAIT'
-                    final['confidence'] = 0
-                else:
-                    final['confidence'] = new_conf
+        # V3.1.104: REMOVED entry confirmation gate.
+        # The gate fired at reversals (tops/bottoms) — exactly when you want to enter.
+        # Ensemble already incorporates price momentum via FLOW (taker ratios) and
+        # TECHNICAL (RSI/SMA). Signal persistence in the daemon replaces this gate.
 
         return final
 

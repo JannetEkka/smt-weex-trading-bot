@@ -419,6 +419,12 @@ GLOBAL_TRADE_COOLDOWN = 900  # V3.1.66c: 15 minutes (was 30min, too slow for com
 # V3.1.93: Last signal cycle summary for PM context
 _last_signal_summary = {}
 
+# V3.1.104: Per-pair signal persistence tracking
+# Tracks consecutive cycles where same direction scored ≥80% (pre-filter).
+# Used to override MEDIUM chop blocks when ensemble has been consistent 2+ cycles.
+# Structure: {pair: {"direction": "SHORT", "confidence": 0.88, "count": 2}}
+_signal_history = {}
+
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -739,6 +745,44 @@ def check_trading_signals():
 
                 # V3.1.97: REMOVED BTC fear shield, consecutive loss block.
                 # Ensemble already sees F&G + regime. 80% floor + chop filter are the only gates.
+
+                # V3.1.104: Signal persistence tracking.
+                # Record the pre-filter signal each cycle (use chop_original_decision when blocked).
+                # If ensemble gives same direction ≥80% for 2+ consecutive cycles → persistent.
+                _raw_dir = None
+                _raw_conf = 0.0
+                if decision.get("chop_blocked"):
+                    _raw_dir = decision.get("chop_original_decision")
+                    _raw_conf = decision.get("chop_pre_penalty_confidence", 0.0)
+                elif signal in ("LONG", "SHORT") and confidence >= MIN_CONFIDENCE_TO_TRADE:
+                    _raw_dir = signal
+                    _raw_conf = confidence
+
+                if _raw_dir and _raw_conf >= MIN_CONFIDENCE_TO_TRADE:
+                    _prev = _signal_history.get(pair, {})
+                    if _prev.get("direction") == _raw_dir:
+                        _signal_history[pair] = {"direction": _raw_dir, "confidence": _raw_conf, "count": _prev.get("count", 0) + 1}
+                    else:
+                        _signal_history[pair] = {"direction": _raw_dir, "confidence": _raw_conf, "count": 1}
+                else:
+                    _signal_history.pop(pair, None)
+
+                # V3.1.104: Medium chop persistence override.
+                # If the same direction at ≥80% has appeared 2+ consecutive cycles,
+                # the ensemble has been consistently right — override MEDIUM chop block.
+                # HARD chop still blocks unconditionally.
+                _persist_count = _signal_history.get(pair, {}).get("count", 0)
+                if (decision.get("chop_blocked") and
+                        decision.get("chop_data", {}).get("severity") == "medium" and
+                        _persist_count >= 2):
+                    _ov_dir = decision.get("chop_original_decision")
+                    _ov_conf = decision.get("chop_pre_penalty_confidence", 0.0)
+                    logger.info(f"    -> [PERSIST] {pair} {_ov_dir} {_ov_conf:.0%} — {_persist_count} consecutive cycles, medium chop overridden")
+                    decision["decision"] = _ov_dir
+                    decision["confidence"] = _ov_conf
+                    decision["chop_blocked"] = False
+                    signal = _ov_dir
+                    confidence = _ov_conf
 
                 # V3.1.80: Track chop-blocked trades for fallback logic
                 if decision.get("chop_blocked"):
@@ -3267,9 +3311,11 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.103 - Trust The Ensemble (80%% Floor + Chop Only)")
+    logger.info("SMT Daemon V3.1.104 - Trust The Ensemble (80%% Floor + Chop Only)")
     logger.info("=" * 60)
-    logger.info("V3.1.103 CHANGES:")
+    logger.info("V3.1.104 CHANGES:")
+    logger.info("  - V3.1.104: REMOVED entry confirmation gate (fired at reversals, fought ensemble)")
+    logger.info("  - V3.1.104: Signal persistence — same direction 2+ cycles overrides MEDIUM chop")
     logger.info("  - V3.1.103: Fix float precision in confirm gate (0.85-0.05=0.7999 bug, blocked valid 80%% trades)")
     logger.info("  - V3.1.102: Stale position auto-close (PM: sideways >2h, PnL near zero, free slot)")
     logger.info("  - V3.1.101: Entry confirmation gate (block early entries where price opposes signal)")
