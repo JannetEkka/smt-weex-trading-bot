@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.93 - PM Signal Awareness + Tier-Aware Chop Recency
+SMT Trading Daemon V3.1.94 - 15M Chop Filter + Micro-Body Threshold + Displacement
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -3142,13 +3142,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.93 - PM Signal Awareness + Tier-Aware Chop Recency")
+    logger.info("SMT Daemon V3.1.94 - 15M Chop Filter + Micro-Body Threshold + Displacement")
     logger.info("=" * 60)
-    logger.info("V3.1.93 CHANGES:")
-    logger.info("  - PM now sees signal landscape: knows if freed slots can be filled")
-    logger.info("  - Chop filter: tier-aware recency (T3=4h, T2=6h, T1=8h) prevents stale chop blocks")
-    logger.info("  - Chop metadata: pre-penalty confidence tracked for PM context")
-    logger.info("  - INHERITED: V3.1.92 equity sizing, V3.1.91 loss streak, V3.1.85 80% floor")
+    logger.info("V3.1.94 CHANGES:")
+    logger.info("  - Chop filter: 1h->15m candles (4x resolution, better for frequent trading)")
+    logger.info("  - Recalibrated: ADX(28), BB(40), Dir lookback 24, thresholds adjusted for 15m")
+    logger.info("  - NEW: Micro-body threshold (0.1%) filters noise candles as dojis")
+    logger.info("  - NEW: Net displacement override detects stair-step trending")
+    logger.info("  - INHERITED: V3.1.93 PM signal awareness, V3.1.92 equity sizing, V3.1.85 80% floor")
     logger.info("Tier Configuration:")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]

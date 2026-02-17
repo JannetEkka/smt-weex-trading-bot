@@ -669,12 +669,14 @@ _chop_cache = {}
 _chop_cache_time = 0
 
 def detect_sideways_market(symbol: str) -> dict:
-    """V3.1.80: Multi-factor chop/sideways detection.
+    """V3.1.94: Multi-factor chop/sideways detection on 15M candles.
 
-    Uses 1H candles (same as TechnicalPersona) to calculate:
-    1. ADX (Average Directional Index) - trend strength
-    2. Bollinger Band width - volatility squeeze detection
-    3. Directional consistency - are candles flip-flopping?
+    Uses 15M candles (4x resolution vs old 1H) to calculate:
+    1. ADX (Average Directional Index, period=28) - trend strength over ~7h
+    2. Bollinger Band width (period=40) - volatility squeeze over ~10h
+    3. Directional consistency (lookback=24) - are candles flip-flopping over ~6h?
+    4. Micro-body threshold (0.1%) - filters noise candles as dojis
+    5. Net displacement override - detects stair-step trending
 
     Returns:
         {
@@ -683,17 +685,18 @@ def detect_sideways_market(symbol: str) -> dict:
             "adx": float,
             "bb_width_pct": float,
             "directional_consistency": float,  # 0-1, higher = more trending
+            "net_displacement": float,  # V3.1.94: net price move % over lookback
             "reason": str
         }
     """
     global _chop_cache, _chop_cache_time
 
-    # Cache for 10 minutes (slightly less than signal check interval)
+    # Cache for 15 minutes (aligned to 15M candle close interval)
     now = time.time()
-    if now - _chop_cache_time < 600 and symbol in _chop_cache:
+    if now - _chop_cache_time < 900 and symbol in _chop_cache:
         return _chop_cache[symbol]
 
-    if now - _chop_cache_time >= 600:
+    if now - _chop_cache_time >= 900:
         _chop_cache = {}
         _chop_cache_time = now
 
@@ -708,11 +711,11 @@ def detect_sideways_market(symbol: str) -> dict:
     }
 
     try:
-        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1h&limit=30"
+        url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=15m&limit=60"
         r = requests.get(url, timeout=10)
         candles = r.json()
 
-        if not isinstance(candles, list) or len(candles) < 20:
+        if not isinstance(candles, list) or len(candles) < 45:
             result["error"] = "Insufficient candle data"
             _chop_cache[symbol] = result
             return result
@@ -723,10 +726,10 @@ def detect_sideways_market(symbol: str) -> dict:
         closes = [float(c[4]) for c in candles]
         opens = [float(c[1]) for c in candles]
 
-        # ---- 1. ADX CALCULATION (14-period) ----
+        # ---- 1. ADX CALCULATION (28-period on 15M = ~7h) ----
         # ADX measures trend STRENGTH regardless of direction
-        # ADX > 25 = trending, ADX < 20 = choppy, ADX < 15 = very choppy
-        period = 14
+        # V3.1.94: Period 28 on 15M candles. Thresholds lowered ~3pt (15M DX deflation)
+        period = 28
         if len(closes) >= period + 1:
             plus_dm_list = []
             minus_dm_list = []
@@ -765,10 +768,10 @@ def detect_sideways_market(symbol: str) -> dict:
 
                 result["adx"] = round(dx, 1)
 
-        # ---- 2. BOLLINGER BAND WIDTH (20-period, 2 std dev) ----
+        # ---- 2. BOLLINGER BAND WIDTH (40-period on 15M = ~10h, 2 std dev) ----
         # Tight bands = low volatility = choppy/range-bound
         # BB Width % = (Upper - Lower) / Middle * 100
-        bb_period = 20
+        bb_period = 40
         if len(closes) >= bb_period:
             bb_closes = closes[:bb_period]
             sma = sum(bb_closes) / bb_period
@@ -780,15 +783,22 @@ def detect_sideways_market(symbol: str) -> dict:
             bb_width_pct = ((upper_band - lower_band) / sma * 100) if sma > 0 else 3.0
             result["bb_width_pct"] = round(bb_width_pct, 2)
 
-        # ---- 3. DIRECTIONAL CONSISTENCY (last 12 candles) ----
+        # ---- 3. DIRECTIONAL CONSISTENCY (last 24 15M candles = ~6h) ----
         # Counts how many consecutive candles move in the same direction
         # Trending market: most candles agree. Choppy: alternating up/down
-        lookback = min(12, len(closes) - 1)
+        lookback = min(24, len(closes) - 1)
         directions = []  # V3.1.93: init here so recency check can access it
         if lookback >= 6:
+            # V3.1.94: Minimum body threshold — filter noise candles
+            # Candles with body < 0.1% of price are market noise, not directional moves
+            CANDLE_BODY_MIN_PCT = 0.001  # 0.1%
+
             for i in range(lookback):
                 # Compare close to open (candle direction)
-                if closes[i] > opens[i]:
+                body_pct = abs(closes[i] - opens[i]) / opens[i] if opens[i] > 0 else 0
+                if body_pct < CANDLE_BODY_MIN_PCT:
+                    directions.append(0)  # Noise candle — treat as doji
+                elif closes[i] > opens[i]:
                     directions.append(1)  # Bullish candle
                 elif closes[i] < opens[i]:
                     directions.append(-1)  # Bearish candle
@@ -806,6 +816,13 @@ def detect_sideways_market(symbol: str) -> dict:
             consistency = 1.0 - (flips / max_flips) if max_flips > 0 else 0.5
             result["directional_consistency"] = round(consistency, 2)
 
+        # V3.1.94: Net price displacement over lookback window
+        # Detects stair-step trending (micro-body noise but net directional move)
+        net_displacement = 0.0
+        if lookback >= 6 and closes[lookback - 1] > 0:
+            net_displacement = abs(closes[0] - closes[lookback - 1]) / closes[lookback - 1] * 100
+        result["net_displacement"] = round(net_displacement, 2)
+
         # ---- COMPOSITE CHOP SCORE ----
         adx = result["adx"]
         bb_width = result["bb_width_pct"]
@@ -814,29 +831,28 @@ def detect_sideways_market(symbol: str) -> dict:
         chop_signals = 0
         reasons = []
 
-        # ADX scoring
-        if adx < 15:
+        # ADX scoring — V3.1.94: thresholds lowered ~3pt for 15M DX deflation
+        if adx < 12:
             chop_signals += 2
             reasons.append(f"ADX={adx:.0f} (very weak trend)")
-        elif adx < 20:
+        elif adx < 17:
             chop_signals += 1
             reasons.append(f"ADX={adx:.0f} (weak trend)")
 
-        # BB width scoring - tier-aware thresholds (V3.1.89)
-        # Tier 1 (ETH, BNB) = blue chips with naturally tighter bands
-        # Tier 3 (SOL, DOGE, ADA) = higher vol, wider bands expected
-        # Using flat thresholds punished low-vol coins unfairly
+        # BB width scoring - tier-aware thresholds
+        # V3.1.89: Tier-specific thresholds
+        # V3.1.94: Raised ~30% for 15M close variance
         tier = None
         for _pair, _info in TRADING_PAIRS.items():
             if _info["symbol"] == symbol:
                 tier = _info["tier"]
                 break
         if tier == 1:
-            bb_very_tight, bb_tight = 1.0, 1.8  # BNB/ETH normal range is tighter
+            bb_very_tight, bb_tight = 1.3, 2.3   # BNB/ETH — raised from 1.0/1.8
         elif tier == 3:
-            bb_very_tight, bb_tight = 2.0, 3.0  # SOL/DOGE/ADA need wider threshold
+            bb_very_tight, bb_tight = 2.6, 3.8   # SOL/DOGE/ADA — raised from 2.0/3.0
         else:
-            bb_very_tight, bb_tight = 1.5, 2.5  # Tier 2 (BTC, LTC, XRP) = default
+            bb_very_tight, bb_tight = 2.0, 3.2   # BTC/LTC/XRP — raised from 1.5/2.5
 
         if bb_width < bb_very_tight:
             chop_signals += 2
@@ -845,16 +861,15 @@ def detect_sideways_market(symbol: str) -> dict:
             chop_signals += 1
             reasons.append(f"BB={bb_width:.1f}% (tight, T{tier} thresh={bb_tight})")
 
-        # V3.1.93: TIER-AWARE RECENCY CHECK — if market was choppy overall but has
+        # V3.1.93/94: TIER-AWARE RECENCY CHECK — if market was choppy overall but has
         # resolved into a trend recently, reduce the consistency penalty.
-        # Tier 3 pairs (SOL/DOGE/ADA) move fast and can resolve in 4h.
-        # Tier 1 (ETH/BNB) are slow movers, need 8h to confirm trend resolution.
+        # V3.1.94: Windows expressed in 15M candles (~75% of original absolute time)
         if tier == 3:
-            recent_lookback = min(4, lookback)   # 4h — small caps resolve fast
+            recent_lookback = min(12, lookback)   # 3h (12 x 15m) — fast movers
         elif tier == 1:
-            recent_lookback = min(8, lookback)   # 8h — blue chips need more data
+            recent_lookback = min(20, lookback)   # 5h (20 x 15m) — blue chips
         else:
-            recent_lookback = min(6, lookback)   # 6h — mid caps default
+            recent_lookback = min(16, lookback)   # 4h (16 x 15m) — mid caps
 
         recent_cons = consistency  # Default: same as full window
         if directions and recent_lookback >= 3 and len(directions) >= recent_lookback:
@@ -868,9 +883,17 @@ def detect_sideways_market(symbol: str) -> dict:
             result["recent_consistency"] = round(recent_cons, 2)
 
         # Directional consistency scoring
-        # V3.1.93: Recent consistency override — if trend has resolved, reduce penalty
-        if consistency < 0.3:
-            if recent_cons >= 0.6:
+        # V3.1.93: Recent consistency override
+        # V3.1.94: Thresholds lowered 0.08 for 15M (natural intra-hour pullbacks)
+        #          + net displacement override for stair-step trending
+        if consistency < 0.22:
+            # Tier-aware displacement thresholds
+            disp_thresh = {1: 1.0, 2: 1.5, 3: 2.0}.get(tier, 1.5)
+
+            if net_displacement >= disp_thresh:
+                # V3.1.94: Price moved significantly — stair-step trending, not chop
+                reasons.append(f"Dir={consistency:.0%} (stair-step, disp={net_displacement:.1f}%>={disp_thresh}%)")
+            elif recent_cons >= 0.6:
                 # Was choppy but recent candles trending. Trend resolved — no penalty.
                 reasons.append(f"Dir={consistency:.0%} (was choppy, recent={recent_cons:.0%} T{tier} trending)")
             elif recent_cons >= 0.4:
@@ -881,7 +904,7 @@ def detect_sideways_market(symbol: str) -> dict:
                 # Still choppy even recently. Full penalty.
                 chop_signals += 2
                 reasons.append(f"Dir={consistency:.0%} (flip-flopping)")
-        elif consistency < 0.45:
+        elif consistency < 0.37:
             chop_signals += 1
             reasons.append(f"Dir={consistency:.0%} (mixed)")
 
@@ -899,7 +922,8 @@ def detect_sideways_market(symbol: str) -> dict:
             result["severity"] = "low"
             result["reason"] = f"OK: ADX={adx:.0f}, BB={bb_width:.1f}%, Dir={consistency:.0%}"
 
-        print(f"  [CHOP] {symbol.replace('cmt_','').upper()}: {result['reason']}")
+        disp_str = f", disp={net_displacement:.1f}%" if net_displacement > 0 else ""
+        print(f"  [CHOP-15M] {symbol.replace('cmt_','').upper()}: {result['reason']}{disp_str}")
 
     except Exception as e:
         result["error"] = str(e)
