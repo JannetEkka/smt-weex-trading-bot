@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.101 - Trust The Ensemble (80% Floor + Chop Only)
+SMT Trading Daemon V3.1.102 - Trust The Ensemble (80% Floor + Chop Only)
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -173,6 +173,12 @@ CLEANUP_CHECK_INTERVAL = 30
 OPPOSITE_MIN_AGE_MIN = 20          # Don't flip positions younger than 20 minutes
 OPPOSITE_TP_PROGRESS_BLOCK = 30    # Block flip if position is >= 30% toward TP
 DEFERRED_FLIP_MAX_AGE_MIN = 30     # Deferred signal expires after 30 minutes
+
+# V3.1.102: Stale Position Auto-Close (PM feature)
+STALE_MIN_AGE_HOURS = 2.0          # Don't consider positions younger than 2h
+STALE_PNL_FLOOR = -0.5             # Position PnL must be above this % (not deep loss — let SL handle)
+STALE_PNL_CEILING = 0.3            # Position PnL must be below this % (not in profit)
+STALE_PEAK_MAX = 0.5               # Peak PnL must be below this % (never made real progress)
 
 # Competition
 COMPETITION_START = datetime(2026, 2, 8, 15, 0, 0, tzinfo=timezone.utc)
@@ -1661,7 +1667,16 @@ def monitor_positions():
                     should_exit = True
                     exit_reason = f"force_stop_T{tier} ({pnl_pct:.2f}%)"
                     state.early_exits += 1
-                
+
+                # 4. V3.1.102: Stale position — going nowhere, free the slot
+                # Position held >2h, PnL near zero, never made meaningful progress toward TP
+                elif hours_open >= STALE_MIN_AGE_HOURS and \
+                     STALE_PNL_FLOOR <= pnl_pct <= STALE_PNL_CEILING and \
+                     peak_pnl_pct < STALE_PEAK_MAX:
+                    should_exit = True
+                    exit_reason = f"stale_T{tier} ({pnl_pct:+.2f}% after {hours_open:.1f}h, peak {peak_pnl_pct:.2f}%)"
+                    logger.info(f"  [PM] Stale position detected: sideways {hours_open:.1f}h, freeing slot")
+
                 if should_exit:
                     symbol_clean = symbol.replace("cmt_", "").upper()
                     logger.warning(f"{symbol_clean}: Force close - {exit_reason}")
@@ -1677,6 +1692,7 @@ def monitor_positions():
                         try:
                             exit_type = "TIMEOUT" if "max_hold" in exit_reason else \
                                        "EARLY_EXIT" if "early_exit" in exit_reason else \
+                                       "STALE_CLOSE" if "stale" in exit_reason else \
                                        "FORCE_STOP"
                             rl_collector.log_outcome(symbol, pnl_pct, hours_open, exit_type)
                         except Exception as e:
@@ -3251,11 +3267,12 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.101 - Trust The Ensemble (80%% Floor + Chop Only)")
+    logger.info("SMT Daemon V3.1.102 - Trust The Ensemble (80%% Floor + Chop Only)")
     logger.info("=" * 60)
-    logger.info("V3.1.101 CHANGES:")
+    logger.info("V3.1.102 CHANGES:")
+    logger.info("  - V3.1.102: Stale position auto-close (PM: sideways >2h, PnL near zero, free slot)")
     logger.info("  - V3.1.101: Entry confirmation gate (block early entries where price opposes signal)")
-    logger.info("  - V3.1.101: Per-pair CHOP timeframe (BTC uses 30m, others stay 15m)")
+    logger.info("  - V3.1.101: Per-pair CHOP timeframe (BTC uses 1H ADX(14), others stay 15m)")
     logger.info("  - V3.1.100: Opposite swap TP proximity gate + deferred flip queue")
     logger.info("  - V3.1.99: Flat 1.1%% TP cap all pairs, chart SL +0.5%% buffer, MAX_SL 2.5%%")
     logger.info("  - NUKED: F&G veto, regime veto, freshness filter, consecutive loss block")
