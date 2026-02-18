@@ -1555,21 +1555,21 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
-# V3.2.7: EQUITY-TIERED POSITION LIMITS — max 5 slots (hard cap)
-# V3.2.10: Thresholds sized so per-slot margin ≥$1K at each tier (≥$100/trade at 0.5% TP)
-# Math: per_slot_cap = sizing_base × 0.85 / slots ≥ $1K → need $4.7K for 4 slots, $5.9K for 5 slots
-EQUITY_POSITION_TIERS = [
-    (5000, 3),   # < $5K: 3 positions — per-slot cap ≥$1,175 at $4.1K equity
-    (6000, 4),   # $5K-$6K: 4 positions — per-slot cap = $5K×0.85/4 = $1,062 ✓
-]
-EQUITY_POSITION_DEFAULT = 5  # $6K+: 5 positions — per-slot cap = $6K×0.85/5 = $1,020 ✓ (hard cap)
+# V3.2.13: Fixed 4-slot system — 3 small-cap + 1 large-cap reserved slot.
+# Small-cap (LTC/XRP/SOL/ADA): max 3 simultaneous positions
+# Large-cap (BTC/ETH/BNB): max 1 simultaneous position (reserved for strong signals only)
+# Shorts restricted to LTC only — other pairs LONG direction only.
+LARGE_CAP_PAIRS = {"BTC", "ETH", "BNB"}
+SMALL_CAP_PAIRS = {"LTC", "XRP", "SOL", "ADA"}
+LARGE_CAP_SYMS = {"cmt_btcusdt", "cmt_ethusdt", "cmt_bnbusdt"}
+SMALL_CAP_SYMS = {"cmt_ltcusdt", "cmt_xrpusdt", "cmt_solusdt", "cmt_adausdt"}
+SMALL_CAP_MAX_SLOTS = 3
+LARGE_CAP_MAX_SLOTS = 1
+MAX_TOTAL_POSITIONS = 4  # Hard cap: 3 small-cap + 1 large-cap
 
 def get_max_positions_for_equity(equity: float) -> int:
-    """Get max open positions based on current equity"""
-    for threshold, slots in EQUITY_POSITION_TIERS:
-        if equity < threshold:
-            return slots
-    return EQUITY_POSITION_DEFAULT
+    """V3.2.13: Fixed 4-slot system (3 small-cap + 1 large-cap). Equity no longer scales slots."""
+    return MAX_TOTAL_POSITIONS
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
 MIN_CONFIDENCE_TO_TRADE = 0.80  # V3.1.77b: 85%->80%. With 3 slots, fill with best signals only.

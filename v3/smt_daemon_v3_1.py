@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.2.12 - 2H TP anchor, fear TP cap extended to LONGs
+SMT Trading Daemon V3.2.13 - 3+1 slot system: 3 small-cap (LTC/XRP/SOL/ADA) + 1 large-cap (ETH/BNB/BTC); LTC-only shorts
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -236,6 +236,7 @@ try:
         # Config
         TEST_MODE, TRADING_PAIRS, MAX_LEVERAGE, STARTING_BALANCE,
         PIPELINE_VERSION, MODEL_NAME, get_max_positions_for_equity,
+        LARGE_CAP_SYMS, SMALL_CAP_SYMS, SMALL_CAP_MAX_SLOTS, LARGE_CAP_MAX_SLOTS, MAX_TOTAL_POSITIONS,
         MIN_CONFIDENCE_TO_TRADE,  # Added for trade filtering
         TIER_CONFIG, get_tier_for_symbol, get_tier_config,
         RUNNER_CONFIG, get_runner_config,
@@ -612,7 +613,11 @@ def check_trading_signals():
         
         # V3.1.53: Count positions from WEEX (the truth), not tracker
         weex_position_count = len(open_positions)  # This comes from allPosition API
-        
+
+        # V3.2.13: Group-specific slot tracking — 3 small-cap + 1 large-cap
+        _large_open = sum(1 for p in open_positions if p.get("symbol", "") in LARGE_CAP_SYMS)
+        _small_open = sum(1 for p in open_positions if p.get("symbol", "") in SMALL_CAP_SYMS)
+
         available_slots = effective_max_positions - weex_position_count
         
         # V3.1.53: Confidence override constants (restored)
@@ -861,6 +866,12 @@ def check_trading_signals():
                 # a lower swap bar (80%) since the ensemble has been consistently right.
                 _swap_threshold = 0.80 if _persist_count >= 2 else 0.83
 
+                # V3.2.13: Per-pair group slot availability (overrides global can_open_new)
+                if symbol in LARGE_CAP_SYMS:
+                    can_open_new = _large_open < LARGE_CAP_MAX_SLOTS and not low_equity_mode
+                else:
+                    can_open_new = _small_open < SMALL_CAP_MAX_SLOTS and not low_equity_mode
+
                 # Determine tradability
                 can_trade_this = False
                 trade_type = "none"
@@ -917,7 +928,10 @@ def check_trading_signals():
                             logger.info(f"    -> SLOTS FULL: {confidence:.0%} < {_swap_threshold:.0%} swap threshold ({weex_position_count}/{effective_max_positions})")
 
                 elif signal == "SHORT":
-                    if has_short:
+                    if pair != "LTC":
+                        # V3.2.13: Shorts restricted to LTC only — all other pairs LONG only
+                        logger.info(f"    -> SHORT BLOCKED: {pair} — shorts restricted to LTC only (treating as WAIT)")
+                    elif has_short:
                         logger.info(f"    -> Already SHORT")
                     elif has_long:
                         # V3.1.53: OPPOSITE - tighten LONG SL + open SHORT
@@ -1284,7 +1298,25 @@ def check_trading_signals():
                 if sig_check == "SHORT" and short_count >= MAX_SAME_DIRECTION:
                     logger.warning(f"DIRECTIONAL LIMIT: {short_count} SHORTs already open, skipping {opportunity['pair']} SHORT")
                     continue
-                
+
+                # V3.2.13: Shorts restricted to LTC only (execution-phase safety net)
+                if opportunity["decision"]["decision"] == "SHORT" and opportunity["pair"] != "LTC":
+                    logger.info(f"  SHORT GATE: {opportunity['pair']} — shorts only allowed for LTC, skipping")
+                    continue
+
+                # V3.2.13: Group slot gate — enforce 3 small-cap / 1 large-cap hard caps
+                _exec_sym = opportunity["pair_info"]["symbol"]
+                if _exec_sym in LARGE_CAP_SYMS:
+                    _cur_large = sum(1 for p in open_positions if p.get("symbol", "") in LARGE_CAP_SYMS)
+                    if _cur_large >= LARGE_CAP_MAX_SLOTS:
+                        logger.info(f"  GROUP GATE: {opportunity['pair']} skipped — large-cap slot occupied ({_cur_large}/1)")
+                        continue
+                elif _exec_sym in SMALL_CAP_SYMS:
+                    _cur_small = sum(1 for p in open_positions if p.get("symbol", "") in SMALL_CAP_SYMS)
+                    if _cur_small >= SMALL_CAP_MAX_SLOTS:
+                        logger.info(f"  GROUP GATE: {opportunity['pair']} skipped — small-cap slots full ({_cur_small}/3)")
+                        continue
+
                 # V3.1.51: SESSION-AWARE TRADING with confidence adjustments
                 import datetime as _dt_module
                 utc_hour = _dt_module.datetime.now(_dt_module.timezone.utc).hour
@@ -3341,8 +3373,12 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.12 - 2H TP anchor, fear TP cap extended to LONGs")
+    logger.info("SMT Daemon V3.2.13 - 3+1 slots: 3 small-cap (LTC/XRP/SOL/ADA) + 1 large-cap (ETH/BNB/BTC); LTC-only shorts")
     logger.info("=" * 60)
+    logger.info("V3.2.13 CHANGES:")
+    logger.info("  - V3.2.13: Fixed 4-slot system — 3 slots for small-caps (LTC/XRP/SOL/ADA), 1 reserved for large-cap (ETH/BNB/BTC)")
+    logger.info("  - V3.2.13: Shorts restricted to LTC only — all other pairs LONG direction only")
+    logger.info("  - V3.2.13: Equity-tiered slot scaling removed — slots no longer expand with balance")
     logger.info("V3.2.12 CHANGES:")
     logger.info("  - V3.2.12: TP anchor 6H→2H in find_chart_based_tp_sl() — dip entries no longer anchored to pre-dip peak")
     logger.info("  - V3.2.12: Extreme fear TP cap extended to LONG signals (was SHORT-only in V3.2.9)")
@@ -3414,6 +3450,8 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     logger.info("Cooldowns: ENFORCED (V3.1.81) + blacklist after force_stop")
     logger.info("Slot Swap: ENABLED (V3.1.88) - 83% min conf, 45min age, regime-aware PnL gate")
+    logger.info("Slots (V3.2.13): 4 total — 3 small-cap (LTC/XRP/SOL/ADA) + 1 large-cap (ETH/BNB/BTC)")
+    logger.info("Shorts (V3.2.13): LTC only — all other pairs LONG direction only")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
