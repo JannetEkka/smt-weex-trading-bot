@@ -1553,12 +1553,13 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
 # V3.2.7: EQUITY-TIERED POSITION LIMITS — max 5 slots (hard cap)
-# Tighter tiers keep per-slot sizing meaningful and margins healthy
+# V3.2.10: Thresholds sized so per-slot margin ≥$1K at each tier (≥$100/trade at 0.5% TP)
+# Math: per_slot_cap = sizing_base × 0.85 / slots ≥ $1K → need $4.7K for 4 slots, $5.9K for 5 slots
 EQUITY_POSITION_TIERS = [
-    (4000, 3),   # < $4K: 3 positions (keep sizing meaningful)
-    (6000, 4),   # $4K-$6K: 4 positions
+    (5000, 3),   # < $5K: 3 positions — per-slot cap ≥$1,175 at $4.1K equity
+    (6000, 4),   # $5K-$6K: 4 positions — per-slot cap = $5K×0.85/4 = $1,062 ✓
 ]
-EQUITY_POSITION_DEFAULT = 5  # $6K+: 5 positions max (hard cap — V3.2.7)
+EQUITY_POSITION_DEFAULT = 5  # $6K+: 5 positions — per-slot cap = $6K×0.85/5 = $1,020 ✓ (hard cap)
 
 def get_max_positions_for_equity(equity: float) -> int:
     """Get max open positions based on current equity"""

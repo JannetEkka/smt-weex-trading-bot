@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.2.9 - extreme fear SHORT TP capped at 0.5%
+SMT Trading Daemon V3.2.10 - slot thresholds raised to $5K/$6K
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -3341,8 +3341,11 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.9 - extreme fear SHORT TP capped at 0.5%")
+    logger.info("SMT Daemon V3.2.10 - slot thresholds raised to $5K/$6K")
     logger.info("=" * 60)
+    logger.info("V3.2.10 CHANGES:")
+    logger.info("  - V3.2.10: Slot threshold $4K→$5K — per-slot margin ≥$1K at all tiers (≥$100/trade at 0.5%% TP)")
+    logger.info("  - V3.2.10: Math: slots expand only when sizing_base × 0.85 / slots ≥ $1K")
     logger.info("V3.2.9 CHANGES:")
     logger.info("  - V3.2.9: Extreme fear SHORT TP capped at 0.5%% when F&G < 20 (chart SR may target 1-2%% but bounces hit first)")
     logger.info("  - V3.2.9: Reverts V3.2.8 signal block — issue was TP greed, not signal quality")
