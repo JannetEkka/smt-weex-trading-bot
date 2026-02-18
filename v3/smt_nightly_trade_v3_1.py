@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.2.12 - 2H TP anchor, fear TP cap extended to LONGs
+SMT Nightly Trade V3.2.16 - Gemini Chart Context, 7 pairs, structural TP targeting
 =============================================================
 No partial closes. Higher conviction trades only.
 
@@ -1249,6 +1249,138 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
     return result
 
 
+# ============================================================
+# V3.2.16: CHART CONTEXT FOR GEMINI JUDGE
+# Pulls 1D (5-day) + 4H (32h) candles to give Gemini real
+# structural context: trend, key S/R levels, 5D range.
+# ============================================================
+_chart_context_cache = {}
+_chart_context_cache_time = 0
+
+def get_chart_context(symbol: str) -> str:
+    """V3.2.16: Build compact multi-TF chart context string for Gemini Judge.
+
+    Pulls 1D candles (5 complete days) and 4H candles (8 complete = 32h).
+    Returns a text block with trend, S/R levels, and 5D range.
+    Cached for 10 minutes (same as signal check interval).
+    """
+    global _chart_context_cache, _chart_context_cache_time
+
+    now = time.time()
+    if now - _chart_context_cache_time < 600 and symbol in _chart_context_cache:
+        return _chart_context_cache[symbol]
+
+    if now - _chart_context_cache_time >= 600:
+        _chart_context_cache = {}
+        _chart_context_cache_time = now
+
+    pair_label = symbol.replace("cmt_", "").replace("usdt", "").upper()
+
+    try:
+        # === 1D candles: 6 candles → skip [0] (current partial), use [1:6] = 5 complete days ===
+        url_1d = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1Dutc&limit=6"
+        r_1d = requests.get(url_1d, timeout=10)
+        candles_1d = r_1d.json()
+
+        # === 4H candles: 9 candles → skip [0] (current partial), use [1:9] = 8 complete = 32h ===
+        url_4h = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=4h&limit=9"
+        r_4h = requests.get(url_4h, timeout=10)
+        candles_4h = r_4h.json()
+
+        if not isinstance(candles_1d, list) or len(candles_1d) < 4:
+            return f"{pair_label}: Daily candle data insufficient"
+        if not isinstance(candles_4h, list) or len(candles_4h) < 5:
+            return f"{pair_label}: 4H candle data insufficient"
+
+        # 1D: extract OHLC from complete candles [1:6]
+        d_opens  = [float(c[1]) for c in candles_1d[1:6]]
+        d_highs  = [float(c[2]) for c in candles_1d[1:6]]
+        d_lows   = [float(c[3]) for c in candles_1d[1:6]]
+        d_closes = [float(c[4]) for c in candles_1d[1:6]]
+
+        d_high_5d = max(d_highs)
+        d_low_5d  = min(d_lows)
+        d_current = float(candles_1d[0][4])  # Current candle close = latest price
+
+        # 5D trend: compare current vs 5 days ago close
+        d_oldest_close = d_closes[-1]  # Oldest complete day
+        d_change_5d = ((d_current - d_oldest_close) / d_oldest_close) * 100
+
+        # Daily resistance: top 2 highs (sorted desc)
+        d_res_sorted = sorted(d_highs, reverse=True)
+        d_resistances = d_res_sorted[:2]
+
+        # Daily support: bottom 2 lows (sorted asc)
+        d_sup_sorted = sorted(d_lows)
+        d_supports = d_sup_sorted[:2]
+
+        # 4H: extract from complete candles [1:9]
+        h4_highs  = [float(c[2]) for c in candles_4h[1:9]]
+        h4_lows   = [float(c[3]) for c in candles_4h[1:9]]
+        h4_closes = [float(c[4]) for c in candles_4h[1:9]]
+
+        # 4H resistance: top 2 highs
+        h4_res_sorted = sorted(h4_highs, reverse=True)
+        h4_resistances = h4_res_sorted[:2]
+
+        # 4H support: bottom 2 lows
+        h4_sup_sorted = sorted(h4_lows)
+        h4_supports = h4_sup_sorted[:2]
+
+        # 32h trend
+        h4_oldest_close = h4_closes[-1]
+        h4_change = ((d_current - h4_oldest_close) / h4_oldest_close) * 100
+
+        # Determine trend label
+        if d_change_5d > 3:
+            trend_5d = "Strong Uptrend"
+        elif d_change_5d > 1:
+            trend_5d = "Mild Uptrend"
+        elif d_change_5d < -3:
+            trend_5d = "Strong Downtrend"
+        elif d_change_5d < -1:
+            trend_5d = "Mild Downtrend"
+        else:
+            trend_5d = "Consolidating"
+
+        # Format price with appropriate decimals
+        def _fmt(p):
+            if p >= 1000:
+                return f"${p:,.1f}"
+            elif p >= 1:
+                return f"${p:.4f}"
+            else:
+                return f"${p:.6f}"
+
+        context = (
+            f"{pair_label} CHART CONTEXT:\n"
+            f"  5D: High={_fmt(d_high_5d)} Low={_fmt(d_low_5d)} Current={_fmt(d_current)} ({d_change_5d:+.1f}%) Trend: {trend_5d}\n"
+            f"  32H: {h4_change:+.1f}% from 32h ago\n"
+            f"  Daily Resistance: {_fmt(d_resistances[0])}"
+            + (f", {_fmt(d_resistances[1])}" if len(d_resistances) > 1 and d_resistances[1] != d_resistances[0] else "")
+            + f" | 4H Resistance: {_fmt(h4_resistances[0])}"
+            + (f", {_fmt(h4_resistances[1])}" if len(h4_resistances) > 1 and h4_resistances[1] != h4_resistances[0] else "")
+            + f"\n"
+            f"  Daily Support: {_fmt(d_supports[0])}"
+            + (f", {_fmt(d_supports[1])}" if len(d_supports) > 1 and d_supports[1] != d_supports[0] else "")
+            + f" | 4H Support: {_fmt(h4_supports[0])}"
+            + (f", {_fmt(h4_supports[1])}" if len(h4_supports) > 1 and h4_supports[1] != h4_supports[0] else "")
+        )
+
+        print(f"  [CHART-CTX] {pair_label}: 5D {d_change_5d:+.1f}%, 32H {h4_change:+.1f}%, "
+              f"Res={_fmt(d_resistances[0])}/{_fmt(h4_resistances[0])}, "
+              f"Sup={_fmt(d_supports[0])}/{_fmt(h4_supports[0])}")
+
+        _chart_context_cache[symbol] = context
+        return context
+
+    except Exception as e:
+        fallback = f"{pair_label}: Chart context unavailable ({e})"
+        print(f"  [CHART-CTX] {fallback}")
+        _chart_context_cache[symbol] = fallback
+        return fallback
+
+
 # V3.2.0: Competition fallback TPs — dip-signal strategy, 0.5% grab-and-go
 COMPETITION_FALLBACK_TP = {
     1: 0.5,   # Tier 1 (ETH, BNB): 0.5% fast exit
@@ -1555,11 +1687,12 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
-# V3.2.14: Flat 3-slot system — LTC/XRP/SOL/ADA only. No equity scaling. Shorts: LTC only.
-MAX_TOTAL_POSITIONS = 3  # Hard cap: 3 slots for 4 pairs (LTC/XRP/SOL/ADA)
+# V3.2.16: 7 pairs, 4 slots flat. BTC/ETH/BNB re-added (Gemini chart context makes them viable).
+# Shorts: LTC only. All others LONG only.
+MAX_TOTAL_POSITIONS = 4  # Hard cap: 4 slots for 7 pairs
 
 def get_max_positions_for_equity(equity: float) -> int:
-    """V3.2.14: Fixed 3-slot system. Equity no longer scales slots."""
+    """V3.2.16: Fixed 4-slot system for 7 pairs. Equity no longer scales slots."""
     return MAX_TOTAL_POSITIONS
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
@@ -1657,9 +1790,12 @@ TIER_CONFIG = {
 # BTC T1→T2 (2.28% actual SL, +52% stretch - behaves mid-cap)
 # SOL T2→T3 (3.36% actual SL, higher than ADA - needs short hold)
 TRADING_PAIRS = {
-    # V3.2.14: LTC/XRP/SOL/ADA only — 3 slots flat, LTC-only shorts
-    # BTC/ETH/BNB removed V3.2.14 (kicked entirely — focus on smaller caps)
-    # DOGE removed V3.2.11 — erratic SL/orphan behavior
+    # V3.2.16: 7 pairs — BTC/ETH/BNB re-added with Gemini chart context for smarter TP targeting
+    # DOGE removed V3.2.11 — erratic SL/orphan behavior (stays out)
+    # Shorts: LTC only. All others LONG only.
+    "BTC": {"symbol": "cmt_btcusdt", "tier": 1, "has_whale_data": True},   # LONG only (re-added V3.2.16)
+    "ETH": {"symbol": "cmt_ethusdt", "tier": 1, "has_whale_data": True},   # LONG only (re-added V3.2.16)
+    "BNB": {"symbol": "cmt_bnbusdt", "tier": 2, "has_whale_data": True},   # LONG only (re-added V3.2.16)
     "LTC": {"symbol": "cmt_ltcusdt", "tier": 2, "has_whale_data": True},   # LONG + SHORT allowed
     "XRP": {"symbol": "cmt_xrpusdt", "tier": 2, "has_whale_data": True},   # LONG only
     "SOL": {"symbol": "cmt_solusdt", "tier": 3, "has_whale_data": True},   # LONG only
@@ -1667,8 +1803,8 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.1.84-ChartTP-CompetitionMode"
-MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.1.84"
+PIPELINE_VERSION = "SMT-v3.2.16-GeminiChartContext-7Pairs"
+MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
 KNOWN_STEP_SIZES = {
@@ -2918,7 +3054,16 @@ class JudgePersona:
             rl_performance = get_rl_performance_summary()
         except Exception:
             rl_performance = "Historical pair performance unavailable."
-        
+
+        # V3.2.16: Multi-TF chart context for Gemini Judge — 1D + 4H structural levels
+        chart_context_text = ""
+        try:
+            chart_ctx = get_chart_context(symbol)
+            if chart_ctx and "unavailable" not in chart_ctx and "insufficient" not in chart_ctx:
+                chart_context_text = chart_ctx
+        except Exception as _ctx_err:
+            print(f"  [JUDGE] Chart context error: {_ctx_err}")
+
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
 Your job: analyze all signals and decide the SINGLE BEST action for {pair} right now.
 STRATEGY: High-frequency dip/bounce trades. TP targets are 0.3-0.5% (6-10% ROE at 20x). Volume of good trades beats waiting for perfect ones.
@@ -2933,6 +3078,9 @@ Funding rate (BTC): {regime.get('btc_funding', 0):.6f}
 === PERSONA VOTES FOR {pair} (Tier {tier}: {tier_config['name']}) ===
 {personas_text}
 
+=== CHART STRUCTURE (1D + 4H) ===
+{chart_context_text if chart_context_text else "Chart data unavailable — use persona votes only."}
+
 === CURRENT POSITIONS ON {pair} ===
 {pair_pos_text}
 
@@ -2944,7 +3092,7 @@ Days remaining: {days_left}
 PnL: ${pnl:.0f} ({pnl_pct:+.1f}%)
 Available balance: ${balance:.0f}
 
-=== DECISION GUIDELINES (V3.1.77 DATA-DRIVEN) ===
+=== DECISION GUIDELINES (V3.2.16 CHART-AWARE) ===
 
 YOUR ONLY JOB: Decide LONG, SHORT, or WAIT based on signal quality. Position limits, TP/SL, and slot management are handled by code -- ignore them entirely.
 
@@ -2968,6 +3116,12 @@ HOW TO DECIDE:
 - If WHALE and FLOW directly contradict (opposite directions, both >60%): WAIT.
 - If neither co-primary signal exceeds 60%: WAIT. No clear edge.
 
+TP TARGET (V3.2.16 — USE CHART STRUCTURE):
+Look at the CHART STRUCTURE section above. If you decide LONG or SHORT, identify the NEAREST structural resistance (for LONG) or support (for SHORT) from the 4H or Daily levels.
+Return this as "tp_price" in your JSON response — the actual price level where you expect the move to stall.
+This should be a REALISTIC near-term target, not the 5D high. Think: "where is the first wall?"
+If chart data is unavailable, omit tp_price and code will use its default.
+
 === HISTORICAL PAIR PERFORMANCE (from RL training data) ===
 {rl_performance}
 USE THIS AS CONTEXT ONLY — not a veto. Poor historical win rate = note it in reasoning, then follow WHALE+FLOW if they clearly agree.
@@ -2989,7 +3143,7 @@ Frequency of good trades compounds into competition wins — don't over-filter.
 SHORT ASYMMETRY: In EXTREME FEAR (F&G < 15), require 2+ co-primary signals confirming SHORT before taking it (bounce risk is real). Otherwise treat LONG and SHORT equally — both directions are valid entries.
 
 Respond with JSON ONLY (no markdown, no backticks):
-{{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences explaining your decision"}}"""
+{{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences explaining your decision", "tp_price": null or a number (structural price target from chart — omit or null if unsure)}}"""
 
         try:
             _rate_limit_gemini()
@@ -3064,19 +3218,26 @@ Respond with JSON ONLY (no markdown, no backticks):
             tp_pct = float(raw_tp) if raw_tp is not None else tier_config["tp_pct"]
             raw_sl = data.get("sl_pct")
             sl_pct = float(raw_sl) if raw_sl is not None else tier_config["sl_pct"]
-            
-            # V3.1.70: VOL-SL DISABLED - tight SLs are non-negotiable. Prelim discipline.
-            # _fg_for_sl = regime.get("fear_greed", 50) if regime else 50
-            # if _fg_for_sl < 15:
-            #     sl_pct = sl_pct * 1.5
-            #     print(f"  [JUDGE] V3.1.64 VOL-SL: F&G={_fg_for_sl}, widened SL to {sl_pct:.1f}%")
-            
+
+            # V3.2.16: Parse Gemini's structural tp_price (actual price target from chart context)
+            gemini_tp_price = None
+            raw_tp_price = data.get("tp_price")
+            if raw_tp_price is not None:
+                try:
+                    gemini_tp_price = float(raw_tp_price)
+                    if gemini_tp_price > 0:
+                        print(f"  [JUDGE] Gemini tp_price: ${gemini_tp_price:.4f} (structural target from chart)")
+                    else:
+                        gemini_tp_price = None
+                except (ValueError, TypeError):
+                    gemini_tp_price = None
+
             # Clamp TP/SL to reasonable ranges (wider max for vol-adjusted)
             tp_pct = max(1.5, min(10.0, tp_pct))
             sl_pct = max(1.5, min(7.0, sl_pct))
-            
+
             print(f"  [JUDGE] Gemini: {decision} ({confidence:.0%})")
-            print(f"  [JUDGE] Reasoning: {reasoning[:150]}")
+            print(f"  [JUDGE] Reasoning: {reasoning[:600]}")
             
             if decision == "WAIT":
                 return self._wait_decision(f"Gemini Judge: {reasoning}", persona_votes, 
@@ -3180,7 +3341,7 @@ Respond with JSON ONLY (no markdown, no backticks):
                         "competition_pnl": pnl,
                         "persona_votes": [
                             {"persona": v["persona"], "signal": v["signal"], "confidence": v["confidence"], 
-                             "reasoning": v.get("reasoning", "")[:150]}
+                             "reasoning": v.get("reasoning", "")[:400]}
                             for v in persona_votes
                         ],
                     },
@@ -3221,6 +3382,7 @@ Respond with JSON ONLY (no markdown, no backticks):
                 "fear_greed": regime.get("fear_greed", 50),
                 "regime": regime.get("regime", "NEUTRAL"),
                 "fallback_only": is_fallback,
+                "gemini_tp_price": gemini_tp_price,  # V3.2.16: structural TP from chart context
             }
             
         except json.JSONDecodeError as e:
@@ -3751,15 +3913,39 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
     chart_sr = find_chart_based_tp_sl(symbol, signal, current_price)
 
+    # V3.2.16: Gemini structural TP override — uses 1D+4H chart context to identify
+    # the REAL nearest resistance/support, bypassing the 2H anchor when Gemini gives a target.
+    _gemini_tp = decision.get("gemini_tp_price")
+    _gemini_tp_used = False
+    if _gemini_tp and _gemini_tp > 0 and current_price > 0:
+        if signal == "LONG" and _gemini_tp > current_price:
+            _g_tp_pct = ((_gemini_tp - current_price) / current_price) * 100
+            if 0.3 <= _g_tp_pct <= 5.0:  # Sanity: 0.3% to 5.0%
+                print(f"  [TP/SL] GEMINI TP OVERRIDE (LONG): ${_gemini_tp:.4f} = {_g_tp_pct:.2f}% from ${current_price:.4f}")
+                chart_sr["tp_pct"] = round(_g_tp_pct, 2)
+                chart_sr["tp_price"] = _gemini_tp
+                if chart_sr["method"] == "fallback":
+                    chart_sr["method"] = "chart_mtf"  # Promote so chart path is used
+                _gemini_tp_used = True
+        elif signal == "SHORT" and _gemini_tp < current_price:
+            _g_tp_pct = ((current_price - _gemini_tp) / current_price) * 100
+            if 0.3 <= _g_tp_pct <= 5.0:
+                print(f"  [TP/SL] GEMINI TP OVERRIDE (SHORT): ${_gemini_tp:.4f} = {_g_tp_pct:.2f}% from ${current_price:.4f}")
+                chart_sr["tp_pct"] = round(_g_tp_pct, 2)
+                chart_sr["tp_price"] = _gemini_tp
+                if chart_sr["method"] == "fallback":
+                    chart_sr["method"] = "chart_mtf"
+                _gemini_tp_used = True
+
     if chart_sr["method"] in ("chart", "chart_mtf") and chart_sr["tp_pct"] and chart_sr["sl_pct"]:
-        # CHART-BASED: Real S/R levels from candle swing highs/lows
+        # CHART-BASED: Real S/R levels from candle swing highs/lows (or Gemini structural target)
         tp_pct_raw = chart_sr["tp_pct"]
         sl_pct_raw = chart_sr["sl_pct"]
         tp_price = chart_sr["tp_price"]
         sl_price = chart_sr["sl_price"]
         tp_pct = tp_pct_raw / 100
         sl_pct = sl_pct_raw / 100
-        mtf_label = "MTF" if chart_sr["method"] == "chart_mtf" else "1H"
+        mtf_label = "GEMINI" if _gemini_tp_used else ("MTF" if chart_sr["method"] == "chart_mtf" else "1H")
         print(f"  [TP/SL] CHART-BASED [{mtf_label}]: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
 
         # V3.2.12: In extreme fear, cap ALL TP at competition fallback (0.5%) — both LONG and SHORT.
@@ -3780,10 +3966,9 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
             pass
 
         # V3.2.15: XRP-specific TP cap — historical fills show XRP moves 0.34–0.48%.
-        # 2H anchor overshoots when entry is at the dip bottom (pre-dip ceiling = 1.5%+ away).
-        # Cap at 0.70% to match observed pair range while still letting chart find the level.
-        if symbol == "cmt_xrpusdt" and tp_pct_raw > 0.70:
-            print(f"  [TP/SL] XRP TP cap: {tp_pct_raw:.2f}% → 0.70% (historical range)")
+        # V3.2.16: Only apply if Gemini didn't give us a structural target (Gemini sees the real chart).
+        if symbol == "cmt_xrpusdt" and tp_pct_raw > 0.70 and not _gemini_tp_used:
+            print(f"  [TP/SL] XRP TP cap: {tp_pct_raw:.2f}% → 0.70% (historical range, no Gemini override)")
             tp_pct_raw = 0.70
             tp_pct = tp_pct_raw / 100
             tp_price = current_price * (1 + tp_pct) if signal == "LONG" else current_price * (1 - tp_pct)

@@ -2362,7 +2362,7 @@ def gemini_portfolio_review():
                 "long_count": long_count,
                 "short_count": short_count,
             },
-            explanation=f"Portfolio Manager reviewing {len(positions)} positions. Equity: ${equity:.0f}. {cryptoracle_context[:150]}"
+            explanation=f"Portfolio Manager reviewing {len(positions)} positions. Equity: ${equity:.0f}. {cryptoracle_context[:400]}"
         )
         
         # V3.1.88: Compute slot info locally for PM prompt (was referencing check_trading_signals locals)
@@ -2546,7 +2546,7 @@ If nothing should be closed, return:
         keep_reasons = data.get("keep_reasons", "")
         
         if not closes:
-            logger.info(f"[PORTFOLIO] Gemini: Keep all. {keep_reasons[:100]}")
+            logger.info(f"[PORTFOLIO] Gemini: Keep all. {keep_reasons[:400]}")
             return
         
         logger.info(f"[PORTFOLIO] Gemini wants to close {len(closes)} position(s)")
@@ -2627,7 +2627,7 @@ If nothing should be closed, return:
                     time.sleep(1)
                     break
         
-        logger.info(f"[PORTFOLIO] Review complete. Keep reasons: {keep_reasons[:100]}")
+        logger.info(f"[PORTFOLIO] Review complete. Keep reasons: {keep_reasons[:400]}")
         
         # V3.1.59: AI log for PM decision
         upload_ai_log_to_weex(
@@ -3349,12 +3349,18 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.14 - 4 pairs (LTC/XRP/SOL/ADA), 3 slots flat, LTC-only shorts, BTC/ETH/BNB removed")
+    logger.info("SMT Daemon V3.2.16 - 7 pairs (BTC/ETH/BNB/LTC/XRP/SOL/ADA), 4 slots, Gemini chart context, LTC-only shorts")
     logger.info("=" * 60)
+    logger.info("V3.2.16 CHANGES:")
+    logger.info("  - V3.2.16: BTC/ETH/BNB RE-ADDED — 7 pairs with Gemini 1D+4H chart context for smarter TP targeting")
+    logger.info("  - V3.2.16: get_chart_context() — pulls 5D daily + 32H 4H candles, feeds structural S/R to Judge")
+    logger.info("  - V3.2.16: Judge prompt now includes CHART STRUCTURE section + returns tp_price (structural target)")
+    logger.info("  - V3.2.16: Gemini tp_price overrides 2H anchor in TP/SL when within 0.3-5.0%% sanity range")
+    logger.info("  - V3.2.16: 4 slots flat for 7 pairs (was 3 for 4). Shorts: LTC only.")
+    logger.info("  - V3.2.16: Display truncation fixed — Judge reasoning 150→600 chars, portfolio 100→400 chars")
+    logger.info("  - V3.2.16: XRP TP cap (0.70%%) only applies when Gemini doesn't provide structural target")
     logger.info("V3.2.14 CHANGES:")
-    logger.info("  - V3.2.14: BTC/ETH/BNB removed from TRADING_PAIRS — 4 pairs only (LTC/XRP/SOL/ADA)")
-    logger.info("  - V3.2.14: Flat 3-slot cap — no equity scaling, no group tiers")
-    logger.info("  - V3.2.14: Shorts restricted to LTC only (XRP/SOL/ADA LONG only)")
+    logger.info("  - V3.2.14: Flat slot cap — no equity scaling, no group tiers")
     logger.info("V3.2.13 CHANGES:")
     logger.info("  - V3.2.13: Fixed 4-slot system — 3 slots for small-caps (LTC/XRP/SOL/ADA), 1 reserved for large-cap (ETH/BNB/BTC)")
     logger.info("  - V3.2.13: Shorts restricted to LTC only — all other pairs LONG direction only")
@@ -3430,8 +3436,8 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%, SL: {tier_config['stop_loss']*100:.1f}%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     logger.info("Cooldowns: ENFORCED (V3.1.81) + blacklist after force_stop")
     logger.info("Slot Swap: ENABLED (V3.1.88) - 83% min conf, 45min age, regime-aware PnL gate")
-    logger.info("Slots (V3.2.14): 3 flat — LTC/XRP/SOL/ADA only. BTC/ETH/BNB removed.")
-    logger.info("Shorts (V3.2.14): LTC only — XRP/SOL/ADA LONG direction only")
+    logger.info("Slots (V3.2.16): 4 flat — BTC/ETH/BNB/LTC/XRP/SOL/ADA (7 pairs)")
+    logger.info("Shorts (V3.2.16): LTC only — all other pairs LONG direction only")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
