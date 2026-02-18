@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.2.2 - Dip Signal Strategy (uncapped chart S/R TP/SL)
+SMT Trading Daemon V3.2.3 - Dip Signal Strategy (15m S/R + FLOW chop override)
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -3327,8 +3327,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.2 - Dip Signal Strategy (uncapped chart S/R TP/SL)")
+    logger.info("SMT Daemon V3.2.3 - Dip Signal Strategy (15m S/R + FLOW chop override)")
     logger.info("=" * 60)
+    logger.info("V3.2.3 CHANGES:")
+    logger.info("  - V3.2.3: find_chart_based_tp_sl() — add 15m as 3rd S/R layer (micro pivots, 12.5h, cluster 0.2%%)")
+    logger.info("  - V3.2.3: CHOP filter — FLOW EXTREME (>=85%% aligned) overrides MEDIUM CHOP (skip penalty)")
+    logger.info("  - V3.2.3: CHOP filter — FLOW EXTREME overrides HIGH CHOP (reduce to medium penalty, not hard block)")
+    logger.info("  - V3.2.3: EQUITY_POSITION_TIERS — sub-$8K tiers added (4 slots at $1K+ balance)")
     logger.info("V3.2.2 CHANGES:")
     logger.info("  - V3.2.2: Removed MAX_TP_PCT and MAX_SL_PCT caps from find_chart_based_tp_sl()")
     logger.info("  - V3.2.2: Chart now uses real structural S/R levels without artificial % ceiling")

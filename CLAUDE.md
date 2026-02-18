@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 8 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 
-**Current version: V3.2.2** — all production code is in `v3/`.
+**Current version: V3.2.3** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -56,6 +56,7 @@ Key pattern: **FLOW/WHALE fire first → dip completes → bot enters at the bot
 - **Preferred TP is ~0.5%.** Grab the dip bounce and exit fast. If the move continues, the next 10-min signal cycle catches re-entry. Do NOT hold waiting for a bigger move — the 10-min daemon loop IS the strategy.
 - **High win rate > high R:R.** With correct dip entries the win rate is high enough that small TPs are profitable at scale. Classical swing-trade R:R math does not apply here.
 - **The chop filter (BBs + ADX) exists to block trending markets** — where a "dip" may just keep going down. It does NOT mean "avoid tight ranges." A tight BB squeeze is fine for a dip bounce; what you're avoiding is a strong directional trend where the SL gets hit.
+- **FLOW EXTREME overrides chop (V3.2.3):** If FLOW confidence >=85% and matches signal direction, MEDIUM chop penalty is skipped. HIGH chop is reduced to medium (15% penalty). Extreme taker flow = breakout, not chop.
 - **Compound fast.** Many small wins × leverage × reinvestment beats waiting for 3% moves. Capital rotation speed is the edge.
 
 **Do NOT flag small TPs or "poor R:R" — that framing is wrong for this strategy.** A 0.5% TP on a dip-bottom entry with a 10-min re-entry loop is the design, not a flaw.
@@ -97,8 +98,9 @@ GLOBAL_TRADE_COOLDOWN = 900          # 15min between trades
 SIGNAL_CHECK_INTERVAL = 600          # 10min
 POSITION_MONITOR_INTERVAL = 120      # 2min
 
-# Slot system (equity-tiered)
-# >= $500: 5 slots | $200-500: 3 slots | < $200: 1 slot
+# Slot system (balance-tiered, V3.2.3)
+# < $1K: 3 slots | $1K-$2K: 4 slots | $2K-$4K: 5 slots | $4K-$8K: 6 slots | $8K-$12K: 7 slots | $12K+: 8 slots
+# Total exposure stays same (sizing_base * 0.85), just split across more positions
 # When all slots are full: only slot swaps can enter (needs 83%+ confidence)
 # If no signals reach 80%, ALL pairs show WAIT — this is expected, not a bug.
 # Existing position + same direction signal = WAIT (already have that side).
@@ -117,8 +119,9 @@ POSITION_MONITOR_INTERVAL = 120      # 2min
 # per_slot_cap = (sizing_base * 0.85) / max_slots
 # Margin guard: skip trades if available margin < 15% of balance
 
-# TP/SL bounds (V3.2.2: uncapped — let chart find real structural levels)
+# TP/SL bounds (V3.2.3: 3-timeframe S/R — 4H structural + 1H recent + 15m micro)
 # MIN_TP_PCT = 0.3%  (floor only — no ceiling, chart finds real resistance)
+# 15m adds micro pivots (cluster 0.2%) for tighter TP targets close to entry
 # MIN_SL_PCT = 1.0%  (floor only — no ceiling, SL sits at real 4H structure)
 # Fallback: COMPETITION_FALLBACK_TP = 0.5% (all tiers, when chart SR fails)
 
@@ -142,7 +145,7 @@ POSITION_MONITOR_INTERVAL = 120      # 2min
 | DOGE | cmt_dogeusdt | 3 | 3.0% | 1.8% | 8h  |
 | ADA  | cmt_adausdt  | 3 | 3.0% | 1.8% | 8h  |
 
-Note: Chart-based TP/SL (support/resistance) is active since V3.1.84. V3.2.2 removed TP/SL caps — chart finds real structural levels with no ceiling. Fallback TP = 0.5% (all tiers) when chart SR fails. Tier TP/SL values above are only used as a last resort.
+Note: Chart-based TP/SL (support/resistance) is active since V3.1.84. V3.2.2 removed TP/SL caps — chart finds real structural levels with no ceiling. V3.2.3 adds 15m as 3rd S/R layer (4H + 1H + 15m). Fallback TP = 0.5% (all tiers) when chart SR fails. Tier TP/SL values above are only used as a last resort.
 
 ## WEEX API
 
@@ -216,7 +219,7 @@ python3 v3/smt_nightly_trade_v3_1.py --test
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.2. Next change should be V3.2.3.
+Current: V3.2.3. Next change should be V3.2.4.
 
 **CRITICAL RULE (V3.1.85+): The 80% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that

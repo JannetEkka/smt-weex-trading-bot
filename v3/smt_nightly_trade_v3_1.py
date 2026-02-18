@@ -1102,14 +1102,14 @@ def _find_swing_levels(candles: list) -> tuple:
 
 
 def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict:
-    """V3.1.86: Multi-timeframe chart-based TP/SL using support/resistance.
+    """V3.2.3: Multi-timeframe chart-based TP/SL using support/resistance.
 
-    Like a human trader checking BOTH the 1H and 4H charts:
+    Three-timeframe S/R stack:
     1. 4H candles (50 = ~8 days) → structural S/R levels (strong)
-    2. 1H candles (50 = ~2 days) → recent S/R levels (weak)
-    3. 4H levels preferred for SL (real structure holds better)
-    4. Combined levels for TP (nearest valid target)
-    5. Apply competition bounds for fast turnover
+    2. 1H candles (50 = ~2 days) → recent S/R levels (medium)
+    3. 15m candles (50 = ~12.5h) → micro S/R levels (tight, for close TP targets)
+    Priority for SL: 4H > 1H > 15m (structural preferred)
+    Combined levels for TP (nearest valid target from any timeframe)
 
     Returns dict with tp_pct, sl_pct, method ("chart_mtf"/"chart"/"fallback"), levels found.
     """
@@ -1145,6 +1145,8 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
     htf_supports = []
     ltf_resistances = []
     ltf_supports = []
+    mtf_resistances = []
+    mtf_supports = []
 
     try:
         # === HIGHER TIMEFRAME: 4H candles (50 = ~8 days of structure) ===
@@ -1176,10 +1178,23 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         ltf_resistances = _cluster_price_levels(raw_res_1h, entry_price, threshold_pct=0.3)
         ltf_supports = _cluster_price_levels(raw_sup_1h, entry_price, threshold_pct=0.3)
 
-        # V3.1.89: Removed trend-adjusted MAX_TP — it crushed TP in trending markets
-        # and conflicted with chart-based S/R levels. Keep base 2.0% cap.
+        # === MICRO TIMEFRAME: 15m candles (50 = ~12.5h of micro structure) ===
+        # V3.2.3: Added as 3rd layer — finds micro pivots close to entry for tighter TP
+        try:
+            url_15m = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=15m&limit=50"
+            r_15m = requests.get(url_15m, timeout=10)
+            candles_15m = r_15m.json()
+            if isinstance(candles_15m, list) and len(candles_15m) >= 10:
+                raw_res_15m, raw_sup_15m = _find_swing_levels(candles_15m)
+                mtf_resistances = _cluster_price_levels(raw_res_15m, entry_price, threshold_pct=0.2)
+                mtf_supports = _cluster_price_levels(raw_sup_15m, entry_price, threshold_pct=0.2)
+                print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 15m: {len(mtf_resistances)}R / {len(mtf_supports)}S levels (micro)")
+            else:
+                print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 15m: Insufficient data, skipping")
+        except Exception as e15m:
+            print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 15m fetch failed ({e15m}), using 4H+1H only")
 
-        # === MERGE: 4H levels are structural (preferred for SL), 1H fills gaps ===
+        # === MERGE: 4H structural > 1H recent > 15m micro ===
         # For resistances/supports, combine both but track origin
         # 4H levels that don't overlap with 1H are "structural" — stronger
         all_resistances = list(htf_resistances)
@@ -1188,10 +1203,20 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
             is_dup = any(abs(r - h) / entry_price * 100 < 0.4 for h in htf_resistances)
             if not is_dup:
                 all_resistances.append(r)
+        for r in mtf_resistances:
+            # Only add 15m level if not within 0.3% of any existing level
+            is_dup = any(abs(r - h) / entry_price * 100 < 0.3 for h in all_resistances)
+            if not is_dup:
+                all_resistances.append(r)
 
         all_supports = list(htf_supports)
         for s in ltf_supports:
             is_dup = any(abs(s - h) / entry_price * 100 < 0.4 for h in htf_supports)
+            if not is_dup:
+                all_supports.append(s)
+        for s in mtf_supports:
+            # Only add 15m level if not within 0.3% of any existing level
+            is_dup = any(abs(s - h) / entry_price * 100 < 0.3 for h in all_supports)
             if not is_dup:
                 all_supports.append(s)
 
@@ -1216,9 +1241,10 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 result["tp_price"] = round(entry_price * (1 + tp_pct / 100), 8)
                 tp_found = True
 
-            # SL: PREFER 4H support (structural), fallback to 1H
+            # SL: PREFER 4H support (structural), fallback to 1H, then 15m
             sl_candidates_4h = [s for s in htf_supports if s < entry_price * (1 - MIN_SL_PCT / 100)]
             sl_candidates_1h = [s for s in ltf_supports if s < entry_price * (1 - MIN_SL_PCT / 100)]
+            sl_candidates_15m = [s for s in mtf_supports if s < entry_price * (1 - MIN_SL_PCT / 100)]
 
             if sl_candidates_4h:
                 sl_price = max(sl_candidates_4h)  # Nearest 4H support
@@ -1239,6 +1265,16 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 result["sl_pct"] = round(sl_pct, 2)
                 result["sl_price"] = round(entry_price * (1 - sl_pct / 100), 8)
                 sl_found = True
+            elif sl_candidates_15m:
+                sl_price = max(sl_candidates_15m)
+                sl_pct = ((entry_price - sl_price) / entry_price) * 100
+                sl_pct = sl_pct * 1.05
+                sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
+                sl_pct = max(sl_pct, MIN_SL_PCT)
+                result["sl_pct"] = round(sl_pct, 2)
+                result["sl_price"] = round(entry_price * (1 - sl_pct / 100), 8)
+                sl_found = True
+                print(f"  [CHART-SR] SL from 15m micro support ${sl_price:.4f} (+0.5% buffer)")
 
         elif signal == "SHORT":
             # TP: nearest support BELOW entry from combined levels
@@ -1252,9 +1288,10 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 result["tp_price"] = round(entry_price * (1 - tp_pct / 100), 8)
                 tp_found = True
 
-            # SL: PREFER 4H resistance (structural), fallback to 1H
+            # SL: PREFER 4H resistance (structural), fallback to 1H, then 15m
             sl_candidates_4h = [r for r in htf_resistances if r > entry_price * (1 + MIN_SL_PCT / 100)]
             sl_candidates_1h = [r for r in ltf_resistances if r > entry_price * (1 + MIN_SL_PCT / 100)]
+            sl_candidates_15m = [r for r in mtf_resistances if r > entry_price * (1 + MIN_SL_PCT / 100)]
 
             if sl_candidates_4h:
                 sl_price = min(sl_candidates_4h)  # Nearest 4H resistance
@@ -1275,6 +1312,16 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 result["sl_pct"] = round(sl_pct, 2)
                 result["sl_price"] = round(entry_price * (1 + sl_pct / 100), 8)
                 sl_found = True
+            elif sl_candidates_15m:
+                sl_price = min(sl_candidates_15m)
+                sl_pct = ((sl_price - entry_price) / entry_price) * 100
+                sl_pct = sl_pct * 1.05
+                sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
+                sl_pct = max(sl_pct, MIN_SL_PCT)
+                result["sl_pct"] = round(sl_pct, 2)
+                result["sl_price"] = round(entry_price * (1 + sl_pct / 100), 8)
+                sl_found = True
+                print(f"  [CHART-SR] SL from 15m micro resistance ${sl_price:.4f} (+0.5% buffer)")
 
         if tp_found and sl_found:
             result["method"] = "chart_mtf" if has_4h else "chart"
@@ -1282,7 +1329,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
             print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} {signal} [{method_label}]: "
                   f"TP {result['tp_pct']:.2f}% (${result['tp_price']:.4f}), "
                   f"SL {result['sl_pct']:.2f}% (${result['sl_price']:.4f}) "
-                  f"| 4H: {len(htf_resistances)}R/{len(htf_supports)}S, 1H: {len(ltf_resistances)}R/{len(ltf_supports)}S")
+                  f"| 4H: {len(htf_resistances)}R/{len(htf_supports)}S, 1H: {len(ltf_resistances)}R/{len(ltf_supports)}S, 15m: {len(mtf_resistances)}R/{len(mtf_supports)}S")
         elif tp_found:
             result["method"] = "chart_mtf" if has_4h else "chart"
             print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()}: TP found ({result['tp_pct']:.2f}%), SL fallback")
@@ -1291,7 +1338,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
             print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()}: SL found ({result['sl_pct']:.2f}%), TP fallback")
         else:
             print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()}: No clear S/R, using fallback "
-                  f"| 4H: {len(htf_resistances)}R/{len(htf_supports)}S, 1H: {len(ltf_resistances)}R/{len(ltf_supports)}S")
+                  f"| 4H: {len(htf_resistances)}R/{len(htf_supports)}S, 1H: {len(ltf_resistances)}R/{len(ltf_supports)}S, 15m: {len(mtf_resistances)}R/{len(mtf_supports)}S")
 
     except Exception as e:
         print(f"  [CHART-SR] Error for {symbol}: {e}")
@@ -1609,11 +1656,13 @@ MAX_LEVERAGE = 20
 # V3.1.78: EQUITY-TIERED POSITION LIMITS (Option A - more bites at the apple)
 # Replaced static MAX_OPEN_POSITIONS with dynamic equity-based slots
 EQUITY_POSITION_TIERS = [
-    (8000, 3),   # $5K-$8K: 3 positions
-    (12000, 4),  # $8K-$12K: 4 positions
-    (15000, 5),  # $12K-$15K: 5 positions
+    (1000, 3),   # < $1K: 3 positions (low balance, stay conservative)
+    (2000, 4),   # $1K-$2K: 4 positions  ← V3.2.3: unlocks at $1.7K balance
+    (4000, 5),   # $2K-$4K: 5 positions
+    (8000, 6),   # $4K-$8K: 6 positions
+    (12000, 7),  # $8K-$12K: 7 positions
 ]
-EQUITY_POSITION_DEFAULT = 6  # $15K+: 6 positions
+EQUITY_POSITION_DEFAULT = 8  # $12K+: all 8 pairs
 
 def get_max_positions_for_equity(equity: float) -> int:
     """Get max open positions based on current equity"""
@@ -3475,29 +3524,60 @@ class MultiPersonaAnalyzer:
             if chop.get("is_choppy", False):
                 severity = chop.get("severity", "medium")
                 orig_decision = final['decision']  # Save before overwriting
+
+                # V3.2.3: FLOW EXTREME OVERRIDE — when FLOW is extreme AND aligned with
+                # the trade direction, the market is breaking out of the tight range, not chopping.
+                # Extreme taker flow (>=85% conf, same direction) = breakout signal, not chop.
+                _flow_dir = flow_vote.get("signal", "NEUTRAL")
+                _flow_conf = flow_vote.get("confidence", 0)
+                _flow_extreme = (_flow_conf >= 0.85 and _flow_dir == orig_decision)
+
                 if severity == "high":
-                    # HIGH CHOP: Hard block - this market is going nowhere
-                    print(f"  [CHOP_FILTER] BLOCKED {orig_decision}: {chop['reason']}")
-                    final['chop_original_decision'] = orig_decision
-                    final['chop_pre_penalty_confidence'] = final.get('confidence', 0)  # V3.1.93
-                    final['decision'] = 'WAIT'
-                    final['confidence'] = 0
-                    final['chop_blocked'] = True
-                elif severity == "medium":
-                    # MEDIUM CHOP: Confidence penalty (-15%), may still pass if very strong signal
-                    old_conf = final.get('confidence', 0)
-                    final['chop_original_decision'] = final['decision']  # V3.1.93
-                    final['chop_pre_penalty_confidence'] = old_conf  # V3.1.93
-                    new_conf = old_conf - 0.15
-                    print(f"  [CHOP_FILTER] PENALTY {final['decision']}: {chop['reason']} (conf {old_conf:.0%} -> {new_conf:.0%})")
-                    final['confidence'] = new_conf
-                    final['chop_penalized'] = True
-                    # If penalty drops below MIN_CONFIDENCE_TO_TRADE, it becomes a WAIT
-                    if new_conf < MIN_CONFIDENCE_TO_TRADE:
-                        print(f"  [CHOP_FILTER] BLOCKED after penalty: {new_conf:.0%} < {MIN_CONFIDENCE_TO_TRADE:.0%}")
+                    if _flow_extreme:
+                        # HIGH CHOP + EXTREME FLOW: reduce to medium penalty instead of hard block
+                        old_conf = final.get('confidence', 0)
+                        new_conf = old_conf - 0.15
+                        print(f"  [CHOP_FILTER] FLOW EXTREME override: HIGH CHOP -> medium penalty (FLOW {_flow_dir} {_flow_conf:.0%})")
+                        print(f"  [CHOP_FILTER] PENALTY {orig_decision}: {chop['reason']} (conf {old_conf:.0%} -> {new_conf:.0%})")
+                        final['chop_original_decision'] = orig_decision
+                        final['chop_pre_penalty_confidence'] = old_conf
+                        final['confidence'] = new_conf
+                        final['chop_penalized'] = True
+                        if new_conf < MIN_CONFIDENCE_TO_TRADE:
+                            print(f"  [CHOP_FILTER] BLOCKED after penalty: {new_conf:.0%} < {MIN_CONFIDENCE_TO_TRADE:.0%}")
+                            final['decision'] = 'WAIT'
+                            final['confidence'] = 0
+                            final['chop_blocked'] = True
+                    else:
+                        # HIGH CHOP: Hard block - this market is going nowhere
+                        print(f"  [CHOP_FILTER] BLOCKED {orig_decision}: {chop['reason']}")
+                        final['chop_original_decision'] = orig_decision
+                        final['chop_pre_penalty_confidence'] = final.get('confidence', 0)  # V3.1.93
                         final['decision'] = 'WAIT'
                         final['confidence'] = 0
                         final['chop_blocked'] = True
+                elif severity == "medium":
+                    if _flow_extreme:
+                        # MEDIUM CHOP + EXTREME FLOW: skip penalty entirely — breakout incoming
+                        print(f"  [CHOP_FILTER] FLOW EXTREME override: skip MEDIUM CHOP penalty (FLOW {_flow_dir} {_flow_conf:.0%} >= 85%)")
+                        final['chop_original_decision'] = orig_decision
+                        final['chop_pre_penalty_confidence'] = final.get('confidence', 0)
+                        final['chop_flow_override'] = True
+                    else:
+                        # MEDIUM CHOP: Confidence penalty (-15%), may still pass if very strong signal
+                        old_conf = final.get('confidence', 0)
+                        final['chop_original_decision'] = final['decision']  # V3.1.93
+                        final['chop_pre_penalty_confidence'] = old_conf  # V3.1.93
+                        new_conf = old_conf - 0.15
+                        print(f"  [CHOP_FILTER] PENALTY {final['decision']}: {chop['reason']} (conf {old_conf:.0%} -> {new_conf:.0%})")
+                        final['confidence'] = new_conf
+                        final['chop_penalized'] = True
+                        # If penalty drops below MIN_CONFIDENCE_TO_TRADE, it becomes a WAIT
+                        if new_conf < MIN_CONFIDENCE_TO_TRADE:
+                            print(f"  [CHOP_FILTER] BLOCKED after penalty: {new_conf:.0%} < {MIN_CONFIDENCE_TO_TRADE:.0%}")
+                            final['decision'] = 'WAIT'
+                            final['confidence'] = 0
+                            final['chop_blocked'] = True
         else:
             final['chop_data'] = None
 
