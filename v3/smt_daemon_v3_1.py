@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.2.14 - 4 pairs (LTC/XRP/SOL/ADA), 3 slots flat, LTC-only shorts, BTC/ETH/BNB removed
+SMT Trading Daemon V3.2.15 - 4 pairs (LTC/XRP/SOL/ADA), 3 slots flat, LTC-only shorts, BTC/ETH/BNB removed
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 

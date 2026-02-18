@@ -3778,6 +3778,16 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
                 tp_price = current_price * (1 + tp_pct) if signal == "LONG" else current_price * (1 - tp_pct)
         except Exception:
             pass
+
+        # V3.2.15: XRP-specific TP cap — historical fills show XRP moves 0.34–0.48%.
+        # 2H anchor overshoots when entry is at the dip bottom (pre-dip ceiling = 1.5%+ away).
+        # Cap at 0.70% to match observed pair range while still letting chart find the level.
+        if symbol == "cmt_xrpusdt" and tp_pct_raw > 0.70:
+            print(f"  [TP/SL] XRP TP cap: {tp_pct_raw:.2f}% → 0.70% (historical range)")
+            tp_pct_raw = 0.70
+            tp_pct = tp_pct_raw / 100
+            tp_price = current_price * (1 + tp_pct) if signal == "LONG" else current_price * (1 - tp_pct)
+
     else:
         # FALLBACK: Use competition-tightened percentages (NOT the old wide 3.0-3.5%)
         if _in_competition:
