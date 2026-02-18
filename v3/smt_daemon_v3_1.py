@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.2.0 - Dip Signal Strategy (0.5% TP, 10-min Cycle)
+SMT Trading Daemon V3.2.1 - Dip Signal Strategy (0.5% TP, 10-min Cycle)
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -839,6 +839,17 @@ def check_trading_signals():
                 # V3.1.97: REMOVED blacklist/cooldown entry block.
                 # If ensemble says 80%+ and chop is clear, we trade.
 
+                # V3.2.1: Capture below-floor near-miss for RL logging.
+                # Persist tracking (above) sets _raw_dir for chop-blocked + ≥80% cases.
+                # Below-floor (e.g. 78% LONG from analyzer) slips through — capture it here.
+                if _raw_dir is None and signal in ("LONG", "SHORT"):
+                    _raw_dir = signal
+                    _raw_conf = confidence
+
+                # V3.2.1: Slot-swap threshold — persistent signals (2+ consecutive cycles) earn
+                # a lower swap bar (80%) since the ensemble has been consistently right.
+                _swap_threshold = 0.80 if _persist_count >= 2 else 0.83
+
                 # Determine tradability
                 can_trade_this = False
                 trade_type = "none"
@@ -880,19 +891,19 @@ def check_trading_signals():
                         if can_open_new:
                             can_trade_this = True
                             trade_type = "new"
-                        elif confidence >= 0.83:
-                            # V3.1.84: SLOT SWAP - 83% min (was 75%). Don't swap for marginal signals.
+                        elif confidence >= _swap_threshold:
+                            # V3.2.1: SLOT SWAP — 83% min, lowered to 80% when persist active (2+ cycles same direction)
                             _weakest = _find_weakest_position(open_positions, symbol, position_map, fear_greed=_fg_value)
                             if _weakest:
                                 can_trade_this = True
                                 trade_type = "slot_swap"
-                                logger.info(f"    -> SLOT SWAP: {confidence:.0%} signal, closing weak {_weakest['symbol'].replace('cmt_','').upper()} ({_weakest['pnl_pct']:+.2f}%) to free slot")
+                                logger.info(f"    -> SLOT SWAP: {confidence:.0%} signal (persist={_persist_count}), closing weak {_weakest['symbol'].replace('cmt_','').upper()} ({_weakest['pnl_pct']:+.2f}%) to free slot")
                             else:
                                 # V3.1.88: Log when swap qualified but no weak target found
                                 logger.info(f"    -> NO SWAP TARGET: {confidence:.0%} qualifies but no position weak enough to swap")
                         elif not can_open_new:
                             # V3.1.88: Log when slots full and signal too weak for swap
-                            logger.info(f"    -> SLOTS FULL: {confidence:.0%} < 83% swap threshold ({weex_position_count}/{effective_max_positions})")
+                            logger.info(f"    -> SLOTS FULL: {confidence:.0%} < {_swap_threshold:.0%} swap threshold ({weex_position_count}/{effective_max_positions})")
 
                 elif signal == "SHORT":
                     if has_short:
@@ -931,19 +942,19 @@ def check_trading_signals():
                         if can_open_new:
                             can_trade_this = True
                             trade_type = "new"
-                        elif confidence >= 0.83:
-                            # V3.1.84: SLOT SWAP - 83% min (was 75%). Don't swap for marginal signals.
+                        elif confidence >= _swap_threshold:
+                            # V3.2.1: SLOT SWAP — 83% min, lowered to 80% when persist active (2+ cycles same direction)
                             _weakest = _find_weakest_position(open_positions, symbol, position_map, fear_greed=_fg_value)
                             if _weakest:
                                 can_trade_this = True
                                 trade_type = "slot_swap"
-                                logger.info(f"    -> SLOT SWAP: {confidence:.0%} signal, closing weak {_weakest['symbol'].replace('cmt_','').upper()} ({_weakest['pnl_pct']:+.2f}%) to free slot")
+                                logger.info(f"    -> SLOT SWAP: {confidence:.0%} signal (persist={_persist_count}), closing weak {_weakest['symbol'].replace('cmt_','').upper()} ({_weakest['pnl_pct']:+.2f}%) to free slot")
                             else:
                                 # V3.1.88: Log when swap qualified but no weak target found
                                 logger.info(f"    -> NO SWAP TARGET: {confidence:.0%} qualifies but no position weak enough to swap")
                         elif not can_open_new:
                             # V3.1.88: Log when slots full and signal too weak for swap
-                            logger.info(f"    -> SLOTS FULL: {confidence:.0%} < 83% swap threshold ({weex_position_count}/{effective_max_positions})")
+                            logger.info(f"    -> SLOTS FULL: {confidence:.0%} < {_swap_threshold:.0%} swap threshold ({weex_position_count}/{effective_max_positions})")
 
                 # V3.1.93: Track best non-executed signal for PM context
                 if signal in ("LONG", "SHORT") and confidence >= 0.80 and not can_trade_this:
@@ -1041,6 +1052,11 @@ def check_trading_signals():
                                 "btc_24h": rl_regime.get("change_24h", 0),
                                 "btc_4h": rl_regime.get("change_4h", 0),
                                 "regime": rl_regime.get("regime", "NEUTRAL"),
+                                # V3.2.1: Near-miss context — captures pre-filter direction when
+                                # the signal was blocked by chop, or was below the 80% floor.
+                                "near_miss_signal": _raw_dir,
+                                "near_miss_confidence": _raw_conf,
+                                "chop_blocked": bool(decision.get("chop_blocked")),
                             },
                             portfolio_state={
                                 "num_positions": len(open_positions),
@@ -3311,8 +3327,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.0 - Dip Signal Strategy (0.5%% TP, 10-min Cycle)")
+    logger.info("SMT Daemon V3.2.1 - Dip Signal Strategy (0.5%% TP, 10-min Cycle)")
     logger.info("=" * 60)
+    logger.info("V3.2.1 CHANGES:")
+    logger.info("  - V3.2.1: FLOW flip discount — if FLOW flips direction 180%% from last cycle, confidence halved (noise filter)")
+    logger.info("  - V3.2.1: TECHNICAL weight halved (0.8->0.4) in fear markets (F&G<30) — SMA signals lag in fear")
+    logger.info("  - V3.2.1: Gemini prompt: TECHNICAL de-weighted note added for fear markets")
+    logger.info("  - V3.2.1: Slot-swap threshold 83%%->80%% when signal persists 2+ cycles (consistent ensemble earns lower bar)")
+    logger.info("  - V3.2.1: RL logging: near_miss_signal/confidence + chop_blocked fields added to raw_market")
     logger.info("V3.2.0 CHANGES:")
     logger.info("  - V3.2.0: Dip-signal strategy — FLOW/WHALE fire into dip, bot catches bottom, 0.5%% TP exits fast")
     logger.info("  - V3.2.0: Chart MIN_TP 0.8->0.3%%, MAX_TP 1.1->0.6%% — find resistance closer to entry")

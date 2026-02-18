@@ -1054,6 +1054,7 @@ def check_entry_confirmation(symbol: str, signal: str) -> dict:
 
 _sr_cache = {}
 _sr_cache_time = 0
+_prev_flow_direction: dict = {}  # V3.2.1: Track FLOW direction per pair across cycles (for flip discount)
 
 def _cluster_price_levels(levels: list, ref_price: float, threshold_pct: float = 0.3) -> list:
     """Cluster nearby price levels (within threshold_pct of each other).
@@ -3025,7 +3026,7 @@ SIGNAL RELIABILITY:
     2. FLOW (order book taker ratio) -- actual money moving right now.
   SECONDARY (confirmation only, never override WHALE+FLOW):
     3. SENTIMENT (web search price action) -- context, not a trading signal.
-    4. TECHNICAL (RSI/SMA/momentum) -- lagging indicator, confirmation only.
+    4. TECHNICAL (RSI/SMA/momentum) -- lagging indicator, confirmation only. In fear markets (F&G < 30), SMA signals are especially lagged (price already below SMAs); discount TECHNICAL when it conflicts with FLOW+WHALE.
 
 HOW TO DECIDE:
 - If WHALE + FLOW agree: TRADE IT at 85%+ confidence. Strongest possible signal.
@@ -3309,7 +3310,11 @@ Respond with JSON ONLY (no markdown, no backticks):
             if vote["persona"] == "FLOW":
                 weight = 2.0  # V3.1.63: Equal with WHALE
             elif vote["persona"] == "TECHNICAL":
-                weight = 0.8  # V3.1.63: Confirmation only
+                # V3.2.1: Reduce weight in fear markets — SMA signals lag when price is in freefall.
+                # At F&G < 30, TECHNICAL is likely stuck below SMAs and voting SHORT/NEUTRAL everywhere,
+                # adding noise rather than signal. Cut it to 0.4 so WHALE+FLOW dominate.
+                _fg_fallback = regime.get("fear_greed", 50) if regime else 50
+                weight = 0.4 if _fg_fallback < 30 else 0.8
             elif vote["persona"] == "SENTIMENT":
                 weight = 1.0
             elif vote["persona"] == "WHALE":
@@ -3429,6 +3434,22 @@ class MultiPersonaAnalyzer:
         # 3. Flow Persona
         print(f"  [FLOW] Analyzing...")
         flow_vote = self.flow.analyze(pair, pair_info)
+
+        # V3.2.1: FLOW stability — if direction flipped 180° from last cycle, discount confidence 50%.
+        # Rationale: FLOW that flip-flops is noise (reacting to a single large print), not signal.
+        # Sustained FLOW direction = real money moving. A one-cycle flip = wait for confirmation.
+        _flow_sym = pair_info.get("symbol", pair)
+        _flow_prev = _prev_flow_direction.get(_flow_sym)
+        _flow_dir = flow_vote.get("signal", "NEUTRAL")
+        if (_flow_prev and _flow_prev in ("LONG", "SHORT") and
+                _flow_dir in ("LONG", "SHORT") and _flow_prev != _flow_dir):
+            _disc = round(flow_vote["confidence"] * 0.5, 2)
+            print(f"  [FLOW] FLIP DISCOUNT: {_flow_prev}->{_flow_dir}, conf {flow_vote['confidence']:.0%} -> {_disc:.0%} (wait for confirmation)")
+            flow_vote = dict(flow_vote)
+            flow_vote["confidence"] = _disc
+            flow_vote["reasoning"] = flow_vote.get("reasoning", "") + f" [FLIP {_flow_prev}->{_flow_dir}, conf discounted]"
+        _prev_flow_direction[_flow_sym] = _flow_dir
+
         votes.append(flow_vote)
         print(f"  [FLOW] {flow_vote['signal']} ({flow_vote['confidence']:.0%}): {flow_vote['reasoning']}")
         
