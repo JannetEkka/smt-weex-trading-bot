@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.1.80 - CHOP FILTER + FALLBACK SLOTS
+SMT Nightly Trade V3.2.6 - DOGE plan order fix + equity-tiered slot count
 =============================================================
 No partial closes. Higher conviction trades only.
 
@@ -3136,8 +3136,8 @@ Respond with JSON ONLY (no markdown, no backticks):
                 position_usdt = base_size * 1.0  # NORMAL
 
             # V3.1.78: Bound by position count - prevent over-allocation at higher equity tiers
-            # Slot count stays on BALANCE (conservative), but cap scales with sizing_base (equity-aware)
-            max_slots = get_max_positions_for_equity(balance)
+            # V3.2.6: Slot count uses equity (was balance — regression fix)
+            max_slots = get_max_positions_for_equity(_sizing_equity_cache.get("equity", balance))
             per_slot_cap = (sizing_base * 0.85) / max(max_slots, 1)
             if position_usdt > per_slot_cap:
                 print(f"  [SIZING] Capped: ${position_usdt:.0f} -> ${per_slot_cap:.0f} ({max_slots} slots, 85% equity cap)")
@@ -3692,8 +3692,8 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     position_usdt = min(position_usdt, sizing_base * MAX_SINGLE_POSITION_PCT)  # Cap scales with equity
 
     # V3.1.78: Bound by equity tier position count (mirrors Judge sizing cap)
-    # Slot count stays on BALANCE (conservative), cap scales with sizing_base
-    max_slots = get_max_positions_for_equity(balance)
+    # V3.2.6: Slot count uses equity (was balance — regression fix)
+    max_slots = get_max_positions_for_equity(_sizing_equity_cache.get("equity", balance))
     per_slot_cap = (sizing_base * 0.85) / max(max_slots, 1)
     if position_usdt > per_slot_cap:
         print(f"  [SIZING] Execute cap: ${position_usdt:.0f} -> ${per_slot_cap:.0f} ({max_slots} slots)")
@@ -3845,10 +3845,12 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
     # Orphan TP/SL triggers from previous trades block leverage changes on WEEX.
+    # V3.2.6: Sleep 2s after cancellation so WEEX finishes processing before leverage set.
     try:
         _pre_cleanup = cancel_all_orders_for_symbol(symbol)
         if _pre_cleanup.get("cancelled"):
             print(f"  [PRE-TRADE] Cancelled {len(_pre_cleanup['cancelled'])} orphan orders on {symbol}")
+            time.sleep(2)
     except Exception:
         pass
 
@@ -3856,13 +3858,18 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
     print(f"  [TRADE] {signal} {symbol}: {size} @ ${current_price:.4f}")
     print(f"  [TRADE] Tier {tier} ({tier_config['name']}): TP ${tp_price:.4f} ({tp_pct*100:.1f}%), SL ${sl_price:.4f} ({sl_pct*100:.1f}%)")
-    
+
     result = place_order(symbol, order_type, size, tp_price, sl_price)
-    
+
     order_id = result.get("order_id")
-    
+
     if not order_id:
         return {"executed": False, "reason": f"Order failed: {result}"}
+
+    # V3.2.6: For DOGE, cancel preset plan orders and re-place TP/SL explicitly.
+    # Prevents SL price drift caused by orphan interference with WEEX preset processing.
+    if symbol == "cmt_dogeusdt":
+        _fix_plan_orders(symbol, signal, size, tp_price, sl_price)
     
     # Upload AI log
     upload_ai_log_to_weex(
@@ -4276,6 +4283,40 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
         pass
     
     return result
+
+
+def _fix_plan_orders(symbol: str, signal: str, size: float, tp_price: float, sl_price: float) -> None:
+    """V3.2.6: After order placement, cancel stale preset plan orders and re-place TP/SL
+    as fresh explicit trigger orders. Prevents SL price drift from orphan interference
+    with WEEX preset processing (recurring DOGE SL mismatch bug).
+    """
+    try:
+        time.sleep(2)  # Let WEEX register the new position before cancelling
+        cancel_all_orders_for_symbol(symbol)
+        time.sleep(1)  # Let cancellations settle
+
+        close_type = "3" if signal == "LONG" else "4"
+        ep = '/capi/v2/order/plan_order'
+
+        for label, price, oid_prefix in [("SL", sl_price, "sl"), ("TP", tp_price, "tp")]:
+            body = json.dumps({
+                'symbol': symbol,
+                'client_oid': f'smt_{oid_prefix}_{int(time.time()*1000)}',
+                'size': str(int(size)),
+                'type': close_type,
+                'match_type': '1',
+                'execute_price': '0',
+                'trigger_price': str(round_price_to_tick(price, symbol))
+            })
+            r = requests.post(f"{WEEX_BASE_URL}{ep}",
+                              headers=weex_headers('POST', ep, body),
+                              data=body, timeout=10)
+            resp = r.json() if r.status_code == 200 else r.text
+            ok = resp.get('code') == '00000' if isinstance(resp, dict) else False
+            print(f"  [PLAN-FIX] {symbol.replace('cmt_','').upper()} {label} @ ${price:.4f}: {'OK' if ok else resp}")
+            time.sleep(0.5)
+    except Exception as e:
+        print(f"  [PLAN-FIX] Warning: plan re-placement failed for {symbol}: {e}")
 
 
 def close_position_manually(symbol: str, side: str, size: float) -> Dict:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.2.4 - Dip Signal Strategy (15m S/R + FLOW chop override + Judge fix)
+SMT Trading Daemon V3.2.6 - DOGE plan order fix + equity-tiered slot count
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
