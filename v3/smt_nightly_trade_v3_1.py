@@ -1230,8 +1230,12 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         sl_found = False
 
         if signal == "LONG":
-            # TP: nearest resistance ABOVE entry from combined levels
-            tp_candidates = [r for r in all_resistances if r > entry_price * (1 + MIN_TP_PCT / 100)]
+            # TP: prefer 1H + 15m resistances (recent price action, fits 0.3-0.8% dip bounce)
+            # 4H is structural — too coarse for fast TP targets. Fall back to 4H only if needed.
+            _tp_preferred = ltf_resistances + mtf_resistances  # 1H + 15m
+            tp_candidates = [r for r in _tp_preferred if r > entry_price * (1 + MIN_TP_PCT / 100)]
+            if not tp_candidates:
+                tp_candidates = [r for r in all_resistances if r > entry_price * (1 + MIN_TP_PCT / 100)]
             if tp_candidates:
                 tp_price = min(tp_candidates)
                 tp_pct = ((tp_price - entry_price) / entry_price) * 100
@@ -1277,8 +1281,11 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 print(f"  [CHART-SR] SL from 15m micro support ${sl_price:.4f} (+0.5% buffer)")
 
         elif signal == "SHORT":
-            # TP: nearest support BELOW entry from combined levels
-            tp_candidates = [s for s in all_supports if s < entry_price * (1 - MIN_TP_PCT / 100)]
+            # TP: prefer 1H + 15m supports (recent price action, fits 0.3-0.8% dip bounce)
+            _tp_preferred = ltf_supports + mtf_supports  # 1H + 15m
+            tp_candidates = [s for s in _tp_preferred if s < entry_price * (1 - MIN_TP_PCT / 100)]
+            if not tp_candidates:
+                tp_candidates = [s for s in all_supports if s < entry_price * (1 - MIN_TP_PCT / 100)]
             if tp_candidates:
                 tp_price = max(tp_candidates)
                 tp_pct = ((entry_price - tp_price) / entry_price) * 100
