@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.2.5 - Dip Signal Strategy (inline execution + 1H TP targeting)
+SMT Trading Daemon V3.2.4 - Dip Signal Strategy (15m S/R + FLOW chop override + Judge fix)
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -686,37 +686,6 @@ def check_trading_signals():
         # V3.1.93: Track signal landscape for PM
         _best_unexecuted = None  # Best signal that couldn't trade (slots full, already positioned, etc.)
         _chop_blocked_pairs = []
-
-        # V3.2.5: Parallel pair analysis — run all Gemini/API calls concurrently.
-        # Eliminates the 4-5 min sequential delay (was sum of all pair times).
-        # Results collected and sorted before execution, so global confidence ranking is preserved.
-        # max_workers=4 avoids hammering Gemini with 8 simultaneous calls.
-        _pair_list = list(TRADING_PAIRS.items())
-
-        def _run_pair_analysis(pair_and_info):
-            _pair, _pair_info = pair_and_info
-            try:
-                return _pair, run_with_retry(
-                    analyzer.analyze, _pair, _pair_info, balance, competition, open_positions
-                )
-            except Exception as _e:
-                logger.error(f"Parallel analysis error for {_pair}: {_e}")
-                return _pair, {"decision": "WAIT", "confidence": 0, "reasoning": f"Analysis error: {_e}"}
-
-        logger.info(f"Analyzing {len(_pair_list)} pairs in parallel (max 4 concurrent)...")
-        _mark_progress()
-        from concurrent.futures import ThreadPoolExecutor as _TPE
-        with _TPE(max_workers=4) as _pool:
-            _raw_results = list(_pool.map(_run_pair_analysis, _pair_list, timeout=180))
-        _decisions_cache = {_pair: _result for _pair, _result in _raw_results}
-        _mark_progress()
-        logger.info("Parallel analysis complete. Processing signals...")
-
-        # V3.2.5: Defer all analysis-cycle WEEX uploads until AFTER trade execution.
-        # Uploading 8 analysis logs before executing adds 8-16s of latency per cycle.
-        # Only trade open/close uploads (with order_id) are mandatory for competition scoring.
-        _pending_analysis_logs = []  # flushed after execution phase
-
         for pair, pair_info in TRADING_PAIRS.items():
             symbol = pair_info["symbol"]
             tier = pair_info.get("tier", 2)
@@ -734,11 +703,16 @@ def check_trading_signals():
             cooldown_remaining = tracker.get_cooldown_remaining(symbol) if on_cooldown else 0
             
             try:
-                # V3.2.5: Use pre-computed result from parallel analysis phase
+                # V3.1.73: Mark progress PER-PAIR so watchdog doesn't kill during long signal checks
                 _mark_progress()
-                decision = _decisions_cache.get(
-                    pair, {"decision": "WAIT", "confidence": 0, "reasoning": "Analysis not available"}
+
+                # ALWAYS analyze
+                decision = run_with_retry(
+                    analyzer.analyze,
+                    pair, pair_info, balance, competition, open_positions
                 )
+
+                # V3.1.73: Mark progress after each analysis completes
                 _mark_progress()
 
                 confidence = decision.get("confidence", 0)
@@ -815,13 +789,13 @@ def check_trading_signals():
                     chop_blocked_count += 1
                     _chop_data = decision.get("chop_data", {})
                     logger.info(f"    -> CHOP BLOCKED: {_chop_data.get('reason', 'choppy market')} (fallback slot available)")
-                    _pending_analysis_logs.append(dict(
+                    upload_ai_log_to_weex(
                         stage=f"Chop Filter: {pair} {decision.get('chop_original_decision', 'TRADE')} blocked",
                         input_data={"pair": pair, "symbol": symbol, "chop_data": _chop_data},
                         output_data={"action": "CHOP_BLOCKED", "severity": _chop_data.get("severity", "unknown"),
                                      "adx": _chop_data.get("adx", 0), "bb_width": _chop_data.get("bb_width_pct", 0)},
                         explanation=f"Chop filter blocked {pair} entry. Market is sideways/range-bound: {_chop_data.get('reason', 'N/A')}. Slot freed for next trending candidate at 75%+ confidence."
-                    ))
+                    )
                     # V3.1.93: Track chop-blocked signal details for PM
                     _chop_blocked_pairs.append({
                         "pair": pair,
@@ -895,24 +869,24 @@ def check_trading_signals():
                             )
                             if _opp_blocked:
                                 logger.info(f"    -> OPPOSITE BLOCKED: {_opp_reason}")
-                                _pending_analysis_logs.append(dict(
+                                upload_ai_log_to_weex(
                                     stage=f"Opposite Blocked: {symbol.replace('cmt_','').upper()}",
                                     input_data={"symbol": symbol, "existing_side": "SHORT", "new_signal": "LONG", "new_conf": confidence},
                                     output_data={"action": "DEFERRED", "reason": _opp_reason},
                                     explanation=f"AI blocked opposite flip on {symbol.replace('cmt_','').upper()}. {_opp_reason}. Signal queued for deferred execution after existing position closes."[:1000]
-                                ))
+                                )
                             else:
                                 can_trade_this = True
                                 trade_type = "opposite"
                                 logger.info(f"    -> OPPOSITE: LONG {confidence:.0%} >= SHORT {existing_conf:.0%}. Tighten SHORT SL + open LONG")
                         else:
                             logger.info(f"    -> Has SHORT at {existing_conf:.0%}, LONG {confidence:.0%} not stronger. Hold.")
-                            _pending_analysis_logs.append(dict(
+                            upload_ai_log_to_weex(
                                 stage=f"Hold: {symbol.replace('cmt_','').upper()} SHORT kept",
                                 input_data={"symbol": symbol, "existing_side": "SHORT", "existing_conf": existing_conf, "new_signal": "LONG", "new_conf": confidence},
                                 output_data={"action": "HOLD", "reason": "existing_confidence_higher"},
                                 explanation=f"AI decided to maintain SHORT position. Existing SHORT confidence ({existing_conf:.0%}) > new LONG signal ({confidence:.0%}). No directional change warranted."
-                            ))
+                            )
                     else:
                         if can_open_new:
                             can_trade_this = True
@@ -946,24 +920,24 @@ def check_trading_signals():
                             )
                             if _opp_blocked:
                                 logger.info(f"    -> OPPOSITE BLOCKED: {_opp_reason}")
-                                _pending_analysis_logs.append(dict(
+                                upload_ai_log_to_weex(
                                     stage=f"Opposite Blocked: {symbol.replace('cmt_','').upper()}",
                                     input_data={"symbol": symbol, "existing_side": "LONG", "new_signal": "SHORT", "new_conf": confidence},
                                     output_data={"action": "DEFERRED", "reason": _opp_reason},
                                     explanation=f"AI blocked opposite flip on {symbol.replace('cmt_','').upper()}. {_opp_reason}. Signal queued for deferred execution after existing position closes."[:1000]
-                                ))
+                                )
                             else:
                                 can_trade_this = True
                                 trade_type = "opposite"
                                 logger.info(f"    -> OPPOSITE: SHORT {confidence:.0%} >= LONG {existing_conf:.0%}. Tighten LONG SL + open SHORT")
                         else:
                             logger.info(f"    -> Has LONG at {existing_conf:.0%}, SHORT {confidence:.0%} not stronger. Hold.")
-                            _pending_analysis_logs.append(dict(
+                            upload_ai_log_to_weex(
                                 stage=f"Hold: {symbol.replace('cmt_','').upper()} LONG kept",
                                 input_data={"symbol": symbol, "existing_side": "LONG", "existing_conf": existing_conf, "new_signal": "SHORT", "new_conf": confidence},
                                 output_data={"action": "HOLD", "reason": "existing_confidence_higher"},
                                 explanation=f"AI decided to maintain LONG position. Existing LONG confidence ({existing_conf:.0%}) > new SHORT signal ({confidence:.0%}). No directional change warranted."
-                            ))
+                            )
                     else:
                         if can_open_new:
                             can_trade_this = True
@@ -1021,8 +995,8 @@ def check_trading_signals():
                 
                 full_explanation = "".join(explanation_parts)
                 
-                # V3.2.5: Defer analysis log upload — flush AFTER execution to avoid entry delay
-                _pending_analysis_logs.append(dict(
+                # Upload AI log with comprehensive explanation
+                upload_ai_log_to_weex(
                     stage=f"Analysis - {pair} (Tier {tier})",
                     input_data={
                         "pair": pair,
@@ -1040,8 +1014,8 @@ def check_trading_signals():
                         "can_trade": can_trade_this,
                         "trade_type": trade_type,
                     },
-                    explanation=full_explanation[:1000]
-                ))
+                    explanation=full_explanation[:1000]  # WEEX allows 500 words
+                )
                 
                 # Save to local log
                 ai_log["analyses"].append({
@@ -1096,7 +1070,7 @@ def check_trading_signals():
                         logger.warning(f"RL log error: {e}")
 
                 
-                # Add to opportunities if tradeable — sorted and executed after all pairs processed
+                # Add to opportunities if tradeable
                 if can_trade_this:
                     trade_opportunities.append({
                         "pair": pair,
@@ -1106,6 +1080,7 @@ def check_trading_signals():
                         "trade_type": trade_type,
                     })
                 
+                time.sleep(2)
                 _mark_progress()  # V3.1.74: per-pair progress mark (was only after full signal check)
 
             except Exception as e:
@@ -1117,6 +1092,7 @@ def check_trading_signals():
             trade_opportunities.sort(key=lambda x: x["decision"]["confidence"], reverse=True)
 
             # V3.1.78: CONFIDENCE CASCADE - only consider top N candidates for current equity tier
+            # This is a code-level filter AFTER Gemini scoring. No prompt changes needed.
             current_positions = len(open_positions)
             available_slots = effective_max_positions - current_positions
             # V3.1.64: HARD CAP - never exceed BASE_SLOTS total regardless of mode
@@ -1131,7 +1107,7 @@ def check_trading_signals():
 
             # V3.1.26: Track confidence override slots used
             confidence_slots_used = 0
-
+            
             trades_executed = 0
             
             # V3.1.41: Count directional exposure BEFORE executing
@@ -1514,15 +1490,6 @@ def check_trading_signals():
         else:
             logger.info(f"")
             logger.info("No trade opportunities")
-        # V3.2.5: Flush deferred analysis logs now that execution is complete
-        if _pending_analysis_logs:
-            logger.info(f"Flushing {len(_pending_analysis_logs)} deferred analysis logs...")
-            for _log_kwargs in _pending_analysis_logs:
-                try:
-                    upload_ai_log_to_weex(**_log_kwargs)
-                except Exception as _log_err:
-                    logger.warning(f"Deferred log upload failed: {_log_err}")
-
         # V3.1.88: Cycle-end summary for observability
         _opp_count = len(trade_opportunities) if trade_opportunities else 0
         logger.info(f"--- Cycle summary: {_cycle_signals} signals ({_cycle_above_80} at 80%+), {_cycle_wait} WAIT, {_cycle_blocked} blocked, {_opp_count} opportunities ---")
@@ -3360,14 +3327,8 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.5 - Dip Signal Strategy (parallel analysis + 6H/12H TP/SL)")
+    logger.info("SMT Daemon V3.2.4 - Dip Signal Strategy (15m S/R + FLOW chop override + Judge fix)")
     logger.info("=" * 60)
-    logger.info("V3.2.5 CHANGES:")
-    logger.info("  - V3.2.5: Parallel analysis — all 8 pairs analyzed concurrently (ThreadPoolExecutor, max 4 workers)")
-    logger.info("  - V3.2.5: Parallel analysis — cycle time = max(pair_time) not sum; eliminates 4-5min entry delay")
-    logger.info("  - V3.2.5: Batch execution preserved — signals sorted by confidence before executing best one")
-    logger.info("  - V3.2.5: TP = 6H high * 0.997 (LONG) / 6H low * 1.003 (SHORT) — recent ceiling/floor")
-    logger.info("  - V3.2.5: SL = 12H wick * 0.997, capped by nearest 4H structural level (tighter of the two)")
     logger.info("V3.2.4 CHANGES:")
     logger.info("  - V3.2.4: Judge prompt — TP guidance updated to 0.3-0.5%% (was 3-4%%, stale from V3.1)")
     logger.info("  - V3.2.4: Judge prompt — removed '85%%+ conf = 7.2%% win rate' suppressor line")
