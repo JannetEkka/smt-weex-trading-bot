@@ -1555,20 +1555,11 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
-# V3.2.13: Fixed 4-slot system — 3 small-cap + 1 large-cap reserved slot.
-# Small-cap (LTC/XRP/SOL/ADA): max 3 simultaneous positions
-# Large-cap (BTC/ETH/BNB): max 1 simultaneous position (reserved for strong signals only)
-# Shorts restricted to LTC only — other pairs LONG direction only.
-LARGE_CAP_PAIRS = {"BTC", "ETH", "BNB"}
-SMALL_CAP_PAIRS = {"LTC", "XRP", "SOL", "ADA"}
-LARGE_CAP_SYMS = {"cmt_btcusdt", "cmt_ethusdt", "cmt_bnbusdt"}
-SMALL_CAP_SYMS = {"cmt_ltcusdt", "cmt_xrpusdt", "cmt_solusdt", "cmt_adausdt"}
-SMALL_CAP_MAX_SLOTS = 3
-LARGE_CAP_MAX_SLOTS = 1
-MAX_TOTAL_POSITIONS = 4  # Hard cap: 3 small-cap + 1 large-cap
+# V3.2.14: Flat 3-slot system — LTC/XRP/SOL/ADA only. No equity scaling. Shorts: LTC only.
+MAX_TOTAL_POSITIONS = 3  # Hard cap: 3 slots for 4 pairs (LTC/XRP/SOL/ADA)
 
 def get_max_positions_for_equity(equity: float) -> int:
-    """V3.2.13: Fixed 4-slot system (3 small-cap + 1 large-cap). Equity no longer scales slots."""
+    """V3.2.14: Fixed 3-slot system. Equity no longer scales slots."""
     return MAX_TOTAL_POSITIONS
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
@@ -1666,14 +1657,13 @@ TIER_CONFIG = {
 # BTC T1→T2 (2.28% actual SL, +52% stretch - behaves mid-cap)
 # SOL T2→T3 (3.36% actual SL, higher than ADA - needs short hold)
 TRADING_PAIRS = {
-    "BTC": {"symbol": "cmt_btcusdt", "tier": 2, "has_whale_data": True},   # V3.1.78: T1→T2 (ATR SL 2.28%, mid-cap volatility)
-    "ETH": {"symbol": "cmt_ethusdt", "tier": 1, "has_whale_data": True},
-    "BNB": {"symbol": "cmt_bnbusdt", "tier": 1, "has_whale_data": True},
-    "LTC": {"symbol": "cmt_ltcusdt", "tier": 2, "has_whale_data": True},   # V3.1.77: T1→T2 ($8B mcap)
-    "SOL": {"symbol": "cmt_solusdt", "tier": 3, "has_whale_data": True},   # V3.1.78: T2→T3 (ATR SL 3.36%, more volatile than ADA)
-    # DOGE removed V3.2.11 — erratic SL behavior, not worth the slot
-    "XRP": {"symbol": "cmt_xrpusdt", "tier": 2, "has_whale_data": True},   # V3.1.77: T3→T2 ($70B mcap)
-    "ADA": {"symbol": "cmt_adausdt", "tier": 3, "has_whale_data": True},
+    # V3.2.14: LTC/XRP/SOL/ADA only — 3 slots flat, LTC-only shorts
+    # BTC/ETH/BNB removed V3.2.14 (kicked entirely — focus on smaller caps)
+    # DOGE removed V3.2.11 — erratic SL/orphan behavior
+    "LTC": {"symbol": "cmt_ltcusdt", "tier": 2, "has_whale_data": True},   # LONG + SHORT allowed
+    "XRP": {"symbol": "cmt_xrpusdt", "tier": 2, "has_whale_data": True},   # LONG only
+    "SOL": {"symbol": "cmt_solusdt", "tier": 3, "has_whale_data": True},   # LONG only
+    "ADA": {"symbol": "cmt_adausdt", "tier": 3, "has_whale_data": True},   # LONG only
 }
 
 # Pipeline Version

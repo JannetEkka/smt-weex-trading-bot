@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 
-**Current version: V3.2.13** — all production code is in `v3/`.
+**Current version: V3.2.14** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -98,11 +98,10 @@ GLOBAL_TRADE_COOLDOWN = 900          # 15min between trades
 SIGNAL_CHECK_INTERVAL = 600          # 10min
 POSITION_MONITOR_INTERVAL = 120      # 2min
 
-# Slot system (V3.2.13: fixed 4-slot, group-capped) — hard cap 4 positions total
-# Small-cap group (LTC/XRP/SOL/ADA): max 3 simultaneous positions
-# Large-cap group (BTC/ETH/BNB): max 1 simultaneous position (reserved for strong signals)
-# Total: 3 small + 1 large = 4 max. Equity no longer scales slots.
-# Shorts: LTC only — all other pairs are LONG direction only.
+# Slot system (V3.2.14: flat 3-slot) — hard cap 3 positions total
+# Pairs: LTC, XRP, SOL, ADA only. BTC/ETH/BNB removed V3.2.14.
+# Equity no longer scales slots.
+# Shorts: LTC only — XRP/SOL/ADA are LONG direction only.
 # When all slots are full: only slot swaps can enter (needs 83%+ confidence)
 # If no signals reach 80%, ALL pairs show WAIT — this is expected, not a bug.
 # Existing position + same direction signal = WAIT (already have that side).
@@ -136,21 +135,16 @@ POSITION_MONITOR_INTERVAL = 120      # 2min
 
 ## Trading Pairs & Tiers
 
-**Slot groups (V3.2.13):**
-- **Small-cap (3 slots):** LTC, XRP, SOL, ADA — LONG and SHORT (LTC), LONG only (XRP/SOL/ADA)
-- **Large-cap (1 slot):** BTC, ETH, BNB — LONG only, strong signal required
+**Active pairs (V3.2.14): LTC, XRP, SOL, ADA — 3 flat slots**
 
-| Pair | Symbol | Tier | TP | SL | Max Hold | Group | Shorts? |
-|------|--------|------|----|----|----------|-------|---------|
-| BTC  | cmt_btcusdt  | 2 | 3.5% | 1.5% | 12h | Large-cap | No  |
-| ETH  | cmt_ethusdt  | 1 | 3.0% | 1.5% | 24h | Large-cap | No  |
-| BNB  | cmt_bnbusdt  | 1 | 3.0% | 1.5% | 24h | Large-cap | No  |
-| LTC  | cmt_ltcusdt  | 2 | 3.5% | 1.5% | 12h | Small-cap | Yes |
-| XRP  | cmt_xrpusdt  | 2 | 3.5% | 1.5% | 12h | Small-cap | No  |
-| SOL  | cmt_solusdt  | 3 | 3.0% | 1.8% | 8h  | Small-cap | No  |
-| ADA  | cmt_adausdt  | 3 | 3.0% | 1.8% | 8h  | Small-cap | No  |
+| Pair | Symbol | Tier | TP | SL | Max Hold | Shorts? |
+|------|--------|------|----|----|----------|---------|
+| LTC  | cmt_ltcusdt  | 2 | 3.5% | 1.5% | 12h | Yes |
+| XRP  | cmt_xrpusdt  | 2 | 3.5% | 1.5% | 12h | No  |
+| SOL  | cmt_solusdt  | 3 | 3.0% | 1.8% | 8h  | No  |
+| ADA  | cmt_adausdt  | 3 | 3.0% | 1.8% | 8h  | No  |
 
-DOGE removed V3.2.11 — erratic SL/orphan behavior.
+BTC/ETH/BNB removed V3.2.14. DOGE removed V3.2.11 (erratic SL/orphan behavior).
 
 Note: Chart-based TP/SL (support/resistance) is active since V3.1.84. V3.2.2 removed TP/SL caps — chart finds real structural levels with no ceiling. V3.2.3 adds 15m as 3rd S/R layer (4H + 1H + 15m). Fallback TP = 0.5% (all tiers) when chart SR fails. Tier TP/SL values above are only used as a last resort.
 
@@ -226,7 +220,7 @@ python3 v3/smt_nightly_trade_v3_1.py --test
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.13. Next change should be V3.2.14.
+Current: V3.2.14. Next change should be V3.2.15.
 
 **CRITICAL RULE (V3.1.85+): The 80% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that
