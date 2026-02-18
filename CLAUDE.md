@@ -142,7 +142,7 @@ POSITION_MONITOR_INTERVAL = 120      # 2min
 | DOGE | cmt_dogeusdt | 3 | 3.0% | 1.8% | 8h  |
 | ADA  | cmt_adausdt  | 3 | 3.0% | 1.8% | 8h  |
 
-Note: Chart-based TP/SL (support/resistance) is active since V3.1.84. V3.2.0 tightened chart TP to 0.3-0.6% and fallback TP to 0.5% for the dip-signal strategy. Tier TP/SL values above are now only used if chart SR completely fails.
+Note: Chart-based TP/SL (support/resistance) is active since V3.1.84. V3.2.2 removed TP/SL caps — chart finds real structural levels with no ceiling. Fallback TP = 0.5% (all tiers) when chart SR fails. Tier TP/SL values above are only used as a last resort.
 
 ## WEEX API
 
