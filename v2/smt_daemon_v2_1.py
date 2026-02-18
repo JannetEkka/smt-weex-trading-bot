@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.2.1 - Dip Signal Strategy (0.5% TP, 10-min Cycle)
+SMT Trading Daemon V3.2.2 - Dip Signal Strategy (uncapped chart S/R TP/SL)
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -3327,8 +3327,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.1 - Dip Signal Strategy (0.5%% TP, 10-min Cycle)")
+    logger.info("SMT Daemon V3.2.2 - Dip Signal Strategy (uncapped chart S/R TP/SL)")
     logger.info("=" * 60)
+    logger.info("V3.2.2 CHANGES:")
+    logger.info("  - V3.2.2: Removed MAX_TP_PCT and MAX_SL_PCT caps from find_chart_based_tp_sl()")
+    logger.info("  - V3.2.2: Chart now uses real structural S/R levels without artificial %% ceiling")
+    logger.info("  - V3.2.2: SL sits at real 4H resistance/support — wide SL is correct when thesis invalidated at structure")
+    logger.info("  - V3.2.2: ATR safety net _sl_max guard removed — ATR floor always applies when SL is too tight")
     logger.info("V3.2.1 CHANGES:")
     logger.info("  - V3.2.1: FLOW flip discount — if FLOW flips direction 180%% from last cycle, confidence halved (noise filter)")
     logger.info("  - V3.2.1: TECHNICAL weight halved (0.8->0.4) in fear markets (F&G<30) — SMA signals lag in fear")

@@ -1134,11 +1134,12 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         "levels": {"resistances": [], "supports": [], "htf_resistances": [], "htf_supports": []}
     }
 
-    # Competition bounds (V3.2.0: dip-signal strategy — grab 0.5% bounce, exit fast, re-enter next cycle)
-    MIN_TP_PCT = 0.3   # V3.2.0: Allow chart to find resistance from 0.3% above entry
-    MAX_TP_PCT = 0.6   # V3.2.0: Cap at 0.6% — preferred target ~0.5%, 10-min loop handles re-entry
-    MIN_SL_PCT = 1.0   # V3.1.85: At 20x = 20% max loss
-    MAX_SL_PCT = 2.5   # V3.1.94: Raised from 2.0% to accommodate +0.5% SL buffer
+    # Competition bounds (V3.2.2: uncapped — let chart find real structural levels)
+    # TP: chart finds nearest S/R from 0.3% above/below entry. No upper cap — real resistance is the target.
+    # SL: chart finds structural level (4H preferred). No upper cap — real structure holds better than an arbitrary %.
+    # High win rate dip strategy: occasional wide SL is correct when thesis is invalidated at structure.
+    MIN_TP_PCT = 0.3   # Floor: chart must find resistance at least 0.3% away
+    MIN_SL_PCT = 1.0   # Floor: SL at least 1.0% (20x = 20% margin loss minimum)
 
     htf_resistances = []
     htf_supports = []
@@ -1211,7 +1212,6 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 tp_pct = ((tp_price - entry_price) / entry_price) * 100
                 tp_pct = tp_pct * 0.95  # Slightly below resistance
                 tp_pct = max(tp_pct, MIN_TP_PCT)
-                tp_pct = min(tp_pct, MAX_TP_PCT)
                 result["tp_pct"] = round(tp_pct, 2)
                 result["tp_price"] = round(entry_price * (1 + tp_pct / 100), 8)
                 tp_found = True
@@ -1226,7 +1226,6 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 sl_pct = sl_pct * 1.05  # Slightly below support
                 sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
                 sl_pct = max(sl_pct, MIN_SL_PCT)
-                sl_pct = min(sl_pct, MAX_SL_PCT)
                 result["sl_pct"] = round(sl_pct, 2)
                 result["sl_price"] = round(entry_price * (1 - sl_pct / 100), 8)
                 sl_found = True
@@ -1237,7 +1236,6 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 sl_pct = sl_pct * 1.05
                 sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
                 sl_pct = max(sl_pct, MIN_SL_PCT)
-                sl_pct = min(sl_pct, MAX_SL_PCT)
                 result["sl_pct"] = round(sl_pct, 2)
                 result["sl_price"] = round(entry_price * (1 - sl_pct / 100), 8)
                 sl_found = True
@@ -1250,7 +1248,6 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 tp_pct = ((entry_price - tp_price) / entry_price) * 100
                 tp_pct = tp_pct * 0.95
                 tp_pct = max(tp_pct, MIN_TP_PCT)
-                tp_pct = min(tp_pct, MAX_TP_PCT)
                 result["tp_pct"] = round(tp_pct, 2)
                 result["tp_price"] = round(entry_price * (1 - tp_pct / 100), 8)
                 tp_found = True
@@ -1265,7 +1262,6 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 sl_pct = sl_pct * 1.05
                 sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
                 sl_pct = max(sl_pct, MIN_SL_PCT)
-                sl_pct = min(sl_pct, MAX_SL_PCT)
                 result["sl_pct"] = round(sl_pct, 2)
                 result["sl_price"] = round(entry_price * (1 + sl_pct / 100), 8)
                 sl_found = True
@@ -1276,7 +1272,6 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 sl_pct = sl_pct * 1.05
                 sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
                 sl_pct = max(sl_pct, MIN_SL_PCT)
-                sl_pct = min(sl_pct, MAX_SL_PCT)
                 result["sl_pct"] = round(sl_pct, 2)
                 result["sl_price"] = round(entry_price * (1 + sl_pct / 100), 8)
                 sl_found = True
@@ -3850,8 +3845,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         _atr_pct_check = _atr_check.get("atr_pct", 0)
         if _atr_pct_check > 0:
             _min_atr_sl = round(_atr_pct_check * 0.8, 2)  # At least 0.8x ATR
-            _sl_max = 2.5  # V3.1.94: matches MAX_SL_PCT
-            if sl_pct_raw < _min_atr_sl and _min_atr_sl <= _sl_max:
+            if sl_pct_raw < _min_atr_sl:
                 print(f"  [ATR-SAFETY] SL {sl_pct_raw:.2f}% < 0.8x ATR ({_min_atr_sl:.2f}%), widening to {_min_atr_sl:.2f}%")
                 sl_pct_raw = _min_atr_sl
                 sl_pct = sl_pct_raw / 100
