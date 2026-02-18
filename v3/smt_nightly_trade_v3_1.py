@@ -3106,7 +3106,20 @@ Respond with JSON ONLY (no markdown, no backticks):
             if confidence < CHOP_FALLBACK_CONFIDENCE:
                 return self._wait_decision(f"Gemini confidence too low: {confidence:.0%} < {CHOP_FALLBACK_CONFIDENCE:.0%}", persona_votes,
                     [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
-            
+
+            # V3.2.8: Extreme fear short restriction
+            # In deep capitulation (F&G < 20), bounces are frequent and violent.
+            # Even 2-co-primary SHORT signals get faked out by relief rallies.
+            # Require 90% confidence for SHORTs (vs standard 80%) to filter noise.
+            if decision == "SHORT" and regime:
+                _fg_extreme = regime.get("fear_greed", 50)
+                if _fg_extreme < 20 and confidence < 0.90:
+                    return self._wait_decision(
+                        f"Extreme fear short blocked: F&G={_fg_extreme} < 20, need 90% conf (have {confidence:.0%})",
+                        persona_votes,
+                        [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes]
+                    )
+
             # V3.1.59: Confidence-tiered position sizing with FLOW+WHALE alignment
             flow_whale_aligned = False
             flow_vote = next((v for v in persona_votes if v.get("persona") == "FLOW"), None)
