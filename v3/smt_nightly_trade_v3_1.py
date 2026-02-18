@@ -3031,7 +3031,7 @@ class JudgePersona:
         
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
 Your job: analyze all signals and decide the SINGLE BEST action for {pair} right now.
-TRADE WINDOW: 1-4 hours. We check positions every 15 minutes. TP targets are 3-4% (60-80% ROE at 20x).
+STRATEGY: High-frequency dip/bounce trades. TP targets are 0.3-0.5% (6-10% ROE at 20x). Volume of good trades beats waiting for perfect ones.
 
 === MARKET REGIME ===
 Regime: {regime.get('regime', 'NEUTRAL')}
@@ -3062,7 +3062,6 @@ CRITICAL: Your confidence score MUST reflect actual signal quality, NOT rules or
 - F&G rules below force your DIRECTION (LONG or SHORT), but confidence must honestly reflect how strong the setup is.
 - If all signals weakly agree: 60-70% confidence. If signals are mixed but rules force direction: 50-65%.
 - Only give 85%+ when WHALE + FLOW strongly agree AND align with direction.
-- Our RL data shows 85%+ confidence trades have a 7.2% win rate. The model has been overconfident. Be honest about uncertainty.
 
 SIGNAL RELIABILITY:
   CO-PRIMARY (equal weight, these drive your decision):
@@ -3081,8 +3080,8 @@ HOW TO DECIDE:
 
 === HISTORICAL PAIR PERFORMANCE (from RL training data) ===
 {rl_performance}
-USE THIS DATA: If a pair has <10% win rate, be VERY skeptical. Lower your confidence.
-If a pair has >15% win rate, it has proven itself - trust stronger signals on it.
+USE THIS AS CONTEXT ONLY — not a veto. Poor historical win rate = note it in reasoning, then follow WHALE+FLOW if they clearly agree.
+If a pair has >15% win rate, it has proven itself — trust stronger signals on it.
 
 FEAR & GREED (SOFT BIAS - V3.1.88):
 - F&G < 15 (EXTREME FEAR): Slightly favor LONG (contrarian bounce possible), but allow SHORT if WHALE+FLOW+SENTIMENT confirm bearish. Sustained fear ≠ imminent bounce. Trust the signals.
@@ -3096,7 +3095,8 @@ TRADE HISTORY CONTEXT:
 {trade_history_summary}
 
 IMPORTANT: Say LONG or SHORT if WHALE + FLOW support it. WAIT is valid when signals are weak or contradictory.
-Quality over quantity - one winning trade beats three losing ones. Check the pair's historical win rate above before committing.
+Frequency of good trades compounds into competition wins — don't over-filter.
+SHORT ASYMMETRY: In EXTREME FEAR (F&G < 15), require 2+ co-primary signals confirming SHORT before taking it (bounce risk is real). Otherwise treat LONG and SHORT equally — both directions are valid entries.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences explaining your decision"}}"""

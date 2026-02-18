@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.2.3 - Dip Signal Strategy (15m S/R + FLOW chop override)
+SMT Trading Daemon V3.2.4 - Dip Signal Strategy (15m S/R + FLOW chop override + Judge fix)
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -3327,8 +3327,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.3 - Dip Signal Strategy (15m S/R + FLOW chop override)")
+    logger.info("SMT Daemon V3.2.4 - Dip Signal Strategy (15m S/R + FLOW chop override + Judge fix)")
     logger.info("=" * 60)
+    logger.info("V3.2.4 CHANGES:")
+    logger.info("  - V3.2.4: Judge prompt — TP guidance updated to 0.3-0.5%% (was 3-4%%, stale from V3.1)")
+    logger.info("  - V3.2.4: Judge prompt — removed '85%%+ conf = 7.2%% win rate' suppressor line")
+    logger.info("  - V3.2.4: Judge prompt — historical win rate is context only, not a veto (WHALE+FLOW override)")
+    logger.info("  - V3.2.4: Judge prompt — SHORT asymmetry: EXTREME FEAR needs 2+ co-primary, else equal to LONG")
     logger.info("V3.2.3 CHANGES:")
     logger.info("  - V3.2.3: find_chart_based_tp_sl() — add 15m as 3rd S/R layer (micro pivots, 12.5h, cluster 0.2%%)")
     logger.info("  - V3.2.3: CHOP filter — FLOW EXTREME (>=85%% aligned) overrides MEDIUM CHOP (skip penalty)")
