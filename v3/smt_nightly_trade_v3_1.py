@@ -1133,9 +1133,9 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         "levels": {"resistances": [], "supports": [], "htf_resistances": [], "htf_supports": []}
     }
 
-    # Competition bounds (V3.1.94: flat TP cap + wider SL ceiling)
-    MIN_TP_PCT = 0.8   # Min 0.8% TP (covers fees at 20x + profit)
-    MAX_TP_PCT = 1.1   # V3.1.94: Flat 1.1% TP cap for all pairs — bank fast
+    # Competition bounds (V3.2.0: dip-signal strategy — grab 0.5% bounce, exit fast, re-enter next cycle)
+    MIN_TP_PCT = 0.3   # V3.2.0: Allow chart to find resistance from 0.3% above entry
+    MAX_TP_PCT = 0.6   # V3.2.0: Cap at 0.6% — preferred target ~0.5%, 10-min loop handles re-entry
     MIN_SL_PCT = 1.0   # V3.1.85: At 20x = 20% max loss
     MAX_SL_PCT = 2.5   # V3.1.94: Raised from 2.0% to accommodate +0.5% SL buffer
 
@@ -1304,11 +1304,11 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
     return result
 
 
-# V3.1.84: Competition fallback TPs (tighter than base for fast turnover)
+# V3.2.0: Competition fallback TPs — dip-signal strategy, 0.5% grab-and-go
 COMPETITION_FALLBACK_TP = {
-    1: 1.5,   # Tier 1 (ETH, BNB): 3.0% → 1.5%
-    2: 1.8,   # Tier 2 (BTC, LTC, XRP): 3.5% → 1.8%
-    3: 1.5,   # Tier 3 (SOL, DOGE, ADA): 3.0% → 1.5%
+    1: 0.5,   # Tier 1 (ETH, BNB): 0.5% fast exit
+    2: 0.5,   # Tier 2 (BTC, LTC, XRP): 0.5% fast exit
+    3: 0.5,   # Tier 3 (SOL, DOGE, ADA): 0.5% fast exit
 }
 COMPETITION_FALLBACK_SL = {
     1: 1.2,   # Tier 1: 1.5% → 1.2%

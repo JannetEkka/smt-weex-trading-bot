@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.1.105 - Trust The Ensemble (80% Floor + Chop Only)
+SMT Trading Daemon V3.2.0 - Dip Signal Strategy (0.5% TP, 10-min Cycle)
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -3311,9 +3311,12 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.1.105 - Trust The Ensemble (80%% Floor + Chop Only)")
+    logger.info("SMT Daemon V3.2.0 - Dip Signal Strategy (0.5%% TP, 10-min Cycle)")
     logger.info("=" * 60)
-    logger.info("V3.1.105 CHANGES:")
+    logger.info("V3.2.0 CHANGES:")
+    logger.info("  - V3.2.0: Dip-signal strategy — FLOW/WHALE fire into dip, bot catches bottom, 0.5%% TP exits fast")
+    logger.info("  - V3.2.0: Chart MIN_TP 0.8->0.3%%, MAX_TP 1.1->0.6%% — find resistance closer to entry")
+    logger.info("  - V3.2.0: COMPETITION_FALLBACK_TP all tiers 0.5%% — grab bounce, 10-min loop handles re-entry")
     logger.info("  - V3.1.105: All pairs on 5m chop candles (BTC/ETH/BNB=48, LTC/SOL/DOGE/ADA=42, XRP=60)")
     logger.info("  - V3.1.105: ADX(14) on 5m — thresholds (18,25) match 1H standard, BB(40) always computes")
     logger.info("  - V3.1.104: REMOVED entry confirmation gate (fired at reversals, fought ensemble)")
