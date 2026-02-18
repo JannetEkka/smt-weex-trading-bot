@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.2.6 - DOGE plan order fix + equity-tiered slot count
+SMT Trading Daemon V3.2.7 - tighter slot ladder, max 5 slots hard cap
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -3341,8 +3341,11 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.6 - DOGE plan order fix + equity-tiered slot count")
+    logger.info("SMT Daemon V3.2.7 - tighter slot ladder, max 5 slots hard cap")
     logger.info("=" * 60)
+    logger.info("V3.2.7 CHANGES:")
+    logger.info("  - V3.2.7: Slot ladder revised — <$4K: 3 slots, $4K-$6K: 4 slots, $6K+: 5 slots (hard cap)")
+    logger.info("  - V3.2.7: Removed 6/7/8 slot tiers — keeps per-trade sizing meaningful")
     logger.info("V3.2.6 CHANGES:")
     logger.info("  - V3.2.6: DOGE _fix_plan_orders() — re-place TP/SL after entry, prevents SL drift")
     logger.info("  - V3.2.6: 2s sleep after pre-trade orphan cleanup before set_leverage()")
