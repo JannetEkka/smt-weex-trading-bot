@@ -3964,6 +3964,7 @@ class TradeTracker:
         self.cooldowns: Dict = {}  # symbol -> cooldown_until timestamp
         self.force_stop_blacklist: Dict = {}  # V3.1.81: symbol -> blacklist_until timestamp (hard block after force_stop)
         self.recent_force_stops: Dict = {}  # V3.1.81: symbol -> list of {time, direction, pnl} for consecutive loss tracking
+        self.signal_history: Dict = {}  # V3.2.6: per-pair signal persistence, survives daemon restarts
         self.load_state()
     
     def load_state(self):
@@ -3976,6 +3977,12 @@ class TradeTracker:
                     self.cooldowns = data.get("cooldowns", {})
                     self.force_stop_blacklist = data.get("force_stop_blacklist", {})
                     self.recent_force_stops = data.get("recent_force_stops", {})
+                    # V3.2.6: Load signal_history, drop entries older than 20min (2 cycles)
+                    _cutoff = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+                    self.signal_history = {
+                        pair: sh for pair, sh in data.get("signal_history", {}).items()
+                        if sh.get("last_seen", "") >= _cutoff
+                    }
         except:
             pass
     
@@ -3987,6 +3994,7 @@ class TradeTracker:
                 "cooldowns": self.cooldowns,
                 "force_stop_blacklist": self.force_stop_blacklist,
                 "recent_force_stops": self.recent_force_stops,
+                "signal_history": self.signal_history,  # V3.2.6: persist across restarts
             }, f, indent=2, default=str)
     
     def add_trade(self, symbol: str, trade_data: Dict):

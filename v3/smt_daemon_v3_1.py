@@ -419,11 +419,9 @@ GLOBAL_TRADE_COOLDOWN = 900  # V3.1.66c: 15 minutes (was 30min, too slow for com
 # V3.1.93: Last signal cycle summary for PM context
 _last_signal_summary = {}
 
-# V3.1.104: Per-pair signal persistence tracking
-# Tracks consecutive cycles where same direction scored ≥80% (pre-filter).
-# Used to override MEDIUM chop blocks when ensemble has been consistent 2+ cycles.
-# Structure: {pair: {"direction": "SHORT", "confidence": 0.88, "count": 2}}
-_signal_history = {}
+# V3.2.6: Per-pair signal persistence tracking moved into TradeTracker.signal_history
+# (persisted to trade_state JSON so counts survive daemon restarts)
+# Structure: {pair: {"direction": "SHORT", "confidence": 0.88, "count": 2, "entry_time": ISO, "last_seen": ISO}}
 
 
 # ============================================================
@@ -759,19 +757,32 @@ def check_trading_signals():
                     _raw_conf = confidence
 
                 if _raw_dir and _raw_conf >= MIN_CONFIDENCE_TO_TRADE:
-                    _prev = _signal_history.get(pair, {})
+                    _now_iso = datetime.now(timezone.utc).isoformat()
+                    _prev = tracker.signal_history.get(pair, {})
                     if _prev.get("direction") == _raw_dir:
-                        _signal_history[pair] = {"direction": _raw_dir, "confidence": _raw_conf, "count": _prev.get("count", 0) + 1}
+                        tracker.signal_history[pair] = {
+                            "direction": _raw_dir,
+                            "confidence": _raw_conf,
+                            "count": _prev.get("count", 0) + 1,
+                            "entry_time": _prev.get("entry_time", _now_iso),  # first time this direction appeared
+                            "last_seen": _now_iso,
+                        }
                     else:
-                        _signal_history[pair] = {"direction": _raw_dir, "confidence": _raw_conf, "count": 1}
+                        tracker.signal_history[pair] = {
+                            "direction": _raw_dir,
+                            "confidence": _raw_conf,
+                            "count": 1,
+                            "entry_time": _now_iso,
+                            "last_seen": _now_iso,
+                        }
                 else:
-                    _signal_history.pop(pair, None)
+                    tracker.signal_history.pop(pair, None)
 
-                # V3.1.104: Medium chop persistence override.
+                # V3.1.104 / V3.2.6: Medium chop persistence override.
                 # If the same direction at ≥80% has appeared 2+ consecutive cycles,
                 # the ensemble has been consistently right — override MEDIUM chop block.
                 # HARD chop still blocks unconditionally.
-                _persist_count = _signal_history.get(pair, {}).get("count", 0)
+                _persist_count = tracker.signal_history.get(pair, {}).get("count", 0)
                 if (decision.get("chop_blocked") and
                         decision.get("chop_data", {}).get("severity") == "medium" and
                         _persist_count >= 2):
@@ -1502,6 +1513,9 @@ def check_trading_signals():
             "best_unexecuted": _best_unexecuted,
             "all_wait": _cycle_above_80 == 0 and chop_blocked_count == 0,
         }
+        # V3.2.6: Persist signal_history at end of every cycle (even no-trade cycles)
+        # so consecutive-cycle counts survive daemon restarts.
+        tracker.save_state()
         save_local_log(ai_log, run_timestamp)
         
     except Exception as e:
@@ -3327,8 +3341,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.4 - Dip Signal Strategy (15m S/R + FLOW chop override + Judge fix)")
+    logger.info("SMT Daemon V3.2.6 - Dip Signal Strategy (persistent signal history across restarts)")
     logger.info("=" * 60)
+    logger.info("V3.2.6 CHANGES:")
+    logger.info("  - V3.2.6: Signal persistence moved into TradeTracker.signal_history (survives daemon restarts)")
+    logger.info("  - V3.2.6: entry_time + last_seen timestamps added to signal_history entries")
+    logger.info("  - V3.2.6: Stale filter on load — entries older than 20min are dropped (market changed)")
+    logger.info("  - V3.2.6: tracker.save_state() called at end of every signal cycle (not just on trade)")
     logger.info("V3.2.4 CHANGES:")
     logger.info("  - V3.2.4: Judge prompt — TP guidance updated to 0.3-0.5%% (was 3-4%%, stale from V3.1)")
     logger.info("  - V3.2.4: Judge prompt — removed '85%%+ conf = 7.2%% win rate' suppressor line")
