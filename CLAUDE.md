@@ -11,7 +11,7 @@ Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 ## Architecture
 
 ```
-v3/
+v3/                              # PRIMARY production folder
 ├── smt_daemon_v3_1.py          # 24/7 daemon loop (~3150 lines)
 │   - check_trading_signals()    → Signal check cycle (every 10min)
 │   - monitor_positions()        → Position monitor cycle (every 2min)
@@ -35,10 +35,20 @@ v3/
 │   - detect_sideways_market()   → Chop filter
 │   - TradeTracker               → Local state management (line ~3669)
 │
+├── watchdog.sh                 # Process watchdog — start this, NOT the daemon directly
+│                               # Restarts daemon on crash, enforces single-instance
 ├── trade_state_v3_1_7.json     # Live state: active trades, cooldowns, blacklist
 ├── close_all_positions.py      # Emergency close script (3-pass)
 ├── logs/daemon_v3_1_7_*.log    # Daily daemon logs
 └── *.bak*, *.patch             # Version history (ignore)
+
+v2/                              # SECONDARY production copy (V3.2.1 snapshot, same codebase)
+├── smt_daemon_v2_1.py          # Daemon copy (identical logic to v3/)
+├── smt_nightly_trade_v3_1.py   # Trading logic copy
+├── watchdog.sh                 # Same watchdog pattern as v3/
+├── close_all_positions.py      # Emergency close
+├── trade_state_v3_1_7.json     # Independent state file
+└── backup/                     # Versioned daemon backups
 ```
 
 ## Trading Philosophy — Dip Signals, Fast Banking
@@ -97,8 +107,8 @@ POSITION_MONITOR_INTERVAL = 120      # 2min
 # If no signals reach 80%, ALL pairs show WAIT — this is expected, not a bug.
 # Existing position + same direction signal = WAIT (already have that side).
 
-# Slot swap gates (V3.1.87)
-# Min age: 45min | Min confidence: 83%
+# Slot swap gates (V3.2.1, was V3.1.87)
+# Min age: 45min | Min confidence: 83% (drops to 80% when signal persists 2+ consecutive cycles)
 # PnL threshold: regime-aware
 #   Normal (F&G >= 20): -0.5% | Capitulation (F&G < 20): -0.25%
 
@@ -111,9 +121,9 @@ POSITION_MONITOR_INTERVAL = 120      # 2min
 # per_slot_cap = (sizing_base * 0.85) / max_slots
 # Margin guard: skip trades if available margin < 15% of balance
 
-# TP caps (V3.1.92: ATR-aware)
-# MAX_TP_PCT = min(3.0%, max(2.0%, ATR * 2))
-# Volatile pairs (SOL/DOGE) get up to 3% TP, stable pairs (BTC) stay ~2-2.4%
+# TP caps (V3.2.0: dip-signal strategy — grab 0.5% bounce, re-enter next cycle)
+# Chart-based: MIN_TP_PCT = 0.3%, MAX_TP_PCT = 0.6% (preferred target ~0.5%)
+# Fallback: COMPETITION_FALLBACK_TP = 0.5% (all tiers, was 1.5-1.8%)
 
 # Opposite swap gates (V3.1.100)
 # OPPOSITE_MIN_AGE_MIN = 20       # Don't flip positions younger than 20 minutes
@@ -135,7 +145,7 @@ POSITION_MONITOR_INTERVAL = 120      # 2min
 | DOGE | cmt_dogeusdt | 3 | 3.0% | 1.8% | 8h  |
 | ADA  | cmt_adausdt  | 3 | 3.0% | 1.8% | 8h  |
 
-Note: V3.1.84 uses chart-based TP/SL (support/resistance levels) with these as fallbacks.
+Note: Chart-based TP/SL (support/resistance) is active since V3.1.84. V3.2.0 tightened chart TP to 0.3-0.6% and fallback TP to 0.5% for the dip-signal strategy. Tier TP/SL values above are now only used if chart SR completely fails.
 
 ## WEEX API
 
@@ -175,10 +185,12 @@ Edit `v3/smt_daemon_v3_1.py`. Same deploy process.
 # On VM:
 cd ~/smt-weex-trading-bot
 git pull origin main
-# Kill existing daemon
-ps aux | grep smt_daemon | grep -v grep | awk '{print $2}' | xargs kill
-# Restart
-cd v3 && nohup python3 smt_daemon_v3_1.py > daemon.log 2>&1 &
+# Kill existing daemon AND watchdog (watchdog will restart daemon if you don't)
+pkill -f watchdog.sh; pkill -f smt_daemon
+# Restart via watchdog — ALWAYS start the watchdog, not the daemon directly
+cd v3 && nohup bash watchdog.sh >> logs/watchdog.log 2>&1 &
+# Or for v2:
+cd v2 && nohup bash watchdog.sh >> logs/watchdog.log 2>&1 &
 ```
 
 ### Emergency close all positions
@@ -201,10 +213,13 @@ python3 v3/smt_nightly_trade_v3_1.py --test
 6. **Consecutive losses** — Block re-entry after 2 losses (any type) same direction in 24h (V3.1.91: counts ALL losses, not just force-stops)
 7. **AI log missing** — Every trade MUST upload logs or competition results won't count
 8. **Premature opposite flips** — V3.1.100 gates: don't flip if position >= 30% toward TP or < 20min old. Blocked signals queue for deferred execution.
+9. **FLOW noise** — V3.2.1: if FLOW flips direction 180° from last cycle, confidence is halved. One-cycle flip = noise (single large print); sustained direction = real signal.
+10. **TECHNICAL in fear markets** — V3.2.1: TECHNICAL weight halved (0.8→0.4) when F&G < 30. SMA signals lag in fear/capitulation; FLOW + WHALE are more reliable.
 
 ## Version Naming
 
-Format: `V3.1.{N}` where N increments with each fix/feature.
+Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
+Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
 Current: V3.2.1. Next change should be V3.2.2.
 
@@ -222,6 +237,6 @@ lowers the trading threshold below 80%. Quality over quantity wins competitions.
 ## Files to Ignore
 
 - `v3/*.bak*`, `v3/*.patch` — old backups, don't modify
-- `v2/`, `v4/` — legacy/future versions, not in production
+- `v4/` — future version, not in production
 - `v3/all_rl_data.jsonl` — RL training data, read-only during competition
 - `data/`, `models/`, `notebooks/` — analysis artifacts
