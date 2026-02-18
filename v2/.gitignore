@@ -1,0 +1,6 @@
+trade_state_v3_1_7.json
+logs/
+rl_training_data/
+__pycache__/
+*.pyc
+nohup.out
