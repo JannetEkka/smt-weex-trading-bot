@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.2.11 - drop DOGE, tighten capitulation swap gate
+SMT Trading Daemon V3.2.12 - 2H TP anchor, fear TP cap extended to LONGs
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -3341,8 +3341,12 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.11 - drop DOGE, tighten capitulation swap gate")
+    logger.info("SMT Daemon V3.2.12 - 2H TP anchor, fear TP cap extended to LONGs")
     logger.info("=" * 60)
+    logger.info("V3.2.12 CHANGES:")
+    logger.info("  - V3.2.12: TP anchor 6H→2H in find_chart_based_tp_sl() — dip entries no longer anchored to pre-dip peak")
+    logger.info("  - V3.2.12: Extreme fear TP cap extended to LONG signals (was SHORT-only in V3.2.9)")
+    logger.info("  - V3.2.12: XRP/ADA peaked 0.25-0.28%%, chart said 2-3%% TP — positions never exited. Now capped at 0.5%%")
     logger.info("V3.2.11 CHANGES:")
     logger.info("  - V3.2.11: DOGE removed from TRADING_PAIRS — erratic SL behavior, not worth the slot")
     logger.info("  - V3.2.11: Capitulation swap threshold -0.25%% → -0.10%% — free stale slots sooner in extreme fear")

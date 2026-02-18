@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.2.6 - DOGE plan order fix + equity-tiered slot count
+SMT Nightly Trade V3.2.12 - 2H TP anchor, fear TP cap extended to LONGs
 =============================================================
 No partial closes. Higher conviction trades only.
 
@@ -1102,10 +1102,12 @@ def _find_swing_levels(candles: list) -> tuple:
 
 
 def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict:
-    """V3.2.5: Raw 1H candle wick anchors for TP/SL.
+    """V3.2.12: Raw 1H candle wick anchors for TP/SL.
 
-    TP: max high of last 6 complete 1H candles (the real ceiling price reached recently).
-        LTC 54.23, XRP 1.4844, ETH 2003.57 — not the distant 4H swing resistance.
+    TP: max high of last 2 COMPLETE 1H candles (immediate ceiling — where sellers appeared most recently).
+        Using 2H instead of 6H prevents anchoring to the pre-dip peak when we enter at the bottom.
+        Dip-bounce entry + 6H anchor = TP at the old range top = 2-3% away = never hits.
+        Dip-bounce entry + 2H anchor = TP at the nearest resistance = 0.5-1.5% = exits fast.
 
     SL: lowest actual wick in last 12H = min(
             min-low of last 12 1H candles,
@@ -1113,7 +1115,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         )
         No swing detection. Raw candle lows only.
 
-    For SHORT: reversed (min low of last 6 1H for TP, max high of 12H for SL).
+    For SHORT: reversed (min low of last 2 1H for TP, max high of 12H for SL).
     """
     global _sr_cache, _sr_cache_time
 
@@ -1153,17 +1155,18 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         highs_1h = [float(c[2]) for c in candles_1h]  # c[2] = high; candles[0] is most recent
         lows_1h  = [float(c[3]) for c in candles_1h]  # c[3] = low
 
-        # TP anchor: highest high of the last 6 COMPLETE 1H candles (skip candles[0] = current partial)
-        tp_high_6h = max(highs_1h[1:7])
-        # TP anchor SHORT: lowest low of the last 6 complete 1H candles
-        tp_low_6h  = min(lows_1h[1:7])
+        # TP anchor: highest high of the last 2 COMPLETE 1H candles (skip candles[0] = current partial)
+        # V3.2.12: 6H→2H — dip entries anchored to pre-dip peak got 2-3% TPs, never hitting
+        tp_high_2h = max(highs_1h[1:3])
+        # TP anchor SHORT: lowest low of the last 2 complete 1H candles
+        tp_low_2h  = min(lows_1h[1:3])
 
         # SL anchor 1H: lowest/highest actual wick in last 12H from 1H candles
         sl_low_12h_1h  = min(lows_1h[0:12])   # LONG SL reference
         sl_high_12h_1h = max(highs_1h[0:12])  # SHORT SL reference
 
         print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 1H anchors: "
-              f"6H_high={tp_high_6h:.4f}, 6H_low={tp_low_6h:.4f}, "
+              f"2H_high={tp_high_2h:.4f}, 2H_low={tp_low_2h:.4f}, "
               f"12H_low={sl_low_12h_1h:.4f}, 12H_high={sl_high_12h_1h:.4f}")
 
         # === 4H candles — SL only: catch any deep wick the 1H grid may miss ===
@@ -1186,15 +1189,15 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         sl_found = False
 
         if signal == "LONG":
-            # TP: just inside the 6H ceiling (where sellers appeared recently)
-            tp_price = tp_high_6h * 0.997
+            # TP: just inside the 2H ceiling (where sellers appeared most recently)
+            tp_price = tp_high_2h * 0.997
             tp_pct   = (tp_price - entry_price) / entry_price * 100
             tp_pct   = max(tp_pct, MIN_TP_PCT)
             if tp_price > entry_price:
                 result["tp_pct"]   = round(tp_pct, 2)
                 result["tp_price"] = round(entry_price * (1 + tp_pct / 100), 8)
                 tp_found = True
-                print(f"  [CHART-SR] LONG TP: 6H_high={tp_high_6h:.4f} → {tp_pct:.2f}%")
+                print(f"  [CHART-SR] LONG TP: 2H_high={tp_high_2h:.4f} → {tp_pct:.2f}%")
 
             # SL: lowest actual wick in 12H from either timeframe ("take whichever is lowest")
             sl_price = min(sl_low_12h_1h, sl_low_12h_4h) * 0.997
@@ -1206,15 +1209,15 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
             print(f"  [CHART-SR] LONG SL: min(1H={sl_low_12h_1h:.4f}, 4H={sl_low_12h_4h:.4f})={min(sl_low_12h_1h,sl_low_12h_4h):.4f} → {sl_pct:.2f}%")
 
         elif signal == "SHORT":
-            # TP: just inside the 6H floor (where buyers appeared recently)
-            tp_price = tp_low_6h * 1.003
+            # TP: just inside the 2H floor (where buyers appeared most recently)
+            tp_price = tp_low_2h * 1.003
             tp_pct   = (entry_price - tp_price) / entry_price * 100
             tp_pct   = max(tp_pct, MIN_TP_PCT)
             if tp_price < entry_price:
                 result["tp_pct"]   = round(tp_pct, 2)
                 result["tp_price"] = round(entry_price * (1 - tp_pct / 100), 8)
                 tp_found = True
-                print(f"  [CHART-SR] SHORT TP: 6H_low={tp_low_6h:.4f} → {tp_pct:.2f}%")
+                print(f"  [CHART-SR] SHORT TP: 2H_low={tp_low_2h:.4f} → {tp_pct:.2f}%")
 
             # SL: highest actual wick in 12H from either timeframe
             sl_price = max(sl_high_12h_1h, sl_high_12h_4h) * 1.003
@@ -3769,22 +3772,22 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         mtf_label = "MTF" if chart_sr["method"] == "chart_mtf" else "1H"
         print(f"  [TP/SL] CHART-BASED [{mtf_label}]: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
 
-        # V3.2.9: In extreme fear, cap SHORT TP at competition fallback (0.5%)
-        # Chart SR finds support 1-2% below entry, but violent bounces hit before that.
-        # LONG TPs are naturally small in fear (entry at dip, resistance is close).
-        # SHORTs need the same discipline — bank fast, don't hold for the full S/R target.
-        if signal == "SHORT":
-            try:
-                _fg_tp_regime = REGIME_CACHE.get("regime", {})
-                _fg_tp = _fg_tp_regime.get("fear_greed", 50) if _fg_tp_regime else 50
-                _tp_cap = COMPETITION_FALLBACK_TP.get(tier, 0.5)
-                if _fg_tp < 20 and tp_pct_raw > _tp_cap:
-                    print(f"  [TP/SL] Extreme fear SHORT TP capped: {tp_pct_raw:.2f}% → {_tp_cap:.2f}% (F&G={_fg_tp})")
-                    tp_pct_raw = _tp_cap
-                    tp_pct = tp_pct_raw / 100
-                    tp_price = current_price * (1 - tp_pct)
-            except Exception:
-                pass
+        # V3.2.12: In extreme fear, cap ALL TP at competition fallback (0.5%) — both LONG and SHORT.
+        # V3.2.9 only capped SHORTs; LONGs assumed to have "naturally small" TPs but they weren't.
+        # 2H anchor helps a lot, but fear markets can still produce 1-2% TPs when 2H had a big swing.
+        # XRP at +0.28% peak, ADA at +0.25% peak both had chart TPs 2-3% away — positions never exited.
+        try:
+            _fg_tp_regime = REGIME_CACHE.get("regime", {})
+            _fg_tp = _fg_tp_regime.get("fear_greed", 50) if _fg_tp_regime else 50
+            _tp_cap = COMPETITION_FALLBACK_TP.get(tier, 0.5)
+            if _fg_tp < 20 and tp_pct_raw > _tp_cap:
+                _dir = "LONG" if signal == "LONG" else "SHORT"
+                print(f"  [TP/SL] Extreme fear {_dir} TP capped: {tp_pct_raw:.2f}% → {_tp_cap:.2f}% (F&G={_fg_tp})")
+                tp_pct_raw = _tp_cap
+                tp_pct = tp_pct_raw / 100
+                tp_price = current_price * (1 + tp_pct) if signal == "LONG" else current_price * (1 - tp_pct)
+        except Exception:
+            pass
     else:
         # FALLBACK: Use competition-tightened percentages (NOT the old wide 3.0-3.5%)
         if _in_competition:
