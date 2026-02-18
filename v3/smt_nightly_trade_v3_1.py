@@ -1102,14 +1102,14 @@ def _find_swing_levels(candles: list) -> tuple:
 
 
 def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict:
-    """V3.2.3: Multi-timeframe chart-based TP/SL using support/resistance.
+    """V3.2.5: TP/SL anchored to recent 1H candle extremes + 4H structural cap.
 
-    Three-timeframe S/R stack:
-    1. 4H candles (50 = ~8 days) → structural S/R levels (strong)
-    2. 1H candles (50 = ~2 days) → recent S/R levels (medium)
-    3. 15m candles (50 = ~12.5h) → micro S/R levels (tight, for close TP targets)
-    Priority for SL: 4H > 1H > 15m (structural preferred)
-    Combined levels for TP (nearest valid target from any timeframe)
+    TP logic (LONG): 6H high * 0.997 — the ceiling price recently touched.
+                      For dip bounces, 6H high = where sellers appeared last.
+    SL logic (LONG): 12H low wick * 0.997, capped by nearest 4H structural support
+                      (whichever is closer to entry = tighter, safer SL).
+    Both reversed for SHORT.
+    4H candles still fetched for structural SL cap only.
 
     Returns dict with tp_pct, sl_pct, method ("chart_mtf"/"chart"/"fallback"), levels found.
     """
@@ -1165,63 +1165,39 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         except Exception as e4h:
             print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 4H fetch failed ({e4h}), using 1H only")
 
-        # === LOWER TIMEFRAME: 1H candles (50 = ~2 days of recent action) ===
-        url_1h = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1h&limit=50"
+        # === LOWER TIMEFRAME: 1H candles (12 = 12h window for TP/SL anchors) ===
+        # V3.2.5: TP anchored to 6H high (recent resistance ceiling).
+        #         SL anchored to 12H low wick, capped by nearest 4H structural support.
+        url_1h = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1h&limit=12"
         r_1h = requests.get(url_1h, timeout=10)
         candles_1h = r_1h.json()
 
-        if not isinstance(candles_1h, list) or len(candles_1h) < 20:
+        if not isinstance(candles_1h, list) or len(candles_1h) < 6:
             print(f"  [CHART-SR] {symbol}: Insufficient 1H candle data")
             return result
 
+        highs_1h = [float(c[2]) for c in candles_1h]  # candles[0] = most recent
+        lows_1h  = [float(c[3]) for c in candles_1h]
+
+        # 6H high: ceiling of recent price action — TP should target just below this
+        six_hour_high = max(highs_1h[:6])
+        # 12H low wick: deepest support seen recently — SL sits at or below this
+        twelve_hour_low = min(lows_1h[:12])
+        # 6H low (for SHORT TP) and 12H high wick (for SHORT SL)
+        six_hour_low  = min(lows_1h[:6])
+        twelve_hour_high = max(highs_1h[:12])
+
+        print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 1H anchors: "
+              f"6H_high=${six_hour_high:.4f}, 6H_low=${six_hour_low:.4f}, "
+              f"12H_low=${twelve_hour_low:.4f}, 12H_high=${twelve_hour_high:.4f}")
+
+        # Also keep swing-level analysis for legacy logging
         raw_res_1h, raw_sup_1h = _find_swing_levels(candles_1h)
         ltf_resistances = _cluster_price_levels(raw_res_1h, entry_price, threshold_pct=0.3)
         ltf_supports = _cluster_price_levels(raw_sup_1h, entry_price, threshold_pct=0.3)
 
-        # === MICRO TIMEFRAME: 15m candles (50 = ~12.5h of micro structure) ===
-        # V3.2.3: Added as 3rd layer — finds micro pivots close to entry for tighter TP
-        try:
-            url_15m = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=15m&limit=50"
-            r_15m = requests.get(url_15m, timeout=10)
-            candles_15m = r_15m.json()
-            if isinstance(candles_15m, list) and len(candles_15m) >= 10:
-                raw_res_15m, raw_sup_15m = _find_swing_levels(candles_15m)
-                mtf_resistances = _cluster_price_levels(raw_res_15m, entry_price, threshold_pct=0.2)
-                mtf_supports = _cluster_price_levels(raw_sup_15m, entry_price, threshold_pct=0.2)
-                print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 15m: {len(mtf_resistances)}R / {len(mtf_supports)}S levels (micro)")
-            else:
-                print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 15m: Insufficient data, skipping")
-        except Exception as e15m:
-            print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 15m fetch failed ({e15m}), using 4H+1H only")
-
-        # === MERGE: 4H structural > 1H recent > 15m micro ===
-        # For resistances/supports, combine both but track origin
-        # 4H levels that don't overlap with 1H are "structural" — stronger
-        all_resistances = list(htf_resistances)
-        for r in ltf_resistances:
-            # Only add 1H level if not within 0.4% of any 4H level (avoid duplicates)
-            is_dup = any(abs(r - h) / entry_price * 100 < 0.4 for h in htf_resistances)
-            if not is_dup:
-                all_resistances.append(r)
-        for r in mtf_resistances:
-            # Only add 15m level if not within 0.3% of any existing level
-            is_dup = any(abs(r - h) / entry_price * 100 < 0.3 for h in all_resistances)
-            if not is_dup:
-                all_resistances.append(r)
-
-        all_supports = list(htf_supports)
-        for s in ltf_supports:
-            is_dup = any(abs(s - h) / entry_price * 100 < 0.4 for h in htf_supports)
-            if not is_dup:
-                all_supports.append(s)
-        for s in mtf_supports:
-            # Only add 15m level if not within 0.3% of any existing level
-            is_dup = any(abs(s - h) / entry_price * 100 < 0.3 for h in all_supports)
-            if not is_dup:
-                all_supports.append(s)
-
-        result["levels"]["resistances"] = [round(r, 8) for r in sorted(all_resistances)]
-        result["levels"]["supports"] = [round(s, 8) for s in sorted(all_supports, reverse=True)]
+        result["levels"]["resistances"] = [round(r, 8) for r in sorted(htf_resistances + ltf_resistances)]
+        result["levels"]["supports"] = [round(s, 8) for s in sorted(htf_supports + ltf_supports, reverse=True)]
         result["levels"]["htf_resistances"] = [round(r, 8) for r in sorted(htf_resistances)]
         result["levels"]["htf_supports"] = [round(s, 8) for s in sorted(htf_supports, reverse=True)]
 
@@ -1230,113 +1206,75 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         sl_found = False
 
         if signal == "LONG":
-            # TP: prefer 1H + 15m resistances (recent price action, fits 0.3-0.8% dip bounce)
-            # 4H is structural — too coarse for fast TP targets. Fall back to 4H only if needed.
-            _tp_preferred = ltf_resistances + mtf_resistances  # 1H + 15m
-            tp_candidates = [r for r in _tp_preferred if r > entry_price * (1 + MIN_TP_PCT / 100)]
-            if not tp_candidates:
-                tp_candidates = [r for r in all_resistances if r > entry_price * (1 + MIN_TP_PCT / 100)]
-            if tp_candidates:
-                tp_price = min(tp_candidates)
-                tp_pct = ((tp_price - entry_price) / entry_price) * 100
-                tp_pct = tp_pct * 0.95  # Slightly below resistance
-                tp_pct = max(tp_pct, MIN_TP_PCT)
+            # TP: just below the 6H high — that's the recent resistance ceiling for this bounce
+            tp_price = six_hour_high * 0.997  # 0.3% inside the ceiling
+            tp_pct = ((tp_price - entry_price) / entry_price) * 100
+            tp_pct = max(tp_pct, MIN_TP_PCT)
+            if tp_pct > 0:  # TP must be above entry
                 result["tp_pct"] = round(tp_pct, 2)
                 result["tp_price"] = round(entry_price * (1 + tp_pct / 100), 8)
                 tp_found = True
+                print(f"  [CHART-SR] LONG TP from 6H high ${six_hour_high:.4f} -> {tp_pct:.2f}%")
 
-            # SL: PREFER 4H support (structural), fallback to 1H, then 15m
+            # SL: 12H low wick, capped (tightened) by nearest 4H structural support if closer
+            sl_ref_12h = twelve_hour_low * 0.997  # 0.3% below the 12H wick
+            sl_pct_12h = ((entry_price - sl_ref_12h) / entry_price) * 100
+            sl_pct_12h = max(sl_pct_12h, MIN_SL_PCT)
+
+            # 4H structural support cap: if 4H support is CLOSER to entry, use it (tighter SL)
             sl_candidates_4h = [s for s in htf_supports if s < entry_price * (1 - MIN_SL_PCT / 100)]
-            sl_candidates_1h = [s for s in ltf_supports if s < entry_price * (1 - MIN_SL_PCT / 100)]
-            sl_candidates_15m = [s for s in mtf_supports if s < entry_price * (1 - MIN_SL_PCT / 100)]
-
             if sl_candidates_4h:
-                sl_price = max(sl_candidates_4h)  # Nearest 4H support
-                sl_pct = ((entry_price - sl_price) / entry_price) * 100
-                sl_pct = sl_pct * 1.05  # Slightly below support
-                sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
+                sl_price_4h = max(sl_candidates_4h)  # nearest 4H support below entry
+                sl_pct_4h = ((entry_price - sl_price_4h) / entry_price) * 100 + 0.5  # +0.5% buffer
+                # Use whichever gives the tighter (smaller) SL — don't widen past 12H low
+                sl_pct = min(sl_pct_12h, sl_pct_4h)
                 sl_pct = max(sl_pct, MIN_SL_PCT)
-                result["sl_pct"] = round(sl_pct, 2)
-                result["sl_price"] = round(entry_price * (1 - sl_pct / 100), 8)
-                sl_found = True
-                print(f"  [CHART-SR] SL from 4H structural support ${sl_price:.4f} (+0.5% buffer)")
-            elif sl_candidates_1h:
-                sl_price = max(sl_candidates_1h)
-                sl_pct = ((entry_price - sl_price) / entry_price) * 100
-                sl_pct = sl_pct * 1.05
-                sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
-                sl_pct = max(sl_pct, MIN_SL_PCT)
-                result["sl_pct"] = round(sl_pct, 2)
-                result["sl_price"] = round(entry_price * (1 - sl_pct / 100), 8)
-                sl_found = True
-            elif sl_candidates_15m:
-                sl_price = max(sl_candidates_15m)
-                sl_pct = ((entry_price - sl_price) / entry_price) * 100
-                sl_pct = sl_pct * 1.05
-                sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
-                sl_pct = max(sl_pct, MIN_SL_PCT)
-                result["sl_pct"] = round(sl_pct, 2)
-                result["sl_price"] = round(entry_price * (1 - sl_pct / 100), 8)
-                sl_found = True
-                print(f"  [CHART-SR] SL from 15m micro support ${sl_price:.4f} (+0.5% buffer)")
+                print(f"  [CHART-SR] LONG SL: 12H_low={sl_pct_12h:.2f}% vs 4H_struct={sl_pct_4h:.2f}% -> using {sl_pct:.2f}%")
+            else:
+                sl_pct = sl_pct_12h
+                print(f"  [CHART-SR] LONG SL from 12H low ${twelve_hour_low:.4f} -> {sl_pct:.2f}%")
+
+            result["sl_pct"] = round(sl_pct, 2)
+            result["sl_price"] = round(entry_price * (1 - sl_pct / 100), 8)
+            sl_found = True
 
         elif signal == "SHORT":
-            # TP: prefer 1H + 15m supports (recent price action, fits 0.3-0.8% dip bounce)
-            _tp_preferred = ltf_supports + mtf_supports  # 1H + 15m
-            tp_candidates = [s for s in _tp_preferred if s < entry_price * (1 - MIN_TP_PCT / 100)]
-            if not tp_candidates:
-                tp_candidates = [s for s in all_supports if s < entry_price * (1 - MIN_TP_PCT / 100)]
-            if tp_candidates:
-                tp_price = max(tp_candidates)
-                tp_pct = ((entry_price - tp_price) / entry_price) * 100
-                tp_pct = tp_pct * 0.95
-                tp_pct = max(tp_pct, MIN_TP_PCT)
+            # TP: just above the 6H low — that's the recent support floor for this bounce
+            tp_price = six_hour_low * 1.003  # 0.3% inside the floor
+            tp_pct = ((entry_price - tp_price) / entry_price) * 100
+            tp_pct = max(tp_pct, MIN_TP_PCT)
+            if tp_pct > 0:
                 result["tp_pct"] = round(tp_pct, 2)
                 result["tp_price"] = round(entry_price * (1 - tp_pct / 100), 8)
                 tp_found = True
+                print(f"  [CHART-SR] SHORT TP from 6H low ${six_hour_low:.4f} -> {tp_pct:.2f}%")
 
-            # SL: PREFER 4H resistance (structural), fallback to 1H, then 15m
+            # SL: 12H high wick, capped by nearest 4H structural resistance if closer
+            sl_ref_12h = twelve_hour_high * 1.003  # 0.3% above the 12H wick
+            sl_pct_12h = ((sl_ref_12h - entry_price) / entry_price) * 100
+            sl_pct_12h = max(sl_pct_12h, MIN_SL_PCT)
+
             sl_candidates_4h = [r for r in htf_resistances if r > entry_price * (1 + MIN_SL_PCT / 100)]
-            sl_candidates_1h = [r for r in ltf_resistances if r > entry_price * (1 + MIN_SL_PCT / 100)]
-            sl_candidates_15m = [r for r in mtf_resistances if r > entry_price * (1 + MIN_SL_PCT / 100)]
-
             if sl_candidates_4h:
-                sl_price = min(sl_candidates_4h)  # Nearest 4H resistance
-                sl_pct = ((sl_price - entry_price) / entry_price) * 100
-                sl_pct = sl_pct * 1.05
-                sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
+                sl_price_4h = min(sl_candidates_4h)  # nearest 4H resistance above entry
+                sl_pct_4h = ((sl_price_4h - entry_price) / entry_price) * 100 + 0.5
+                sl_pct = min(sl_pct_12h, sl_pct_4h)
                 sl_pct = max(sl_pct, MIN_SL_PCT)
-                result["sl_pct"] = round(sl_pct, 2)
-                result["sl_price"] = round(entry_price * (1 + sl_pct / 100), 8)
-                sl_found = True
-                print(f"  [CHART-SR] SL from 4H structural resistance ${sl_price:.4f} (+0.5% buffer)")
-            elif sl_candidates_1h:
-                sl_price = min(sl_candidates_1h)
-                sl_pct = ((sl_price - entry_price) / entry_price) * 100
-                sl_pct = sl_pct * 1.05
-                sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
-                sl_pct = max(sl_pct, MIN_SL_PCT)
-                result["sl_pct"] = round(sl_pct, 2)
-                result["sl_price"] = round(entry_price * (1 + sl_pct / 100), 8)
-                sl_found = True
-            elif sl_candidates_15m:
-                sl_price = min(sl_candidates_15m)
-                sl_pct = ((sl_price - entry_price) / entry_price) * 100
-                sl_pct = sl_pct * 1.05
-                sl_pct = sl_pct + 0.5   # V3.1.94: +0.5% buffer for all SLs
-                sl_pct = max(sl_pct, MIN_SL_PCT)
-                result["sl_pct"] = round(sl_pct, 2)
-                result["sl_price"] = round(entry_price * (1 + sl_pct / 100), 8)
-                sl_found = True
-                print(f"  [CHART-SR] SL from 15m micro resistance ${sl_price:.4f} (+0.5% buffer)")
+                print(f"  [CHART-SR] SHORT SL: 12H_high={sl_pct_12h:.2f}% vs 4H_struct={sl_pct_4h:.2f}% -> using {sl_pct:.2f}%")
+            else:
+                sl_pct = sl_pct_12h
+                print(f"  [CHART-SR] SHORT SL from 12H high ${twelve_hour_high:.4f} -> {sl_pct:.2f}%")
+
+            result["sl_pct"] = round(sl_pct, 2)
+            result["sl_price"] = round(entry_price * (1 + sl_pct / 100), 8)
+            sl_found = True
 
         if tp_found and sl_found:
             result["method"] = "chart_mtf" if has_4h else "chart"
-            method_label = "MTF" if has_4h else "1H"
+            method_label = "6H/12H+4H" if has_4h else "6H/12H"
             print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} {signal} [{method_label}]: "
                   f"TP {result['tp_pct']:.2f}% (${result['tp_price']:.4f}), "
-                  f"SL {result['sl_pct']:.2f}% (${result['sl_price']:.4f}) "
-                  f"| 4H: {len(htf_resistances)}R/{len(htf_supports)}S, 1H: {len(ltf_resistances)}R/{len(ltf_supports)}S, 15m: {len(mtf_resistances)}R/{len(mtf_supports)}S")
+                  f"SL {result['sl_pct']:.2f}% (${result['sl_price']:.4f})")
         elif tp_found:
             result["method"] = "chart_mtf" if has_4h else "chart"
             print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()}: TP found ({result['tp_pct']:.2f}%), SL fallback")

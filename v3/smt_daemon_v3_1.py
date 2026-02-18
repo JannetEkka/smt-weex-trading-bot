@@ -687,13 +687,30 @@ def check_trading_signals():
         _best_unexecuted = None  # Best signal that couldn't trade (slots full, already positioned, etc.)
         _chop_blocked_pairs = []
 
-        # V3.2.5: Pre-initialize execution counters for inline new-trade execution.
-        # New trades execute immediately on signal — don't batch all 8 pairs first.
-        trades_executed = 0
-        long_count = sum(1 for p in open_positions if p.get("side", "").upper() == "LONG")
-        short_count = sum(1 for p in open_positions if p.get("side", "").upper() == "SHORT")
-        MAX_SAME_DIRECTION = 5
-        confidence_slots_used = 0
+        # V3.2.5: Parallel pair analysis — run all Gemini/API calls concurrently.
+        # Eliminates the 4-5 min sequential delay (was sum of all pair times).
+        # Results collected and sorted before execution, so global confidence ranking is preserved.
+        # max_workers=4 avoids hammering Gemini with 8 simultaneous calls.
+        _pair_list = list(TRADING_PAIRS.items())
+
+        def _run_pair_analysis(pair_and_info):
+            _pair, _pair_info = pair_and_info
+            try:
+                return _pair, run_with_retry(
+                    analyzer.analyze, _pair, _pair_info, balance, competition, open_positions
+                )
+            except Exception as _e:
+                logger.error(f"Parallel analysis error for {_pair}: {_e}")
+                return _pair, {"decision": "WAIT", "confidence": 0, "reasoning": f"Analysis error: {_e}"}
+
+        logger.info(f"Analyzing {len(_pair_list)} pairs in parallel (max 4 concurrent)...")
+        _mark_progress()
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        with _TPE(max_workers=4) as _pool:
+            _raw_results = list(_pool.map(_run_pair_analysis, _pair_list, timeout=180))
+        _decisions_cache = {_pair: _result for _pair, _result in _raw_results}
+        _mark_progress()
+        logger.info("Parallel analysis complete. Processing signals...")
 
         for pair, pair_info in TRADING_PAIRS.items():
             symbol = pair_info["symbol"]
@@ -712,16 +729,11 @@ def check_trading_signals():
             cooldown_remaining = tracker.get_cooldown_remaining(symbol) if on_cooldown else 0
             
             try:
-                # V3.1.73: Mark progress PER-PAIR so watchdog doesn't kill during long signal checks
+                # V3.2.5: Use pre-computed result from parallel analysis phase
                 _mark_progress()
-
-                # ALWAYS analyze
-                decision = run_with_retry(
-                    analyzer.analyze,
-                    pair, pair_info, balance, competition, open_positions
+                decision = _decisions_cache.get(
+                    pair, {"decision": "WAIT", "confidence": 0, "reasoning": "Analysis not available"}
                 )
-
-                # V3.1.73: Mark progress after each analysis completes
                 _mark_progress()
 
                 confidence = decision.get("confidence", 0)
@@ -1079,64 +1091,15 @@ def check_trading_signals():
                         logger.warning(f"RL log error: {e}")
 
                 
-                # Add to opportunities if tradeable
+                # Add to opportunities if tradeable — sorted and executed after all pairs processed
                 if can_trade_this:
-                    if trade_type == "new":
-                        # V3.2.5: INLINE EXECUTION — execute new trades immediately.
-                        # Dip signals are time-sensitive; the bounce can be over by the
-                        # time all 8 pairs finish analysis (4-5 min delay killed entries).
-                        _dir_ok = not (signal == "LONG" and long_count >= MAX_SAME_DIRECTION) and \
-                                  not (signal == "SHORT" and short_count >= MAX_SAME_DIRECTION)
-                        if confidence < 0.80:
-                            logger.info(f"    -> SESSION FILTER: {confidence:.0%} < 80%, skip")
-                        elif not _dir_ok:
-                            logger.info(f"    -> DIRECTIONAL LIMIT: {long_count}L/{short_count}S open, skip {pair} {signal}")
-                        else:
-                            logger.info(f"")
-                            logger.info(f"EXECUTING {pair} {signal} (T{tier}) - {confidence:.0%} [INLINE]")
-                            try:
-                                trade_result = run_with_retry(
-                                    execute_trade,
-                                    pair_info, decision, balance
-                                )
-                                if trade_result.get("executed"):
-                                    logger.info(f"Trade executed: {trade_result.get('order_id')}")
-                                    logger.info(f"  TP: {trade_result.get('tp_pct'):.1f}%, SL: {trade_result.get('sl_pct'):.1f}%")
-                                    trade_result["confidence"] = confidence
-                                    whale_conf = 0.0
-                                    whale_dir = "NEUTRAL"
-                                    for pv in decision.get("persona_votes", []):
-                                        if pv.get("persona") == "WHALE":
-                                            whale_conf = pv.get("confidence", 0.0)
-                                            whale_dir = pv.get("signal", "NEUTRAL")
-                                            break
-                                    trade_result["whale_confidence"] = whale_conf
-                                    trade_result["whale_direction"] = whale_dir
-                                    tracker.add_trade(symbol, trade_result)
-                                    state.trades_opened += 1
-                                    _last_trade_opened_at = time.time()
-                                    ai_log["trades"].append(trade_result)
-                                    if signal == "LONG": long_count += 1
-                                    elif signal == "SHORT": short_count += 1
-                                    trades_executed += 1
-                                    available_slots -= 1
-                                    can_open_new = available_slots > 0 and not low_equity_mode
-                                    balance = get_balance()
-                                else:
-                                    logger.warning(f"Trade failed: {trade_result.get('reason')}")
-                            except Exception as _inline_err:
-                                logger.error(f"Error executing {pair} inline: {_inline_err}")
-                            time.sleep(3)
-                    else:
-                        # Slot swap and opposite trades — collect for second pass.
-                        # These need cross-signal comparison (find weakest position, etc.)
-                        trade_opportunities.append({
-                            "pair": pair,
-                            "pair_info": pair_info,
-                            "decision": decision,
-                            "tier": tier,
-                            "trade_type": trade_type,
-                        })
+                    trade_opportunities.append({
+                        "pair": pair,
+                        "pair_info": pair_info,
+                        "decision": decision,
+                        "tier": tier,
+                        "trade_type": trade_type,
+                    })
                 
                 time.sleep(2)
                 _mark_progress()  # V3.1.74: per-pair progress mark (was only after full signal check)
@@ -1150,8 +1113,7 @@ def check_trading_signals():
             trade_opportunities.sort(key=lambda x: x["decision"]["confidence"], reverse=True)
 
             # V3.1.78: CONFIDENCE CASCADE - only consider top N candidates for current equity tier
-            # V3.2.5: Account for trades already executed inline (trades_executed > 0)
-            current_positions = len(open_positions) + trades_executed
+            current_positions = len(open_positions)
             available_slots = effective_max_positions - current_positions
             # V3.1.64: HARD CAP - never exceed BASE_SLOTS total regardless of mode
             if current_positions >= BASE_SLOTS:
@@ -1163,8 +1125,10 @@ def check_trading_signals():
                 for d in dropped:
                     logger.info(f"  CASCADE DROP: {d['pair']} ({d['decision']['confidence']:.0%}) - only top {available_slots} candidates selected")
 
-            # confidence_slots_used and trades_executed pre-initialized before pair loop (V3.2.5)
-            # trades_executed continues accumulating from inline phase
+            # V3.1.26: Track confidence override slots used
+            confidence_slots_used = 0
+
+            trades_executed = 0
             
             # V3.1.41: Count directional exposure BEFORE executing
             long_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "LONG")
@@ -3383,13 +3347,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.5 - Dip Signal Strategy (inline execution + 1H TP targeting)")
+    logger.info("SMT Daemon V3.2.5 - Dip Signal Strategy (parallel analysis + 6H/12H TP/SL)")
     logger.info("=" * 60)
     logger.info("V3.2.5 CHANGES:")
-    logger.info("  - V3.2.5: Inline execution — new trades execute immediately on signal, not after all 8 pairs analyzed")
-    logger.info("  - V3.2.5: TP targeting — prefer 1H + 15m S/R levels for TP (recent price action, fits 0.3-0.8%%)")
-    logger.info("  - V3.2.5: TP targeting — 4H used for SL only (structural); 1H/15m pool first, 4H fallback")
-    logger.info("  - V3.2.5: Slot swap / opposite trades still collect for second pass (need cross-signal comparison)")
+    logger.info("  - V3.2.5: Parallel analysis — all 8 pairs analyzed concurrently (ThreadPoolExecutor, max 4 workers)")
+    logger.info("  - V3.2.5: Parallel analysis — cycle time = max(pair_time) not sum; eliminates 4-5min entry delay")
+    logger.info("  - V3.2.5: Batch execution preserved — signals sorted by confidence before executing best one")
+    logger.info("  - V3.2.5: TP = 6H high * 0.997 (LONG) / 6H low * 1.003 (SHORT) — recent ceiling/floor")
+    logger.info("  - V3.2.5: SL = 12H wick * 0.997, capped by nearest 4H structural level (tighter of the two)")
     logger.info("V3.2.4 CHANGES:")
     logger.info("  - V3.2.4: Judge prompt — TP guidance updated to 0.3-0.5%% (was 3-4%%, stale from V3.1)")
     logger.info("  - V3.2.4: Judge prompt — removed '85%%+ conf = 7.2%% win rate' suppressor line")
