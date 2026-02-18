@@ -3341,13 +3341,12 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.6 - Dip Signal Strategy (persistent signal history across restarts)")
+    logger.info("SMT Daemon V3.2.6 - DOGE plan order fix + equity-tiered slot count")
     logger.info("=" * 60)
     logger.info("V3.2.6 CHANGES:")
-    logger.info("  - V3.2.6: Signal persistence moved into TradeTracker.signal_history (survives daemon restarts)")
-    logger.info("  - V3.2.6: entry_time + last_seen timestamps added to signal_history entries")
-    logger.info("  - V3.2.6: Stale filter on load — entries older than 20min are dropped (market changed)")
-    logger.info("  - V3.2.6: tracker.save_state() called at end of every signal cycle (not just on trade)")
+    logger.info("  - V3.2.6: DOGE _fix_plan_orders() — re-place TP/SL after entry, prevents SL drift")
+    logger.info("  - V3.2.6: 2s sleep after pre-trade orphan cleanup before set_leverage()")
+    logger.info("  - V3.2.6: Slot count now uses equity not balance (regression fix, 2 call sites)")
     logger.info("V3.2.4 CHANGES:")
     logger.info("  - V3.2.4: Judge prompt — TP guidance updated to 0.3-0.5%% (was 3-4%%, stale from V3.1)")
     logger.info("  - V3.2.4: Judge prompt — removed '85%%+ conf = 7.2%% win rate' suppressor line")
