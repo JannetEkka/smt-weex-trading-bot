@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 8 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 
-**Current version: V3.2.1** — all production code is in `v3/`.
+**Current version: V3.2.2** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -121,9 +121,10 @@ POSITION_MONITOR_INTERVAL = 120      # 2min
 # per_slot_cap = (sizing_base * 0.85) / max_slots
 # Margin guard: skip trades if available margin < 15% of balance
 
-# TP caps (V3.2.0: dip-signal strategy — grab 0.5% bounce, re-enter next cycle)
-# Chart-based: MIN_TP_PCT = 0.3%, MAX_TP_PCT = 0.6% (preferred target ~0.5%)
-# Fallback: COMPETITION_FALLBACK_TP = 0.5% (all tiers, was 1.5-1.8%)
+# TP/SL bounds (V3.2.2: uncapped — let chart find real structural levels)
+# MIN_TP_PCT = 0.3%  (floor only — no ceiling, chart finds real resistance)
+# MIN_SL_PCT = 1.0%  (floor only — no ceiling, SL sits at real 4H structure)
+# Fallback: COMPETITION_FALLBACK_TP = 0.5% (all tiers, when chart SR fails)
 
 # Opposite swap gates (V3.1.100)
 # OPPOSITE_MIN_AGE_MIN = 20       # Don't flip positions younger than 20 minutes
@@ -221,7 +222,7 @@ python3 v3/smt_nightly_trade_v3_1.py --test
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.1. Next change should be V3.2.2.
+Current: V3.2.2. Next change should be V3.2.3.
 
 **CRITICAL RULE (V3.1.85+): The 80% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that
