@@ -41,6 +41,19 @@ v3/
 └── *.bak*, *.patch             # Version history (ignore)
 ```
 
+## Trading Philosophy — Dip Signals, Fast Banking
+
+**This is a high-frequency, high-margin, small-move strategy. Do NOT evaluate it with classical swing-trade R:R logic.**
+
+Key pattern: **signals fire on dips.** After a sharp price drop, FLOW picks up buying pressure at the bottom and WHALE/SENTIMENT confirm. The bot enters LONG near the dip bottom and targets a quick bounce recovery — NOT a full trend reversal.
+
+- **Preferred TP is ~0.5%.** Grab the dip bounce and exit fast. If the move continues, the next 10-min signal cycle catches re-entry. Do NOT hold waiting for a bigger move — the 10-min daemon loop IS the strategy.
+- **High win rate > high R:R.** With correct dip entries the win rate is high enough that small TPs are profitable at scale. Classical swing-trade R:R math does not apply here.
+- **The chop filter (BBs + ADX) exists to block trending markets** — where a "dip" may just keep going down. It does NOT mean "avoid tight ranges." A tight BB squeeze is fine for a dip bounce; what you're avoiding is a strong directional trend where the SL gets hit.
+- **Compound fast.** Many small wins × leverage × reinvestment beats waiting for 3% moves. Capital rotation speed is the edge.
+
+**Do NOT flag small TPs or "poor R:R" — that framing is wrong for this strategy.** A 0.5% TP on a dip-bottom entry with a 10-min re-entry loop is the design, not a flaw.
+
 ## Critical Rules
 
 ### WEEX AI Log Uploads Are MANDATORY
