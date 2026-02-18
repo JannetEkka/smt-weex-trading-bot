@@ -42,13 +42,9 @@ v3/                              # PRIMARY production folder
 ├── logs/daemon_v3_1_7_*.log    # Daily daemon logs
 └── *.bak*, *.patch             # Version history (ignore)
 
-v2/                              # SECONDARY production copy (V3.2.1 snapshot, same codebase)
-├── smt_daemon_v2_1.py          # Daemon copy (identical logic to v3/)
-├── smt_nightly_trade_v3_1.py   # Trading logic copy
-├── watchdog.sh                 # Same watchdog pattern as v3/
-├── close_all_positions.py      # Emergency close
-├── trade_state_v3_1_7.json     # Independent state file
-└── backup/                     # Versioned daemon backups
+v2/                              # BACKUP SNAPSHOT ONLY — do not run
+│                               # V3.2.2 snapshot kept for emergency rollback
+└── (mirror of v3/ — not in active use)
 ```
 
 ## Trading Philosophy — Dip Signals, Fast Banking
@@ -190,8 +186,6 @@ git pull origin main
 pkill -f watchdog.sh; pkill -f smt_daemon
 # Restart via watchdog — ALWAYS start the watchdog, not the daemon directly
 cd v3 && nohup bash watchdog.sh >> logs/watchdog.log 2>&1 &
-# Or for v2:
-cd v2 && nohup bash watchdog.sh >> logs/watchdog.log 2>&1 &
 ```
 
 ### Emergency close all positions
@@ -238,6 +232,7 @@ lowers the trading threshold below 80%. Quality over quantity wins competitions.
 ## Files to Ignore
 
 - `v3/*.bak*`, `v3/*.patch` — old backups, don't modify
+- `v2/` — backup snapshot, not in active use. Do not run.
 - `v4/` — future version, not in production
 - `v3/all_rl_data.jsonl` — RL training data, read-only during competition
 - `data/`, `models/`, `notebooks/` — analysis artifacts
