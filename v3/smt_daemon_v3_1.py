@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.2.8 - extreme fear short restriction (90% floor)
+SMT Trading Daemon V3.2.9 - extreme fear SHORT TP capped at 0.5%
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -3341,11 +3341,11 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.8 - extreme fear short restriction (90% floor)")
+    logger.info("SMT Daemon V3.2.9 - extreme fear SHORT TP capped at 0.5%")
     logger.info("=" * 60)
-    logger.info("V3.2.8 CHANGES:")
-    logger.info("  - V3.2.8: Extreme fear short restriction — F&G < 20 requires 90%% conf for SHORTs (was 80%%)")
-    logger.info("  - V3.2.8: Blocks bounce-fighting shorts in deep capitulation; longs unaffected")
+    logger.info("V3.2.9 CHANGES:")
+    logger.info("  - V3.2.9: Extreme fear SHORT TP capped at 0.5%% when F&G < 20 (chart SR may target 1-2%% but bounces hit first)")
+    logger.info("  - V3.2.9: Reverts V3.2.8 signal block — issue was TP greed, not signal quality")
     logger.info("V3.2.7 CHANGES:")
     logger.info("  - V3.2.7: Slot ladder revised — <$4K: 3 slots, $4K-$6K: 4 slots, $6K+: 5 slots (hard cap)")
     logger.info("  - V3.2.7: Removed 6/7/8 slot tiers — keeps per-trade sizing meaningful")

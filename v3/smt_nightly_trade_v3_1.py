@@ -3107,19 +3107,6 @@ Respond with JSON ONLY (no markdown, no backticks):
                 return self._wait_decision(f"Gemini confidence too low: {confidence:.0%} < {CHOP_FALLBACK_CONFIDENCE:.0%}", persona_votes,
                     [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
 
-            # V3.2.8: Extreme fear short restriction
-            # In deep capitulation (F&G < 20), bounces are frequent and violent.
-            # Even 2-co-primary SHORT signals get faked out by relief rallies.
-            # Require 90% confidence for SHORTs (vs standard 80%) to filter noise.
-            if decision == "SHORT" and regime:
-                _fg_extreme = regime.get("fear_greed", 50)
-                if _fg_extreme < 20 and confidence < 0.90:
-                    return self._wait_decision(
-                        f"Extreme fear short blocked: F&G={_fg_extreme} < 20, need 90% conf (have {confidence:.0%})",
-                        persona_votes,
-                        [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes]
-                    )
-
             # V3.1.59: Confidence-tiered position sizing with FLOW+WHALE alignment
             flow_whale_aligned = False
             flow_vote = next((v for v in persona_votes if v.get("persona") == "FLOW"), None)
@@ -3780,6 +3767,23 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         sl_pct = sl_pct_raw / 100
         mtf_label = "MTF" if chart_sr["method"] == "chart_mtf" else "1H"
         print(f"  [TP/SL] CHART-BASED [{mtf_label}]: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
+
+        # V3.2.9: In extreme fear, cap SHORT TP at competition fallback (0.5%)
+        # Chart SR finds support 1-2% below entry, but violent bounces hit before that.
+        # LONG TPs are naturally small in fear (entry at dip, resistance is close).
+        # SHORTs need the same discipline — bank fast, don't hold for the full S/R target.
+        if signal == "SHORT":
+            try:
+                _fg_tp_regime = REGIME_CACHE.get("regime", {})
+                _fg_tp = _fg_tp_regime.get("fear_greed", 50) if _fg_tp_regime else 50
+                _tp_cap = COMPETITION_FALLBACK_TP.get(tier, 0.5)
+                if _fg_tp < 20 and tp_pct_raw > _tp_cap:
+                    print(f"  [TP/SL] Extreme fear SHORT TP capped: {tp_pct_raw:.2f}% → {_tp_cap:.2f}% (F&G={_fg_tp})")
+                    tp_pct_raw = _tp_cap
+                    tp_pct = tp_pct_raw / 100
+                    tp_price = current_price * (1 - tp_pct)
+            except Exception:
+                pass
     else:
         # FALLBACK: Use competition-tightened percentages (NOT the old wide 3.0-3.5%)
         if _in_competition:
