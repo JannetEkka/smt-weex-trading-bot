@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMT Trading Daemon V3.2.10 - slot thresholds raised to $5K/$6K
+SMT Trading Daemon V3.2.11 - drop DOGE, tighten capitulation swap gate
 =========================
 CRITICAL FIX: HARD STOP was killing regime-aligned trades.
 
@@ -479,7 +479,7 @@ def _find_weakest_position(open_positions, new_symbol, position_map, fear_greed=
     MIN_AGE_MS = 45 * 60 * 1000  # 45 minutes minimum before eligible for swap
     # V3.1.87: Regime-aware swap threshold
     if fear_greed < 20:
-        MIN_PNL_FOR_SWAP = -0.25  # Capitulation: opportunity cost > swap cost
+        MIN_PNL_FOR_SWAP = -0.10  # V3.2.11: Capitulation: tighter gate — free stale slots sooner
         logger.info(f"  [SWAP] Regime gate: F&G={fear_greed}, threshold={MIN_PNL_FOR_SWAP}%")
     else:
         MIN_PNL_FOR_SWAP = -0.5   # Normal: don't kill positions that might recover
@@ -3341,8 +3341,11 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.10 - slot thresholds raised to $5K/$6K")
+    logger.info("SMT Daemon V3.2.11 - drop DOGE, tighten capitulation swap gate")
     logger.info("=" * 60)
+    logger.info("V3.2.11 CHANGES:")
+    logger.info("  - V3.2.11: DOGE removed from TRADING_PAIRS — erratic SL behavior, not worth the slot")
+    logger.info("  - V3.2.11: Capitulation swap threshold -0.25%% → -0.10%% — free stale slots sooner in extreme fear")
     logger.info("V3.2.10 CHANGES:")
     logger.info("  - V3.2.10: Slot threshold $4K→$5K — per-slot margin ≥$1K at all tiers (≥$100/trade at 0.5%% TP)")
     logger.info("  - V3.2.10: Math: slots expand only when sizing_base × 0.85 / slots ≥ $1K")

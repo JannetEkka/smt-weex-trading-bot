@@ -1668,7 +1668,7 @@ TRADING_PAIRS = {
     "BNB": {"symbol": "cmt_bnbusdt", "tier": 1, "has_whale_data": True},
     "LTC": {"symbol": "cmt_ltcusdt", "tier": 2, "has_whale_data": True},   # V3.1.77: T1→T2 ($8B mcap)
     "SOL": {"symbol": "cmt_solusdt", "tier": 3, "has_whale_data": True},   # V3.1.78: T2→T3 (ATR SL 3.36%, more volatile than ADA)
-    "DOGE": {"symbol": "cmt_dogeusdt", "tier": 3, "has_whale_data": True},
+    # DOGE removed V3.2.11 — erratic SL behavior, not worth the slot
     "XRP": {"symbol": "cmt_xrpusdt", "tier": 2, "has_whale_data": True},   # V3.1.77: T3→T2 ($70B mcap)
     "ADA": {"symbol": "cmt_adausdt", "tier": 3, "has_whale_data": True},
 }
