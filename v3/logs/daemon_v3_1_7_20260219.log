@@ -3773,3 +3773,161 @@
 2026-02-19 03:45:33 | INFO     |   [MONITOR] cmt_btcusdt T1: +0.16% (peak: 0.22%) conf=90%
 2026-02-19 03:45:34 | INFO     | HEALTH | Up: 2:04:40 | Signals: 12 | Trades: 5/1 | Active: 4
 2026-02-19 03:46:32 | INFO     | HEALTH | Up: 2:05:38 | Signals: 12 | Trades: 5/1 | Active: 4
+2026-02-19 03:48:37 | INFO     | Trade module imports OK
+2026-02-19 03:48:37 | INFO     | ============================================================
+2026-02-19 03:48:37 | INFO     | SMT Daemon V3.2.20 - 12H SR TP scan + WHALE dual source + FLOW wall TP
+2026-02-19 03:48:37 | INFO     | ============================================================
+2026-02-19 03:48:37 | INFO     | V3.2.20 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.20: Chart SR TP: when 2H_high below entry, scan 12H for nearest resistance above entry
+2026-02-19 03:48:37 | INFO     |   - V3.2.20: Fixes 0.5%% fallback firing every trade in bear/chop when entry is above recent ceiling
+2026-02-19 03:48:37 | INFO     |   - V3.2.20: WHALE BTC/ETH now always runs Etherscan on-chain + Cryptoracle combined (not either/or)
+2026-02-19 03:48:37 | INFO     |   - V3.2.20: FLOW wall TP: nearest significant ask/bid wall from live order book depth
+2026-02-19 03:48:37 | INFO     |   - V3.2.20: TP priority: Gemini structural > FLOW wall > 12H SR scan > 0.5%% fallback
+2026-02-19 03:48:37 | INFO     | V3.2.19 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.19: Fee bleed tracking — [FEE] Open logged per trade, Gross/Fees(R-T)/Net at close
+2026-02-19 03:48:37 | INFO     |   - V3.2.19: HEALTH line now shows cumulative session fees + estimated net PnL
+2026-02-19 03:48:37 | INFO     |   - V3.2.19: TAKER_FEE_RATE=0.06%%/side. At 20x leverage = ~2.4%% margin drag per round-trip
+2026-02-19 03:48:37 | INFO     | V3.2.18 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.18: CHOP FILTER PENALTIES REMOVED — detection kept for logging, no blocking/penalty
+2026-02-19 03:48:37 | INFO     |   - V3.2.18: 80%% confidence floor + 0.5%% extreme fear TP cap = sufficient protection
+2026-02-19 03:48:37 | INFO     |   - V3.2.18: Chop was blocking correct signals (ADA 88%% SHORT) and passing wrong ones via overrides
+2026-02-19 03:48:37 | INFO     |   - V3.2.18: Shorts allowed for ALL 7 pairs (was LTC only). Ensemble decides direction.
+2026-02-19 03:48:37 | INFO     |   - V3.2.18: In F&G<20, restricting to LONG only = fighting the trend. Trust the signals.
+2026-02-19 03:48:37 | INFO     | V3.2.17 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.17: Stale position auto-close REMOVED — slot swap already handles underperformers
+2026-02-19 03:48:37 | INFO     |   - V3.2.17: Prevents premature exits like SOL +0.23%% stale-closed then re-entered at worse price
+2026-02-19 03:48:37 | INFO     |   - V3.2.17: CRITICAL BUG FIX — extreme fear TP cap was NEVER firing (REGIME_CACHE.get passed {{}} as TTL)
+2026-02-19 03:48:37 | INFO     |   - V3.2.17: LTC had 2.52%% TP in F&G=8 — cap at 0.5%% was silently skipped by TypeError in try/except
+2026-02-19 03:48:37 | INFO     | V3.2.16 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.16: BTC/ETH/BNB RE-ADDED — 7 pairs with Gemini 1D+4H chart context for smarter TP targeting
+2026-02-19 03:48:37 | INFO     |   - V3.2.16: get_chart_context() — pulls 5D daily + 32H 4H candles, feeds structural S/R to Judge
+2026-02-19 03:48:37 | INFO     |   - V3.2.16: Judge prompt now includes CHART STRUCTURE section + returns tp_price (structural target)
+2026-02-19 03:48:37 | INFO     |   - V3.2.16: Gemini tp_price overrides 2H anchor in TP/SL when within 0.3-5.0%% sanity range
+2026-02-19 03:48:37 | INFO     |   - V3.2.16: 4 slots flat for 7 pairs (was 3 for 4). Shorts: LTC only.
+2026-02-19 03:48:37 | INFO     |   - V3.2.16: Display truncation fixed — Judge reasoning 150→600 chars, portfolio 100→400 chars
+2026-02-19 03:48:37 | INFO     |   - V3.2.16: XRP TP cap (0.70%%) only applies when Gemini doesn't provide structural target
+2026-02-19 03:48:37 | INFO     | V3.2.14 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.14: Flat slot cap — no equity scaling, no group tiers
+2026-02-19 03:48:37 | INFO     | V3.2.13 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.13: Fixed 4-slot system — 3 slots for small-caps (LTC/XRP/SOL/ADA), 1 reserved for large-cap (ETH/BNB/BTC)
+2026-02-19 03:48:37 | INFO     |   - V3.2.13: Shorts restricted to LTC only — all other pairs LONG direction only
+2026-02-19 03:48:37 | INFO     |   - V3.2.13: Equity-tiered slot scaling removed — slots no longer expand with balance
+2026-02-19 03:48:37 | INFO     | V3.2.12 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.12: TP anchor 6H→2H in find_chart_based_tp_sl() — dip entries no longer anchored to pre-dip peak
+2026-02-19 03:48:37 | INFO     |   - V3.2.12: Extreme fear TP cap extended to LONG signals (was SHORT-only in V3.2.9)
+2026-02-19 03:48:37 | INFO     |   - V3.2.12: XRP/ADA peaked 0.25-0.28%%, chart said 2-3%% TP — positions never exited. Now capped at 0.5%%
+2026-02-19 03:48:37 | INFO     | V3.2.11 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.11: DOGE removed from TRADING_PAIRS — erratic SL behavior, not worth the slot
+2026-02-19 03:48:37 | INFO     |   - V3.2.11: Capitulation swap threshold -0.25%% → -0.10%% — free stale slots sooner in extreme fear
+2026-02-19 03:48:37 | INFO     | V3.2.10 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.10: Slot threshold $4K→$5K — per-slot margin ≥$1K at all tiers (≥$100/trade at 0.5%% TP)
+2026-02-19 03:48:37 | INFO     |   - V3.2.10: Math: slots expand only when sizing_base × 0.85 / slots ≥ $1K
+2026-02-19 03:48:37 | INFO     | V3.2.9 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.9: Extreme fear SHORT TP capped at 0.5%% when F&G < 20 (chart SR may target 1-2%% but bounces hit first)
+2026-02-19 03:48:37 | INFO     |   - V3.2.9: Reverts V3.2.8 signal block — issue was TP greed, not signal quality
+2026-02-19 03:48:37 | INFO     | V3.2.7 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.7: Slot ladder revised — <$4K: 3 slots, $4K-$6K: 4 slots, $6K+: 5 slots (hard cap)
+2026-02-19 03:48:37 | INFO     |   - V3.2.7: Removed 6/7/8 slot tiers — keeps per-trade sizing meaningful
+2026-02-19 03:48:37 | INFO     | V3.2.6 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.6: DOGE _fix_plan_orders() — re-place TP/SL after entry, prevents SL drift
+2026-02-19 03:48:37 | INFO     |   - V3.2.6: 2s sleep after pre-trade orphan cleanup before set_leverage()
+2026-02-19 03:48:37 | INFO     |   - V3.2.6: Slot count now uses equity not balance (regression fix, 2 call sites)
+2026-02-19 03:48:37 | INFO     | V3.2.4 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.4: Judge prompt — TP guidance updated to 0.3-0.5%% (was 3-4%%, stale from V3.1)
+2026-02-19 03:48:37 | INFO     |   - V3.2.4: Judge prompt — removed '85%%+ conf = 7.2%% win rate' suppressor line
+2026-02-19 03:48:37 | INFO     |   - V3.2.4: Judge prompt — historical win rate is context only, not a veto (WHALE+FLOW override)
+2026-02-19 03:48:37 | INFO     |   - V3.2.4: Judge prompt — SHORT asymmetry: EXTREME FEAR needs 2+ co-primary, else equal to LONG
+2026-02-19 03:48:37 | INFO     | V3.2.3 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.3: find_chart_based_tp_sl() — add 15m as 3rd S/R layer (micro pivots, 12.5h, cluster 0.2%%)
+2026-02-19 03:48:37 | INFO     |   - V3.2.3: CHOP filter — FLOW EXTREME override [REMOVED V3.2.18: all chop penalties removed]
+2026-02-19 03:48:37 | INFO     |   - V3.2.3: EQUITY_POSITION_TIERS — sub-$8K tiers added (4 slots at $1K+ balance)
+2026-02-19 03:48:37 | INFO     | V3.2.2 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.2: Removed MAX_TP_PCT and MAX_SL_PCT caps from find_chart_based_tp_sl()
+2026-02-19 03:48:37 | INFO     |   - V3.2.2: Chart now uses real structural S/R levels without artificial % ceiling
+2026-02-19 03:48:37 | INFO     |   - V3.2.2: SL sits at real 4H resistance/support — wide SL is correct when thesis invalidated at structure
+2026-02-19 03:48:37 | INFO     |   - V3.2.2: ATR safety net _sl_max guard removed — ATR floor always applies when SL is too tight
+2026-02-19 03:48:37 | INFO     | V3.2.1 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.1: FLOW flip discount — if FLOW flips direction 180%% from last cycle, confidence halved (noise filter)
+2026-02-19 03:48:37 | INFO     |   - V3.2.1: TECHNICAL weight halved (0.8->0.4) in fear markets (F&G<30) — SMA signals lag in fear
+2026-02-19 03:48:37 | INFO     |   - V3.2.1: Gemini prompt: TECHNICAL de-weighted note added for fear markets
+2026-02-19 03:48:37 | INFO     |   - V3.2.1: Slot-swap threshold 83%%->80%% when signal persists 2+ cycles (consistent ensemble earns lower bar)
+2026-02-19 03:48:37 | INFO     |   - V3.2.1: RL logging: near_miss_signal/confidence + chop_blocked fields added to raw_market
+2026-02-19 03:48:37 | INFO     | V3.2.0 CHANGES:
+2026-02-19 03:48:37 | INFO     |   - V3.2.0: Dip-signal strategy — FLOW/WHALE fire into dip, bot catches bottom, 0.5%% TP exits fast
+2026-02-19 03:48:37 | INFO     |   - V3.2.0: Chart MIN_TP 0.8->0.3%%, MAX_TP 1.1->0.6%% — find resistance closer to entry
+2026-02-19 03:48:37 | INFO     |   - V3.2.0: COMPETITION_FALLBACK_TP all tiers 0.5%% — grab bounce, 10-min loop handles re-entry
+2026-02-19 03:48:37 | INFO     |   - V3.1.105: All pairs on 5m chop candles (BTC/ETH/BNB=48, LTC/SOL/DOGE/ADA=42, XRP=60)
+2026-02-19 03:48:37 | INFO     |   - V3.1.105: ADX(14) on 5m — thresholds (18,25) match 1H standard, BB(40) always computes
+2026-02-19 03:48:37 | INFO     |   - V3.1.104: REMOVED entry confirmation gate (fired at reversals, fought ensemble)
+2026-02-19 03:48:37 | INFO     |   - V3.1.104: Signal persistence — same direction 2+ cycles overrides MEDIUM chop
+2026-02-19 03:48:37 | INFO     |   - V3.1.103: Fix float precision in confirm gate (0.85-0.05=0.7999 bug, blocked valid 80%% trades)
+2026-02-19 03:48:37 | INFO     |   - V3.1.102: Stale position auto-close (PM: sideways >2h, PnL near zero, free slot)
+2026-02-19 03:48:37 | INFO     |   - V3.1.101: Entry confirmation gate (block early entries where price opposes signal)
+2026-02-19 03:48:37 | INFO     |   - V3.1.101: Per-pair CHOP timeframe (BTC uses 1H ADX(14), others stay 15m) [superseded by V3.1.105]
+2026-02-19 03:48:37 | INFO     |   - V3.1.100: Opposite swap TP proximity gate + deferred flip queue
+2026-02-19 03:48:37 | INFO     |   - V3.1.99: Flat 1.1%% TP cap all pairs, chart SL +0.5%% buffer, MAX_SL 2.5%%
+2026-02-19 03:48:37 | INFO     |   - NUKED: F&G veto, regime veto, freshness filter, consecutive loss block
+2026-02-19 03:48:37 | INFO     |   - NUKED: blacklist/cooldown entry block, global trade cooldown
+2026-02-19 03:48:37 | INFO     |   - NUKED: PM (gemini_portfolio_review), regime_aware_exit_check
+2026-02-19 03:48:37 | INFO     |   - NUKED: FLOW F&G cap, BTC fear shield
+2026-02-19 03:48:37 | INFO     |   - KEPT: 80%% confidence floor, chop filter, slots, margin guard, TP/SL
+2026-02-19 03:48:37 | INFO     |   - PHILOSOPHY: Ensemble sees everything. 80%%+ and not choppy = TRADE.
+2026-02-19 03:48:37 | INFO     | Tier Configuration:
+2026-02-19 03:48:37 | INFO     |   Tier 1: BTC, ETH
+2026-02-19 03:48:37 | INFO     |     TP: 3.0%, SL: 1.5%, Hold: 24h | No Runner
+2026-02-19 03:48:37 | INFO     |   Tier 2: BNB, LTC, XRP
+2026-02-19 03:48:37 | INFO     |     TP: 3.5%, SL: 1.5%, Hold: 12h | No Runner
+2026-02-19 03:48:37 | INFO     |   Tier 3: SOL, ADA
+2026-02-19 03:48:37 | INFO     |     TP: 3.0%, SL: 1.8%, Hold: 8h | No Runner
+2026-02-19 03:48:37 | INFO     | Cooldowns: ENFORCED (V3.1.81) + blacklist after force_stop
+2026-02-19 03:48:37 | INFO     | Slot Swap: ENABLED (V3.1.88) - 83% min conf, 45min age, regime-aware PnL gate
+2026-02-19 03:48:37 | INFO     | Slots (V3.2.16): 4 flat — BTC/ETH/BNB/LTC/XRP/SOL/ADA (7 pairs)
+2026-02-19 03:48:37 | INFO     | Shorts (V3.2.18): ALL pairs — 80%% floor + chop filter = protection
+2026-02-19 03:48:37 | INFO     | ============================================================
+2026-02-19 03:48:37 | INFO     | Syncing tracker with WEEX positions...
+2026-02-19 03:48:37 | INFO     | Sync complete. Tracking 4 entries for 4 WEEX positions.
+2026-02-19 03:48:37 | INFO     |   [cmt_xrpusdt] T2 LONG opened=2026-02-19T01:45:57 hold=2.0h/12h (original)
+2026-02-19 03:48:37 | INFO     |   [cmt_bnbusdt] T2 LONG opened=2026-02-19T01:46:05 hold=2.0h/12h (original)
+2026-02-19 03:48:37 | INFO     |   [cmt_ethusdt] T1 LONG opened=2026-02-19T02:44:09 hold=1.1h/24h (original)
+2026-02-19 03:48:37 | INFO     |   [cmt_btcusdt] T1 LONG opened=2026-02-19T03:01:35 hold=0.8h/24h (original)
+2026-02-19 03:48:40 | INFO     | Competition ACTIVE - initial signal check
+2026-02-19 03:48:40 | INFO     | ============================================================
+2026-02-19 03:48:40 | INFO     | SIGNAL CHECK - 20260219_034840
+2026-02-19 03:48:40 | INFO     | ============================================================
+2026-02-19 03:48:41 | INFO     | Balance: 1338.32 USDT | Equity: 4024.93 USDT | UPnL: +128.56
+2026-02-19 03:48:41 | INFO     | Open positions: 4
+2026-02-19 03:48:41 | INFO     | Days left: 4
+2026-02-19 03:48:41 | INFO     | Max positions (4/4) - Analysis only
+2026-02-19 03:48:41 | INFO     | CAPITULATION: F&G=9 < 15, hedging DISABLED (pick a side)
+2026-02-19 03:48:41 | INFO     | F&G: 9 (EXTREME FEAR) | Slots: 4/4
+2026-02-19 03:48:51 | INFO     | AFC is enabled with max remote calls: 10.
+  [HOT-RELOAD] Enabled
+
+  === Multi-Persona Analysis: BTC (Tier 1: Blue Chip) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (59%): Mild whale distribution: -259 ETH | Binance 2: -272 ETH [PM: SHORT MILD (-0.178)]
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (70%): Consistent 24-hour price decline and higher long liquidations indicate downward momentum.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 8.01, Asks: 12.01, Ratio: 0.67
+  [FLOW] Taker - Buy: 0.2487, Sell: 3.9921, Ratio: 0.06
+  [FLOW] Funding rate: -0.000030
+  [REGIME] NEUTRAL (score: 0, conf: 50%)
+  [REGIME] BTC 24h: -0.7% | F&G: 9 | Funding: -0.00006
+  [REGIME] OI Signal: NEUTRAL | Volatility: NORMAL | Alts: -0.2%
+  [REGIME]   > BTC weak: -0.7%
+  [REGIME]   > EXTREME FEAR (9): mild contrarian BUY bias
+  [FLOW] Taker ratio: 0.06 | Extreme sell: True | Heavy sell: True
+  [FLOW] SHORT (85%): EXTREME taker selling: 0.06
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] NEUTRAL (40%): No clear technical signal. RSI: 45.3
+  [JUDGE] Deciding...
+2026-02-19 03:49:22 | INFO     | Trade module imports OK
+2026-02-19 03:49:23 | INFO     | AFC is enabled with max remote calls: 10.
+  [CHOP-5M] BTCUSDT: HIGH CHOP: ADX=6 (very weak trend); BB=1.0% (very tight, T1 thresh=1.3), disp=0.2%
+  [JUDGE] Gemini: WAIT (0%)
+  [JUDGE] Reasoning: Despite strong FLOW indicating extreme taker selling (85% SHORT), the WHALE signal is only mildly bearish (59%). In the current Extreme Fear market (F&G=9), the strategy requires at least two strong co-primary signals to confirm a SHORT position due to high bounce risk. This condition is not met, and the market is also in a high chop state.
+2026-02-19 03:49:36 | INFO     |   BTC (T1): WAIT (0%) [L:+14.3]
+2026-02-19 03:49:36 | INFO     |     -> reason: Gemini Judge: Despite strong FLOW indicating extreme taker selling (85% SHORT), 
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 03:49:40 | INFO     | AFC is enabled with max remote calls: 10.
