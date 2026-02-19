@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 
-**Current version: V3.2.20** — all production code is in `v3/`.
+**Current version: V3.2.21** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -289,10 +289,11 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.20. Next change should be V3.2.21.
+Current: V3.2.21. Next change should be V3.2.22.
 
 **Recent version history:**
-- V3.2.20: (**CURRENT**) 12H SR fallback TP scan when 2H anchor is at/below entry; WHALE always uses Etherscan for BTC/ETH (dual source); FLOW order book wall detection (depth limit=200, top-15 levels, 1.5× avg threshold) fed to Judge as context (not hard TP override)
+- V3.2.21: (**CURRENT**) resolve_opposite_sides() closes OLDER position, not losing side — newer position represents current signal; ctime fallback to PnL-based close if timestamps unavailable
+- V3.2.20: 12H SR fallback TP scan when 2H anchor is at/below entry; WHALE always uses Etherscan for BTC/ETH (dual source); FLOW order book wall detection (depth limit=200, top-15 levels, 1.5× avg threshold) fed to Judge as context (not hard TP override)
 - V3.2.19: Fee bleed tracking — [FEE] Open per trade, Gross/Fees(R-T)/Net at close
 - V3.2.18: CHOP filter penalties removed (logging only); shorts allowed for ALL pairs; 80% floor + 0.5% TP protection; trust the signals
 - V3.2.17: Stale position auto-close removed; extreme fear TP cap bug fixed (TypeError silently skipped cap); Gemini portfolio review disabled

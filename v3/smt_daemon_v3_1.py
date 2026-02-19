@@ -2944,11 +2944,14 @@ def sync_tracker_with_weex():
 
 
 def resolve_opposite_sides():
-    """V3.1.55: If same symbol has BOTH Long and Short open, close the losing side.
-    
+    """V3.2.21: If same symbol has BOTH Long and Short open, close the OLDER side.
+
+    The newer position represents the current signal — close the stale one.
+    Falls back to closing the losing side if ctime is unavailable.
+
     This is a mechanical rule - no Gemini needed. Two sides on same pair is
     capital-inefficient and indicates the system changed its mind but didn't
-    clean up. Always close the losing side.
+    clean up.
     """
     try:
         positions = get_open_positions()
@@ -2990,22 +2993,39 @@ def resolve_opposite_sides():
             
             long_pnl = float(long_pos.get('unrealized_pnl', 0))
             short_pnl = float(short_pos.get('unrealized_pnl', 0))
+            long_ctime = int(long_pos.get('ctime', 0) or 0)
+            short_ctime = int(short_pos.get('ctime', 0) or 0)
             sym_clean = sym.replace('cmt_', '').upper()
-            
-            logger.info(f"  [OPPOSITE] {sym_clean}: LONG PnL=${long_pnl:.2f}, SHORT PnL=${short_pnl:.2f}")
-            
-            # Close the losing side (or smaller PnL if both positive)
-            if long_pnl <= short_pnl:
-                # Close LONG (it's the loser or smaller winner)
-                close_side = "LONG"
-                close_pos = long_pos
-                keep_side = "SHORT"
-                keep_pnl = short_pnl
+
+            logger.info(f"  [OPPOSITE] {sym_clean}: LONG PnL=${long_pnl:.2f} age={long_ctime}, SHORT PnL=${short_pnl:.2f} age={short_ctime}")
+
+            # V3.2.21: Close the OLDER side — newer position = current signal.
+            # Fall back to closing the losing side if ctime unavailable.
+            if long_ctime and short_ctime:
+                if long_ctime <= short_ctime:
+                    # LONG is older (smaller ctime = opened earlier)
+                    close_side = "LONG"
+                    close_pos = long_pos
+                    keep_side = "SHORT"
+                    keep_pnl = short_pnl
+                else:
+                    # SHORT is older
+                    close_side = "SHORT"
+                    close_pos = short_pos
+                    keep_side = "LONG"
+                    keep_pnl = long_pnl
             else:
-                close_side = "SHORT"
-                close_pos = short_pos
-                keep_side = "LONG"
-                keep_pnl = long_pnl
+                # Fallback: close losing side if ctime unavailable
+                if long_pnl <= short_pnl:
+                    close_side = "LONG"
+                    close_pos = long_pos
+                    keep_side = "SHORT"
+                    keep_pnl = short_pnl
+                else:
+                    close_side = "SHORT"
+                    close_pos = short_pos
+                    keep_side = "LONG"
+                    keep_pnl = long_pnl
             
             close_pnl = float(close_pos.get('unrealized_pnl', 0))
             close_size = float(close_pos.get('size', 0))
@@ -3036,7 +3056,7 @@ def resolve_opposite_sides():
                         "keeping_side": keep_side,
                     },
                     output_data={"action": "CLOSE_OPPOSITE", "order_id": oid},
-                    explanation=f"AI detected both LONG (PnL=${long_pnl:.2f}) and SHORT (PnL=${short_pnl:.2f}) open on {sym_clean}. Closing {close_side} side to eliminate capital-inefficient hedge and free margin for the winning {keep_side} position.",
+                    explanation=f"AI detected both LONG (PnL=${long_pnl:.2f}) and SHORT (PnL=${short_pnl:.2f}) open on {sym_clean}. Closing {close_side} (older position) — newer {keep_side} represents the current signal. Eliminated capital-inefficient hedge.",
                     order_id=oid
                 )
                 
@@ -3341,7 +3361,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.20 - 12H SR TP scan + WHALE dual source + FLOW wall TP")
+    logger.info("SMT Daemon V3.2.21 - resolve_opposite_sides: close older side (not losing)")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3408,6 +3428,7 @@ def run_daemon():
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
     logger.info("  V3.2.20: 12H SR fallback | WHALE dual source | FLOW walls fed to Judge (context, not override)")
+    logger.info("  V3.2.21: resolve_opposite_sides closes OLDER position, not losing side")
     logger.info("  V3.2.19: Fee bleed tracking — [FEE] per trade + Gross/Fees/Net at close + HEALTH cumulative")
     logger.info("  V3.2.18: Chop penalties removed | Shorts ALL pairs | Trust 80%% floor + 0.5%% TP")
     logger.info("  V3.2.17: Stale auto-close removed | Extreme fear TP cap bug fixed | Gemini PM disabled")
