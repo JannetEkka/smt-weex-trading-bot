@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.2.29 - Walk resistance list before discarding bad-TP trades
+SMT Nightly Trade V3.2.30 - WEEX TP/SL confirmation logging after placement
 =============================================================
 No partial closes. Higher conviction trades only.
 
@@ -4134,7 +4134,13 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     # Prevents SL price drift caused by orphan interference with WEEX preset processing.
     if symbol == "cmt_dogeusdt":
         _fix_plan_orders(symbol, signal, size, tp_price, sl_price)
-    
+
+    # V3.2.30: Verify WEEX actually stored the expected TP/SL trigger prices.
+    # Catches price drift between what we sent and what WEEX registered.
+    # (DOGE fix already ran above, so this verifies the final settled state for all pairs.)
+    if not TEST_MODE:
+        _verify_plan_orders(symbol, tp_price, sl_price)
+
     # Upload AI log
     upload_ai_log_to_weex(
         stage=f"Trade: {signal} {symbol.replace('cmt_', '').upper()}",
@@ -4581,6 +4587,51 @@ def _fix_plan_orders(symbol: str, signal: str, size: float, tp_price: float, sl_
             time.sleep(0.5)
     except Exception as e:
         print(f"  [PLAN-FIX] Warning: plan re-placement failed for {symbol}: {e}")
+
+
+def _verify_plan_orders(symbol: str, expected_tp: float, expected_sl: float) -> None:
+    """V3.2.30: Query WEEX plan orders after placement to confirm actual TP/SL trigger prices.
+    Surfaces discrepancies between what we sent and what WEEX stored.
+    Expected: 2 plan orders (one TP, one SL). Mismatches logged with *** MISMATCH ***.
+    LONG: TP = max(triggers), SL = min(triggers). SHORT: reversed.
+    """
+    try:
+        time.sleep(1.5)  # Let WEEX finish registering preset plan orders
+        endpoint = f"/capi/v2/order/plan_orders?symbol={symbol}"
+        r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=10)
+        if r.status_code != 200:
+            print(f"  [WEEX-CONFIRM] plan_orders HTTP {r.status_code} for {symbol}")
+            return
+        orders = r.json() if isinstance(r.json(), list) else []
+        pair = symbol.replace("cmt_", "").upper()
+        if not orders:
+            print(f"  [WEEX-CONFIRM] {pair}: no plan orders on WEEX (preset may still be processing)")
+            return
+        # Extract trigger prices — field name may vary; try both conventions
+        triggers = []
+        for o in orders:
+            t = o.get("trigger_price") or o.get("triggerPrice")
+            if t:
+                try:
+                    triggers.append(float(t))
+                except (ValueError, TypeError):
+                    pass
+        if not triggers:
+            # Field name unknown — log raw so we can identify the correct key
+            print(f"  [WEEX-CONFIRM] {pair}: {len(orders)} plan order(s) but no trigger_price field — raw[0]={orders[0]}")
+            return
+        # LONG: expected_tp > expected_sl → TP is the higher trigger, SL is the lower
+        is_long = expected_tp > expected_sl
+        weex_tp = max(triggers) if is_long else min(triggers)
+        weex_sl = min(triggers) if is_long else max(triggers)
+        tp_delta = (weex_tp - expected_tp) / expected_tp * 100
+        sl_delta = (weex_sl - expected_sl) / expected_sl * 100
+        tp_ok = abs(tp_delta) < 0.1  # 0.1% tolerance for tick-size rounding
+        sl_ok = abs(sl_delta) < 0.1
+        print(f"  [WEEX-CONFIRM] {pair} TP: sent=${expected_tp:.4f} | WEEX=${weex_tp:.4f} ({tp_delta:+.3f}%) {'OK' if tp_ok else '*** MISMATCH ***'}")
+        print(f"  [WEEX-CONFIRM] {pair} SL: sent=${expected_sl:.4f} | WEEX=${weex_sl:.4f} ({sl_delta:+.3f}%) {'OK' if sl_ok else '*** MISMATCH ***'}")
+    except Exception as e:
+        print(f"  [WEEX-CONFIRM] Warning: verification failed for {symbol}: {e}")
 
 
 def close_position_manually(symbol: str, side: str, size: float) -> Dict:

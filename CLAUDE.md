@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.29** — all production code is in `v3/`.
+**Current version: V3.2.30** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -299,10 +299,11 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.29. Next change should be V3.2.30.
+Current: V3.2.30. Next change should be V3.2.31.
 
 **Recent version history:**
-- V3.2.29: (**CURRENT**) Walk full resistance list (ascending LONG / descending SHORT) before discarding — if nearest SR is too close after haircut, try next candidate. COMPETITION_FALLBACK_TP promoted from fallback to universal 0.5% MAX TP ceiling on ALL trades (replaces extreme-fear-only and XRP caps). If chart SR finds no valid TP → trade discarded (no fallback %). TP caps are ceiling-only: never raise a low TP below 0.5%.
+- V3.2.30: (**CURRENT**) WEEX TP/SL confirmation logging — after each trade, query WEEX plan orders and compare actual stored trigger prices vs what was sent. Logs `[WEEX-CONFIRM]` with delta % and *** MISMATCH *** flag for any discrepancy > 0.1%.
+- V3.2.29: Walk full resistance list (ascending LONG / descending SHORT) before discarding — if nearest SR is too close after haircut, try next candidate. COMPETITION_FALLBACK_TP promoted from fallback to universal 0.5% MAX TP ceiling on ALL trades (replaces extreme-fear-only and XRP caps). If chart SR finds no valid TP → trade discarded (no fallback %). TP caps are ceiling-only: never raise a low TP below 0.5%.
 - V3.2.28: Bad-TP trades discarded — if TP lands at/below entry (haircut + slippage means entry is at resistance), skip the trade entirely. Sizing cache invalidated after each trade so next order sees updated available margin.
 - V3.2.27: 12H SR haircut validity check — haircut must still clear entry; final TP direction guard before place_order() (prevents WEEX 40015 rejection).
 - V3.2.26: Margin guard threshold fixed at $1000 (was balance×0.15 ≈ $150 — too low, produced tiny rejected orders); sizing base floor fixed at $1000 (same reason).

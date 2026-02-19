@@ -3283,7 +3283,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.29 - Walk resistance list before discarding bad-TP trades")
+    logger.info("SMT Daemon V3.2.30 - WEEX TP/SL confirmation logging after placement")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
