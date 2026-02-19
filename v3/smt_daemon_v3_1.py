@@ -3338,7 +3338,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.23 - banner cleanup; FLOW regime fetch moved before data calls")
+    logger.info("SMT Daemon V3.2.24 - MIN_TP_PCT floor removed; chart SR is ground truth")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3407,6 +3407,7 @@ def run_daemon():
     logger.info("  V3.2.21: resolve_opposite_sides closes OLDER position, not losing side")
     logger.info("  V3.2.22: no slot swap; confidence>=85% opens 5th slot; opposite closes immediately (no 15m wait)")
     logger.info("  V3.2.23: banner slot swap lines removed; FLOW calls regime first (fixes mid-block [REGIME] print)")
+    logger.info("  V3.2.24: MIN_TP_PCT=0.3%% floor removed — chart SR is the TP, no artificial minimum")
     logger.info("  V3.2.19: Fee bleed tracking — [FEE] per trade + Gross/Fees/Net at close + HEALTH cumulative")
     logger.info("  V3.2.18: Chop penalties removed | Shorts ALL pairs | Trust 80%% floor + 0.5%% TP")
     logger.info("  V3.2.17: Stale auto-close removed | Extreme fear TP cap bug fixed | Gemini PM disabled")

@@ -1138,7 +1138,8 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         "levels": {"resistances": [], "supports": [], "htf_resistances": [], "htf_supports": []}
     }
 
-    MIN_TP_PCT = 0.3   # TP must be at least 0.3% from entry
+    # V3.2.24: MIN_TP_PCT removed — chart SR is the ground truth. Flooring to 0.3% was placing
+    # TP beyond real resistance; price rejected at SR and TP never filled, bleeding to SL instead.
     MIN_SL_PCT = 1.0   # SL must be at least 1.0% from entry (20x = 20% margin loss min)
 
     try:
@@ -1192,7 +1193,6 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
             # TP: just inside the 2H ceiling (where sellers appeared most recently)
             tp_price = tp_high_2h * 0.997
             tp_pct   = (tp_price - entry_price) / entry_price * 100
-            tp_pct   = max(tp_pct, MIN_TP_PCT)
             if tp_price > entry_price:
                 result["tp_pct"]   = round(tp_pct, 2)
                 result["tp_price"] = round(entry_price * (1 + tp_pct / 100), 8)
@@ -1205,7 +1205,6 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                     _nearest_res = _cands[0]
                     _tp12_price  = _nearest_res * 0.997
                     _tp12_pct    = (_tp12_price - entry_price) / entry_price * 100
-                    _tp12_pct    = max(_tp12_pct, MIN_TP_PCT)
                     result["tp_pct"]   = round(_tp12_pct, 2)
                     result["tp_price"] = round(entry_price * (1 + _tp12_pct / 100), 8)
                     tp_found = True
@@ -1224,7 +1223,6 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
             # TP: just inside the 2H floor (where buyers appeared most recently)
             tp_price = tp_low_2h * 1.003
             tp_pct   = (entry_price - tp_price) / entry_price * 100
-            tp_pct   = max(tp_pct, MIN_TP_PCT)
             if tp_price < entry_price:
                 result["tp_pct"]   = round(tp_pct, 2)
                 result["tp_price"] = round(entry_price * (1 - tp_pct / 100), 8)
@@ -1237,7 +1235,6 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                     _nearest_sup = _cands[0]
                     _tp12_price  = _nearest_sup * 1.003
                     _tp12_pct    = (entry_price - _tp12_price) / entry_price * 100
-                    _tp12_pct    = max(_tp12_pct, MIN_TP_PCT)
                     result["tp_pct"]   = round(_tp12_pct, 2)
                     result["tp_price"] = round(entry_price * (1 - _tp12_pct / 100), 8)
                     tp_found = True
