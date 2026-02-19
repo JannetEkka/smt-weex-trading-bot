@@ -631,8 +631,8 @@ def check_trading_signals():
         CONFIDENCE_OVERRIDE_THRESHOLD = 0.85
         MAX_CONFIDENCE_SLOTS = 0  # V3.1.64a: DISABLED - hard cap is absolute
         
-        # V3.2.25: No hard slot cap — margin guard in get_sizing_base() limits naturally
-        can_open_new = not low_equity_mode
+        # V3.2.38: 4-slot hard cap restored (was removed in V3.2.25)
+        can_open_new = not low_equity_mode and available_slots > 0
 
         if low_equity_mode:
             logger.info(f"Low equity mode - no new trades allowed")
@@ -667,7 +667,7 @@ def check_trading_signals():
             pass
         # V3.1.88: Always log F&G in cycle header for observability
         _fg_label = "EXTREME FEAR" if _fg_value < 20 else "FEAR" if _fg_value < 40 else "NEUTRAL" if _fg_value < 60 else "GREED" if _fg_value < 80 else "EXTREME GREED"
-        logger.info(f"F&G: {_fg_value} ({_fg_label}) | Positions open: {weex_position_count} (no slot cap)")
+        logger.info(f"F&G: {_fg_value} ({_fg_label}) | Positions open: {weex_position_count}/{effective_max_positions} slots")
         
         # Build map: symbol -> {side: position}
         # This tracks BOTH long and short for each symbol
@@ -903,7 +903,7 @@ def check_trading_signals():
                             )
                     else:
                         if can_open_new:
-                            # V3.2.25: No slot cap — margin guard is the natural limiter
+                            # V3.2.38: 4-slot hard cap enforced via can_open_new
                             can_trade_this = True
                             trade_type = "new"
 
@@ -943,7 +943,7 @@ def check_trading_signals():
                             )
                     else:
                         if can_open_new:
-                            # V3.2.25: No slot cap — margin guard is the natural limiter
+                            # V3.2.38: 4-slot hard cap enforced via can_open_new
                             can_trade_this = True
                             trade_type = "new"
 
@@ -1077,7 +1077,7 @@ def check_trading_signals():
             except Exception as e:
                 logger.error(f"Error analyzing {pair}: {e}")
         
-# V3.2.25: Execute ALL qualifying trades — no slot cap, margin guard is the limiter
+# V3.2.38: Execute qualifying trades — 4-slot hard cap enforced via can_open_new
         trades_executed = 0  # V3.2.36 fix: initialize before if/else so it's always defined
 
         if trade_opportunities:
@@ -1110,7 +1110,7 @@ def check_trading_signals():
                 # V3.1.82: Slot swap trades bypass fallback gate (they create their own slot)
                 # V3.1.82 FIX: Also bypass when regular slots are available (0 positions = don't skip!)
                 is_fallback = opportunity["decision"].get("fallback_only", False)
-                _has_regular_slots = True  # V3.2.25: No slot cap
+                _has_regular_slots = available_slots > 0  # V3.2.38: 4-slot hard cap
                 if is_fallback and opportunity.get("trade_type") != "slot_swap" and not _has_regular_slots:
                     if chop_blocked_count > 0:
                         logger.info(f"  CHOP FALLBACK: {opportunity['pair']} ({confidence:.0%}) promoted - chop freed {chop_blocked_count} slot(s)")
@@ -3231,14 +3231,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.36 - MIN_VIABLE_TP_PCT=0.20: skip SR < 0.20%% from entry (entry at resistance = discard)")
+    logger.info("SMT Daemon V3.2.38 - 4-slot hard cap restored; ANTI-WAIT removed; trust Gemini Judge")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
     logger.info("  Pairs: BTC, ETH, BNB, LTC, XRP, SOL, ADA (7)")
     logger.info("  Max slots: 4 flat | Leverage: 20x flat | Shorts: ALL pairs")
-    logger.info("  When full: confidence >= 85%% opens a 5th slot directly (no position closed)")
-    logger.info("  Confidence < 85%% with full slots: SLOTS FULL, skip")
+    logger.info("  When full: SLOTS FULL — all signals skip regardless of confidence")
     # --- Confidence & entry filters ---
     logger.info("ENTRY FILTERS:")
     logger.info("  MIN_CONFIDENCE: 80%% HARD FLOOR — no exceptions, no discounts, no overrides")
@@ -3296,6 +3295,8 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.38: 4-slot hard cap restored (can_open_new checks available_slots > 0)")
+    logger.info("  V3.2.37: ANTI-WAIT removed — Gemini Judge WAIT = WAIT; no persona-consensus or keyword override")
     logger.info("  V3.2.36: MIN_VIABLE_TP_PCT=0.20%% — skip SR levels < 0.20%% from entry; entry at resistance = tp_not_found = discard")
     logger.info("  V3.2.35: Opposite signal = close existing position first, then open new side (was SL-tighten + dual-open)")
     logger.info("  V3.2.34: Judge receives WHALE dual-source data (Etherscan+Cryptoracle) separately for BTC/ETH")
