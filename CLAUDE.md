@@ -143,7 +143,9 @@ MAX_TOTAL_POSITIONS = 4              # Default 4 flat slots (V3.2.25: no hard ca
 
 # TP/SL bounds (V3.2.24: no TP floor; V3.2.27: 12H haircut validity; V3.2.28: bad-TP discard; V3.2.29: walk list)
 # MIN_TP_PCT removed (V3.2.24) — chart SR is the TP, whatever distance that is
-# COMPETITION_FALLBACK_TP = 0.5% (all tiers, ONLY when chart SR returns NO data at all)
+# COMPETITION_FALLBACK_TP = 0.5% — MAX TP CEILING on ALL trades (applied after chart SR + Gemini targeting)
+#   Only caps down (ceiling); never raises a low TP. If TP is 0.3%, it stays 0.3%.
+#   NOT a fallback for missing SR — if chart SR finds no TP, the trade is DISCARDED (V3.2.29)
 # TP method: max high of last 2 complete 1H candles (LONG); min low (SHORT)
 #   V3.2.20 fallback: if 2H anchor is at/below entry, scan 12H resistance list
 #   V3.2.29: walk full resistance list (ascending LONG / descending SHORT) until one clears entry
@@ -300,7 +302,7 @@ Bump the version number in the daemon startup banner and any new scripts.
 Current: V3.2.29. Next change should be V3.2.30.
 
 **Recent version history:**
-- V3.2.29: (**CURRENT**) Walk full resistance list (ascending LONG / descending SHORT) before discarding. If nearest SR is too close after haircut, try next candidate. Only discard if ALL candidates fail. COMPETITION_FALLBACK_TP reserved for zero-SR-data cases only (never as resistance workaround). TP caps still apply on top as ceiling.
+- V3.2.29: (**CURRENT**) Walk full resistance list (ascending LONG / descending SHORT) before discarding — if nearest SR is too close after haircut, try next candidate. COMPETITION_FALLBACK_TP promoted from fallback to universal 0.5% MAX TP ceiling on ALL trades (replaces extreme-fear-only and XRP caps). If chart SR finds no valid TP → trade discarded (no fallback %). TP caps are ceiling-only: never raise a low TP below 0.5%.
 - V3.2.28: Bad-TP trades discarded — if TP lands at/below entry (haircut + slippage means entry is at resistance), skip the trade entirely. Sizing cache invalidated after each trade so next order sees updated available margin.
 - V3.2.27: 12H SR haircut validity check — haircut must still clear entry; final TP direction guard before place_order() (prevents WEEX 40015 rejection).
 - V3.2.26: Margin guard threshold fixed at $1000 (was balance×0.15 ≈ $150 — too low, produced tiny rejected orders); sizing base floor fixed at $1000 (same reason).

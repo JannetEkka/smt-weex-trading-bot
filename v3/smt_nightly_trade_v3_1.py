@@ -4054,77 +4054,22 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         mtf_label = "GEMINI" if _gemini_tp_used else ("MTF" if chart_sr["method"] == "chart_mtf" else "1H")
         print(f"  [TP/SL] CHART-BASED [{mtf_label}]: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
 
-        # V3.2.12: In extreme fear, cap ALL TP at competition fallback (0.5%) — both LONG and SHORT.
-        # V3.2.9 only capped SHORTs; LONGs assumed to have "naturally small" TPs but they weren't.
-        # 2H anchor helps a lot, but fear markets can still produce 1-2% TPs when 2H had a big swing.
-        # XRP at +0.28% peak, ADA at +0.25% peak both had chart TPs 2-3% away — positions never exited.
-        try:
-            _fg_tp_regime = REGIME_CACHE.get("regime", 300)
-            _fg_tp = _fg_tp_regime.get("fear_greed", 50) if _fg_tp_regime else 50
-            _tp_cap = COMPETITION_FALLBACK_TP.get(tier, 0.5)
-            if _fg_tp < 20 and tp_pct_raw > _tp_cap:
-                _dir = "LONG" if signal == "LONG" else "SHORT"
-                print(f"  [TP/SL] Extreme fear {_dir} TP capped: {tp_pct_raw:.2f}% → {_tp_cap:.2f}% (F&G={_fg_tp})")
-                tp_pct_raw = _tp_cap
-                tp_pct = tp_pct_raw / 100
-                tp_price = current_price * (1 + tp_pct) if signal == "LONG" else current_price * (1 - tp_pct)
-        except Exception:
-            pass
-
-        # V3.2.15: XRP-specific TP cap — historical fills show XRP moves 0.34–0.48%.
-        # V3.2.16: Only apply if Gemini didn't give us a structural target (Gemini sees the real chart).
-        if symbol == "cmt_xrpusdt" and tp_pct_raw > 0.70 and not _gemini_tp_used:
-            print(f"  [TP/SL] XRP TP cap: {tp_pct_raw:.2f}% → 0.70% (historical range, no Gemini override)")
-            tp_pct_raw = 0.70
+        # V3.2.29: Universal competition TP cap — 0.5% MAX ceiling on ALL trades.
+        # Applied after chart SR + Gemini targeting. Only caps down (ceiling), never raises a low TP.
+        # Replaces the old extreme-fear-only cap (V3.2.12) and XRP cap (V3.2.15).
+        _tp_cap = COMPETITION_FALLBACK_TP.get(tier, 0.5)
+        if tp_pct_raw > _tp_cap:
+            print(f"  [TP/SL] Competition TP cap: {tp_pct_raw:.2f}% → {_tp_cap:.2f}%")
+            tp_pct_raw = _tp_cap
             tp_pct = tp_pct_raw / 100
             tp_price = current_price * (1 + tp_pct) if signal == "LONG" else current_price * (1 - tp_pct)
 
     else:
-        # FALLBACK: Use competition-tightened percentages (NOT the old wide 3.0-3.5%)
-        if _in_competition:
-            tp_pct_raw = COMPETITION_FALLBACK_TP.get(tier, 1.5)
-            sl_pct_raw = COMPETITION_FALLBACK_SL.get(tier, 1.2)
-            print(f"  [TP/SL] COMP FALLBACK: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
-        else:
-            # Normal mode: use old tier-based approach with ATR SL
-            tp_pct_raw = tier_config["tp_pct"]
-            sl_pct_raw = tier_config["sl_pct"]
-            try:
-                atr_data = get_pair_atr(symbol)
-                atr_pct = atr_data.get("atr_pct", 0)
-                if atr_pct > 0:
-                    dynamic_sl = round(atr_pct * 1.5, 2)
-                    sl_pct_raw = max(dynamic_sl, tier_config["sl_pct"])
-                    _force_exit_sl = abs(tier_config.get("force_exit_loss_pct", -2.0))
-                    _sl_cap = min(_force_exit_sl + 0.5, 3.0)
-                    sl_pct_raw = min(sl_pct_raw, _sl_cap)
-            except Exception:
-                pass
-            # F&G scaling (non-competition only)
-            try:
-                _fg_regime = REGIME_CACHE.get("regime", 300)
-                _fg_val = _fg_regime.get("fear_greed", 50) if _fg_regime else 50
-                if _fg_val < 15:
-                    tp_pct_raw = round(tp_pct_raw * 1.5, 2)
-                elif _fg_val < 30:
-                    tp_pct_raw = round(tp_pct_raw * 1.25, 2)
-                elif _fg_val > 80:
-                    tp_pct_raw = round(tp_pct_raw * 0.50, 2)
-                elif _fg_val > 60:
-                    tp_pct_raw = round(tp_pct_raw * 0.65, 2)
-            except Exception:
-                pass
-            print(f"  [TP/SL] NORMAL FALLBACK: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
-
-        # Calculate TP/SL prices from percentages (only if not set by chart)
-        tp_pct = tp_pct_raw / 100
-        sl_pct = sl_pct_raw / 100
-        if signal == "LONG":
-            tp_price = current_price * (1 + tp_pct)
-            sl_price = current_price * (1 - sl_pct)
-        else:
-            tp_price = current_price * (1 - tp_pct)
-            sl_price = current_price * (1 + sl_pct)
+        # V3.2.29: No chart SR data → DON'T TRADE. The competition TP cap (0.5%) is a ceiling
+        # on valid trades, NOT a fallback for missing resistance. No valid SR = no trade.
+        _reason = f"Chart SR returned no valid TP for {symbol.replace('cmt_','').upper()} {signal} — no fallback, skip trade"
+        print(f"  [TP/SL] {_reason}")
+        return {"executed": False, "reason": _reason}
 
     # V3.1.84: ATR safety net - if chart SL is tighter than 0.5x ATR, widen it
     # Prevents noise stop-outs on volatile pairs even with chart-based SL
