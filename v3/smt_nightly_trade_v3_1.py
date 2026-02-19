@@ -1688,7 +1688,7 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 # Trading Parameters - V3.1.16 UPDATES
 MAX_LEVERAGE = 20
 # V3.2.16: 7 pairs, 4 slots flat. BTC/ETH/BNB re-added (Gemini chart context makes them viable).
-# Shorts: LTC only. All others LONG only.
+# V3.2.18: Shorts allowed for ALL pairs (was LTC only). 80% floor + chop filter = sufficient protection.
 MAX_TOTAL_POSITIONS = 4  # Hard cap: 4 slots for 7 pairs
 
 def get_max_positions_for_equity(equity: float) -> int:
@@ -1792,14 +1792,14 @@ TIER_CONFIG = {
 TRADING_PAIRS = {
     # V3.2.16: 7 pairs — BTC/ETH/BNB re-added with Gemini chart context for smarter TP targeting
     # DOGE removed V3.2.11 — erratic SL/orphan behavior (stays out)
-    # Shorts: LTC only. All others LONG only.
-    "BTC": {"symbol": "cmt_btcusdt", "tier": 1, "has_whale_data": True},   # LONG only (re-added V3.2.16)
-    "ETH": {"symbol": "cmt_ethusdt", "tier": 1, "has_whale_data": True},   # LONG only (re-added V3.2.16)
-    "BNB": {"symbol": "cmt_bnbusdt", "tier": 2, "has_whale_data": True},   # LONG only (re-added V3.2.16)
-    "LTC": {"symbol": "cmt_ltcusdt", "tier": 2, "has_whale_data": True},   # LONG + SHORT allowed
-    "XRP": {"symbol": "cmt_xrpusdt", "tier": 2, "has_whale_data": True},   # LONG only
-    "SOL": {"symbol": "cmt_solusdt", "tier": 3, "has_whale_data": True},   # LONG only
-    "ADA": {"symbol": "cmt_adausdt", "tier": 3, "has_whale_data": True},   # LONG only
+    # V3.2.18: Shorts allowed for ALL pairs (was LTC only). Ensemble + 80% floor + chop filter = protection.
+    "BTC": {"symbol": "cmt_btcusdt", "tier": 1, "has_whale_data": True},   # LONG + SHORT (re-added V3.2.16)
+    "ETH": {"symbol": "cmt_ethusdt", "tier": 1, "has_whale_data": True},   # LONG + SHORT (re-added V3.2.16)
+    "BNB": {"symbol": "cmt_bnbusdt", "tier": 2, "has_whale_data": True},   # LONG + SHORT (re-added V3.2.16)
+    "LTC": {"symbol": "cmt_ltcusdt", "tier": 2, "has_whale_data": True},   # LONG + SHORT
+    "XRP": {"symbol": "cmt_xrpusdt", "tier": 2, "has_whale_data": True},   # LONG + SHORT
+    "SOL": {"symbol": "cmt_solusdt", "tier": 3, "has_whale_data": True},   # LONG + SHORT
+    "ADA": {"symbol": "cmt_adausdt", "tier": 3, "has_whale_data": True},   # LONG + SHORT
 }
 
 # Pipeline Version
@@ -3586,10 +3586,12 @@ class MultiPersonaAnalyzer:
 
                 if severity == "high":
                     if _flow_extreme:
-                        # HIGH CHOP + EXTREME FLOW: reduce to medium penalty instead of hard block
+                        # V3.2.18: HIGH CHOP + EXTREME FLOW: -8% penalty (was -15%)
+                        # In F&G<20, even extreme taker ratios don't sustain moves.
+                        # -8% means only 88%+ signals survive (ADA 88% SHORT was correct).
                         old_conf = final.get('confidence', 0)
-                        new_conf = old_conf - 0.15
-                        print(f"  [CHOP_FILTER] FLOW EXTREME override: HIGH CHOP -> medium penalty (FLOW {_flow_dir} {_flow_conf:.0%})")
+                        new_conf = old_conf - 0.08
+                        print(f"  [CHOP_FILTER] FLOW EXTREME override: HIGH CHOP -> reduced penalty (FLOW {_flow_dir} {_flow_conf:.0%})")
                         print(f"  [CHOP_FILTER] PENALTY {orig_decision}: {chop['reason']} (conf {old_conf:.0%} -> {new_conf:.0%})")
                         final['chop_original_decision'] = orig_decision
                         final['chop_pre_penalty_confidence'] = old_conf
@@ -3610,11 +3612,23 @@ class MultiPersonaAnalyzer:
                         final['chop_blocked'] = True
                 elif severity == "medium":
                     if _flow_extreme:
-                        # MEDIUM CHOP + EXTREME FLOW: skip penalty entirely — breakout incoming
-                        print(f"  [CHOP_FILTER] FLOW EXTREME override: skip MEDIUM CHOP penalty (FLOW {_flow_dir} {_flow_conf:.0%} >= 85%)")
+                        # V3.2.18: MEDIUM CHOP + EXTREME FLOW: -8% penalty (was skip entirely)
+                        # ETH 80% got through with skip — only moved +0.17% in dead ADX market.
+                        # -8% blocks marginal 80% signals, lets genuine 88%+ through.
+                        old_conf = final.get('confidence', 0)
+                        new_conf = old_conf - 0.08
+                        print(f"  [CHOP_FILTER] FLOW EXTREME override: MEDIUM CHOP -> reduced penalty (FLOW {_flow_dir} {_flow_conf:.0%})")
+                        print(f"  [CHOP_FILTER] PENALTY {orig_decision}: {chop['reason']} (conf {old_conf:.0%} -> {new_conf:.0%})")
                         final['chop_original_decision'] = orig_decision
-                        final['chop_pre_penalty_confidence'] = final.get('confidence', 0)
+                        final['chop_pre_penalty_confidence'] = old_conf
+                        final['confidence'] = new_conf
+                        final['chop_penalized'] = True
                         final['chop_flow_override'] = True
+                        if new_conf < MIN_CONFIDENCE_TO_TRADE:
+                            print(f"  [CHOP_FILTER] BLOCKED after penalty: {new_conf:.0%} < {MIN_CONFIDENCE_TO_TRADE:.0%}")
+                            final['decision'] = 'WAIT'
+                            final['confidence'] = 0
+                            final['chop_blocked'] = True
                     else:
                         # MEDIUM CHOP: Confidence penalty (-15%), may still pass if very strong signal
                         old_conf = final.get('confidence', 0)

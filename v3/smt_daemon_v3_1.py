@@ -912,10 +912,8 @@ def check_trading_signals():
                             logger.info(f"    -> SLOTS FULL: {confidence:.0%} < {_swap_threshold:.0%} swap threshold ({weex_position_count}/{effective_max_positions})")
 
                 elif signal == "SHORT":
-                    if pair != "LTC":
-                        # V3.2.13: Shorts restricted to LTC only — all other pairs LONG only
-                        logger.info(f"    -> SHORT BLOCKED: {pair} — shorts restricted to LTC only (treating as WAIT)")
-                    elif has_short:
+                    # V3.2.18: Shorts allowed for ALL pairs (was LTC only since V3.2.13)
+                    if has_short:
                         logger.info(f"    -> Already SHORT")
                     elif has_long:
                         # V3.1.53: OPPOSITE - tighten LONG SL + open SHORT
@@ -1283,10 +1281,7 @@ def check_trading_signals():
                     logger.warning(f"DIRECTIONAL LIMIT: {short_count} SHORTs already open, skipping {opportunity['pair']} SHORT")
                     continue
 
-                # V3.2.14: Shorts restricted to LTC only (execution-phase safety net)
-                if opportunity["decision"]["decision"] == "SHORT" and opportunity["pair"] != "LTC":
-                    logger.info(f"  SHORT GATE: {opportunity['pair']} — shorts only allowed for LTC, skipping")
-                    continue
+                # V3.2.18: Shorts allowed for ALL pairs (LTC-only restriction removed)
 
                 # V3.1.51: SESSION-AWARE TRADING with confidence adjustments
                 import datetime as _dt_module
@@ -3336,8 +3331,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.17 - 7 pairs, 4 slots, stale exit removed (slot swap handles it)")
+    logger.info("SMT Daemon V3.2.18 - chop override fix + shorts all pairs")
     logger.info("=" * 60)
+    logger.info("V3.2.18 CHANGES:")
+    logger.info("  - V3.2.18: CHOP FLOW EXTREME override — flat -8%% penalty for BOTH medium and high (was skip/−15%%)")
+    logger.info("  - V3.2.18: ETH 80%% got through MEDIUM skip — only moved +0.17%%, now stuck. -8%% would block 80%% (72%%)")
+    logger.info("  - V3.2.18: ADA 88%% SHORT was correct but -15%% killed it (73%%). -8%% lets it through (80%%)")
+    logger.info("  - V3.2.18: Shorts allowed for ALL 7 pairs (was LTC only). 80%% floor + chop = sufficient protection")
+    logger.info("  - V3.2.18: In F&G<20, restricting to LONG only = fighting the trend. Ensemble decides direction.")
     logger.info("V3.2.17 CHANGES:")
     logger.info("  - V3.2.17: Stale position auto-close REMOVED — slot swap already handles underperformers")
     logger.info("  - V3.2.17: Prevents premature exits like SOL +0.23%% stale-closed then re-entered at worse price")
@@ -3384,8 +3385,7 @@ def run_daemon():
     logger.info("  - V3.2.4: Judge prompt — SHORT asymmetry: EXTREME FEAR needs 2+ co-primary, else equal to LONG")
     logger.info("V3.2.3 CHANGES:")
     logger.info("  - V3.2.3: find_chart_based_tp_sl() — add 15m as 3rd S/R layer (micro pivots, 12.5h, cluster 0.2%%)")
-    logger.info("  - V3.2.3: CHOP filter — FLOW EXTREME (>=85%% aligned) overrides MEDIUM CHOP (skip penalty)")
-    logger.info("  - V3.2.3: CHOP filter — FLOW EXTREME overrides HIGH CHOP (reduce to medium penalty, not hard block)")
+    logger.info("  - V3.2.3: CHOP filter — FLOW EXTREME override [SUPERSEDED by V3.2.18: flat -8%% penalty for both]")
     logger.info("  - V3.2.3: EQUITY_POSITION_TIERS — sub-$8K tiers added (4 slots at $1K+ balance)")
     logger.info("V3.2.2 CHANGES:")
     logger.info("  - V3.2.2: Removed MAX_TP_PCT and MAX_SL_PCT caps from find_chart_based_tp_sl()")
@@ -3429,7 +3429,7 @@ def run_daemon():
     logger.info("Cooldowns: ENFORCED (V3.1.81) + blacklist after force_stop")
     logger.info("Slot Swap: ENABLED (V3.1.88) - 83% min conf, 45min age, regime-aware PnL gate")
     logger.info("Slots (V3.2.16): 4 flat — BTC/ETH/BNB/LTC/XRP/SOL/ADA (7 pairs)")
-    logger.info("Shorts (V3.2.16): LTC only — all other pairs LONG direction only")
+    logger.info("Shorts (V3.2.18): ALL pairs — 80%% floor + chop filter = protection")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
