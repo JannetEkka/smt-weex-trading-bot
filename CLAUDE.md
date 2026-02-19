@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.31** — all production code is in `v3/`.
+**Current version: V3.2.32** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -299,10 +299,11 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.31. Next change should be V3.2.32.
+Current: V3.2.32. Next change should be V3.2.33.
 
 **Recent version history:**
-- V3.2.31: (**CURRENT**) Extended 1H candle lookback from 12H (13 candles) to 48H (49 candles) for resistance/support walk. When entry is near recent highs, the 12H pool had only 1-2 candidates above entry and both failed the haircut, discarding high-confidence signals. Competition TP cap (0.5%) applies on top regardless of how far out the level is.
+- V3.2.32: (**CURRENT**) SHORT TP anchor changed from `min(lows_1h[1:3])` → `max(lows_1h[1:3])`. min picked the deepest wick (farther from entry), which always triggered the 0.5% cap and placed TP at a synthetic price at no real chart level. max picks the nearest support (shallower of the two lows), landing at an actual visible chart level. Cap still applies as ceiling if TP% >= 0.5%.
+- V3.2.31: Extended 1H candle lookback from 12H (13 candles) to 48H (49 candles) for resistance/support walk. When entry is near recent highs, the 12H pool had only 1-2 candidates above entry and both failed the haircut, discarding high-confidence signals. Competition TP cap (0.5%) applies on top regardless of how far out the level is.
 - V3.2.30: WEEX TP/SL confirmation logging — after each trade, query WEEX plan orders and compare actual stored trigger prices vs what was sent. Logs `[WEEX-CONFIRM]` with delta % and *** MISMATCH *** flag for any discrepancy > 0.1%.
 - V3.2.29: Walk full resistance list (ascending LONG / descending SHORT) before discarding — if nearest SR is too close after haircut, try next candidate. COMPETITION_FALLBACK_TP promoted from fallback to universal 0.5% MAX TP ceiling on ALL trades (replaces extreme-fear-only and XRP caps). If chart SR finds no valid TP → trade discarded (no fallback %). TP caps are ceiling-only: never raise a low TP below 0.5%.
 - V3.2.28: Bad-TP trades discarded — if TP lands at/below entry (haircut + slippage means entry is at resistance), skip the trade entirely. Sizing cache invalidated after each trade so next order sees updated available margin.
