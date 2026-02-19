@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 
-**Current version: V3.2.22** — all production code is in `v3/`.
+**Current version: V3.2.23** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -288,10 +288,11 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.22. Next change should be V3.2.23.
+Current: V3.2.23. Next change should be V3.2.24.
 
 **Recent version history:**
-- V3.2.22: (**CURRENT**) Slot swap removed — confidence>=85% opens 5th slot directly (no closing existing positions); opposite sides close immediately (no 15-min wait gate)
+- V3.2.23: (**CURRENT**) Banner cleanup (removed stale slot swap lines); FLOW persona calls regime before data fetches so [REGIME] prints before [FLOW] Depth (not mid-block)
+- V3.2.22: Slot swap removed — confidence>=85% opens 5th slot directly (no closing existing positions); opposite sides close immediately (no 15-min wait gate)
 - V3.2.21: resolve_opposite_sides() closes OLDER position, not losing side — newer position represents current signal; ctime fallback to PnL-based close if timestamps unavailable
 - V3.2.20: 12H SR fallback TP scan when 2H anchor is at/below entry; WHALE always uses Etherscan for BTC/ETH (dual source); FLOW order book wall detection (depth limit=200, top-15 levels, 1.5× avg threshold) fed to Judge as context (not hard TP override)
 - V3.2.19: Fee bleed tracking — [FEE] Open per trade, Gross/Fees(R-T)/Net at close

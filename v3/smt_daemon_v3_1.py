@@ -3338,15 +3338,14 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.22 - no slot swap; 85%+ opens 5th slot; opposite closes immediately")
+    logger.info("SMT Daemon V3.2.23 - banner cleanup; FLOW regime fetch moved before data calls")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
     logger.info("  Pairs: BTC, ETH, BNB, LTC, XRP, SOL, ADA (7)")
     logger.info("  Max slots: 4 flat | Leverage: 20x flat | Shorts: ALL pairs")
-    logger.info("  When full: only slot swaps can enter (83%%+ conf, 45min age, regime-aware PnL gate)")
-    logger.info("  Slot swap PnL: -0.5%% normal (F&G>=20) | -0.25%% capitulation (F&G<20)")
-    logger.info("  2-cycle persistence: swap threshold drops to 80%% if same signal fires 2+ consecutive cycles")
+    logger.info("  When full: confidence >= 85%% opens a 5th slot directly (no position closed)")
+    logger.info("  Confidence < 85%% with full slots: SLOTS FULL, skip")
     # --- Confidence & entry filters ---
     logger.info("ENTRY FILTERS:")
     logger.info("  MIN_CONFIDENCE: 80%% HARD FLOOR — no exceptions, no discounts, no overrides")
@@ -3407,6 +3406,7 @@ def run_daemon():
     logger.info("  V3.2.20: 12H SR fallback | WHALE dual source | FLOW walls fed to Judge (context, not override)")
     logger.info("  V3.2.21: resolve_opposite_sides closes OLDER position, not losing side")
     logger.info("  V3.2.22: no slot swap; confidence>=85% opens 5th slot; opposite closes immediately (no 15m wait)")
+    logger.info("  V3.2.23: banner slot swap lines removed; FLOW calls regime first (fixes mid-block [REGIME] print)")
     logger.info("  V3.2.19: Fee bleed tracking — [FEE] per trade + Gross/Fees/Net at close + HEALTH cumulative")
     logger.info("  V3.2.18: Chop penalties removed | Shorts ALL pairs | Trust 80%% floor + 0.5%% TP")
     logger.info("  V3.2.17: Stale auto-close removed | Extreme fear TP cap bug fixed | Gemini PM disabled")
