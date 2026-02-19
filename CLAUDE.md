@@ -115,15 +115,19 @@ GLOBAL_TRADE_COOLDOWN = 900          # 15min between trades
 SIGNAL_CHECK_INTERVAL = 600          # 10min
 POSITION_MONITOR_INTERVAL = 120      # 2min
 MAX_TOTAL_POSITIONS = 4              # 4 flat slots hard cap (V3.2.38: cap restored; was removed in V3.2.25)
+CONFIDENCE_EXTRA_SLOT = 0.90         # V3.2.39 (pending): signals >=90% can open 5th slot when all 4 full
 
-# Slot system (V3.2.38: 4-slot hard cap restored)
+# Slot system (V3.2.38: 4-slot hard cap; V3.2.39 pending: 90%+ signals get extra slot)
 # Pairs: BTC, ETH, BNB, LTC, XRP, SOL, ADA (7 pairs, BTC/ETH/BNB re-added V3.2.16)
 # Shorts: ALL pairs as of V3.2.18 (was LTC-only)
 # If no signals reach 80%, ALL pairs show WAIT — this is expected, not a bug.
 # Existing position + same direction signal = WAIT (already have that side).
 
-# Slot overflow (V3.2.38: 4-slot hard cap; full slots = skip ALL new signals regardless of confidence)
-# can_open_new = not low_equity_mode AND available_slots > 0
+# Slot overflow (V3.2.38 current / V3.2.39 pending):
+# V3.2.38: full slots = skip ALL new signals regardless of confidence
+# V3.2.39 pending: confidence >= 90% → open 5th slot directly when 4 slots full
+#                  confidence < 90% with full slots → SLOTS FULL, skip
+# can_open_new = not low_equity_mode AND (available_slots > 0 OR confidence >= 0.90)
 # No slot swap (removed V3.2.22); resolve_opposite_sides() runs at cycle end
 
 # Regime exit thresholds (V3.2.17: get_market_regime_for_exit() DISABLED)
@@ -299,7 +303,7 @@ python3 v3/cryptoracle_client.py
 11. **Watchdog hang detection** — If daemon logs go stale for 15min, watchdog force-kills and restarts. This is intentional; don't disable it.
 12. **Gemini portfolio review disabled** — `gemini_portfolio_review()` is disabled in V3.2.17. Do not re-enable without testing.
 13. **ANTI-WAIT removed (V3.2.37)** — Do NOT re-add post-Judge direction overrides. Gemini's WAIT reasoning text often contains direction keywords (e.g. "WHALE (LONG 63%)" explaining why it's waiting), which caused the keyword-scanning fallback to flip WAIT→LONG on genuinely mixed signals. Trust the Judge.
-14. **Slot cap (V3.2.38)** — 4-slot hard cap is restored. When `available_slots == 0`, `can_open_new = False` and ALL new signals are skipped regardless of confidence level. Do NOT re-add the no-cap behavior from V3.2.25 without explicit approval.
+14. **Slot cap (V3.2.38/39)** — 4-slot hard cap is the base. V3.2.39 adds: confidence >= 90% opens a 5th slot when all 4 are full. Do NOT re-add unlimited no-cap behavior from V3.2.25 — the 90% gate is the approved exception. Implementation: `can_open_new = not low_equity_mode and (available_slots > 0 or confidence >= 0.90)` and `_has_regular_slots = available_slots > 0 or confidence >= 0.90`.
 
 ## Version Naming
 
@@ -307,6 +311,12 @@ Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
 Current: V3.2.38. Next change should be V3.2.39.
+
+**Planned V3.2.39 (code pending — deploy after suspension lifts):**
+90% confidence extra-slot: when all 4 slots are full, signals with confidence >= 90% may open a 5th slot.
+`can_open_new = not low_equity_mode and (available_slots > 0 or confidence >= 0.90)`
+`_has_regular_slots = available_slots > 0 or confidence >= 0.90`
+Update banner: "4 slots + 5th for 90%+ signals".
 
 **Recent version history:**
 - V3.2.38: (**CURRENT**) Restore 4-slot hard cap removed in V3.2.25. `can_open_new = not low_equity_mode and available_slots > 0` — when all 4 slots are filled, ALL new signals skip regardless of confidence. `_has_regular_slots` now checks `available_slots > 0` (was hardcoded True). Banner log updated: "2/4 slots" instead of "2 positions (no slot cap)". Stale "85%+ opens 5th slot" text removed.
