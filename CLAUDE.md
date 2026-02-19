@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 
-**Current version: V3.2.21** — all production code is in `v3/`.
+**Current version: V3.2.22** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -123,10 +123,9 @@ MAX_TOTAL_POSITIONS = 4              # Hard cap: 4 flat slots (V3.2.16, was 3 in
 # If no signals reach 80%, ALL pairs show WAIT — this is expected, not a bug.
 # Existing position + same direction signal = WAIT (already have that side).
 
-# Slot swap gates (V3.2.1, was V3.1.87)
-# Min age: 45min | Min confidence: 83% (drops to 80% when signal persists 2+ consecutive cycles)
-# PnL threshold: regime-aware
-#   Normal (F&G >= 20): -0.5% | Capitulation (F&G < 20): -0.25%
+# Slot overflow (V3.2.22: slot swap removed)
+# If slots full AND confidence >= 85%: open a 5th slot directly (no existing position closed)
+# If slots full AND confidence < 85%: SLOTS FULL, skip
 
 # Regime exit thresholds (V3.2.17: get_market_regime_for_exit() DISABLED)
 # Regime fight: 35% margin loss | Hard stop: 45% margin loss
@@ -289,10 +288,11 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.21. Next change should be V3.2.22.
+Current: V3.2.22. Next change should be V3.2.23.
 
 **Recent version history:**
-- V3.2.21: (**CURRENT**) resolve_opposite_sides() closes OLDER position, not losing side — newer position represents current signal; ctime fallback to PnL-based close if timestamps unavailable
+- V3.2.22: (**CURRENT**) Slot swap removed — confidence>=85% opens 5th slot directly (no closing existing positions); opposite sides close immediately (no 15-min wait gate)
+- V3.2.21: resolve_opposite_sides() closes OLDER position, not losing side — newer position represents current signal; ctime fallback to PnL-based close if timestamps unavailable
 - V3.2.20: 12H SR fallback TP scan when 2H anchor is at/below entry; WHALE always uses Etherscan for BTC/ETH (dual source); FLOW order book wall detection (depth limit=200, top-15 levels, 1.5× avg threshold) fed to Judge as context (not hard TP override)
 - V3.2.19: Fee bleed tracking — [FEE] Open per trade, Gross/Fees(R-T)/Net at close
 - V3.2.18: CHOP filter penalties removed (logging only); shorts allowed for ALL pairs; 80% floor + 0.5% TP protection; trust the signals

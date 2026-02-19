@@ -853,10 +853,6 @@ def check_trading_signals():
                     _raw_dir = signal
                     _raw_conf = confidence
 
-                # V3.2.1: Slot-swap threshold — persistent signals (2+ consecutive cycles) earn
-                # a lower swap bar (80%) since the ensemble has been consistently right.
-                _swap_threshold = 0.80 if _persist_count >= 2 else 0.83
-
                 # Determine tradability
                 can_trade_this = False
                 trade_type = "none"
@@ -898,19 +894,13 @@ def check_trading_signals():
                         if can_open_new:
                             can_trade_this = True
                             trade_type = "new"
-                        elif confidence >= _swap_threshold:
-                            # V3.2.1: SLOT SWAP — 83% min, lowered to 80% when persist active (2+ cycles same direction)
-                            _weakest = _find_weakest_position(open_positions, symbol, position_map, fear_greed=_fg_value)
-                            if _weakest:
-                                can_trade_this = True
-                                trade_type = "slot_swap"
-                                logger.info(f"    -> SLOT SWAP: {confidence:.0%} signal (persist={_persist_count}), closing weak {_weakest['symbol'].replace('cmt_','').upper()} ({_weakest['pnl_pct']:+.2f}%) to free slot")
-                            else:
-                                # V3.1.88: Log when swap qualified but no weak target found
-                                logger.info(f"    -> NO SWAP TARGET: {confidence:.0%} qualifies but no position weak enough to swap")
-                        elif not can_open_new:
-                            # V3.1.88: Log when slots full and signal too weak for swap
-                            logger.info(f"    -> SLOTS FULL: {confidence:.0%} < {_swap_threshold:.0%} swap threshold ({weex_position_count}/{effective_max_positions})")
+                        elif confidence >= 0.85:
+                            # V3.2.22: No slot swap — high conviction opens a new slot (5th slot override)
+                            can_trade_this = True
+                            trade_type = "new"
+                            logger.info(f"    -> HIGH CONVICTION: {confidence:.0%} >= 85%, opening beyond slot cap ({weex_position_count}/{effective_max_positions})")
+                        else:
+                            logger.info(f"    -> SLOTS FULL: {confidence:.0%} < 85% high-conviction threshold ({weex_position_count}/{effective_max_positions})")
 
                 elif signal == "SHORT":
                     # V3.2.18: Shorts allowed for ALL pairs (was LTC only since V3.2.13)
@@ -950,19 +940,13 @@ def check_trading_signals():
                         if can_open_new:
                             can_trade_this = True
                             trade_type = "new"
-                        elif confidence >= _swap_threshold:
-                            # V3.2.1: SLOT SWAP — 83% min, lowered to 80% when persist active (2+ cycles same direction)
-                            _weakest = _find_weakest_position(open_positions, symbol, position_map, fear_greed=_fg_value)
-                            if _weakest:
-                                can_trade_this = True
-                                trade_type = "slot_swap"
-                                logger.info(f"    -> SLOT SWAP: {confidence:.0%} signal (persist={_persist_count}), closing weak {_weakest['symbol'].replace('cmt_','').upper()} ({_weakest['pnl_pct']:+.2f}%) to free slot")
-                            else:
-                                # V3.1.88: Log when swap qualified but no weak target found
-                                logger.info(f"    -> NO SWAP TARGET: {confidence:.0%} qualifies but no position weak enough to swap")
-                        elif not can_open_new:
-                            # V3.1.88: Log when slots full and signal too weak for swap
-                            logger.info(f"    -> SLOTS FULL: {confidence:.0%} < {_swap_threshold:.0%} swap threshold ({weex_position_count}/{effective_max_positions})")
+                        elif confidence >= 0.85:
+                            # V3.2.22: No slot swap — high conviction opens a new slot (5th slot override)
+                            can_trade_this = True
+                            trade_type = "new"
+                            logger.info(f"    -> HIGH CONVICTION: {confidence:.0%} >= 85%, opening beyond slot cap ({weex_position_count}/{effective_max_positions})")
+                        else:
+                            logger.info(f"    -> SLOTS FULL: {confidence:.0%} < 85% high-conviction threshold ({weex_position_count}/{effective_max_positions})")
 
                 # V3.1.93: Track best non-executed signal for PM context
                 if signal in ("LONG", "SHORT") and confidence >= 0.80 and not can_trade_this:
@@ -2980,17 +2964,10 @@ def resolve_opposite_sides():
             if not long_pos or not short_pos:
                 continue
             
-            # V3.1.60: Skip if SL was recently tightened (opposite trade in progress)
-            if sym in _sl_tightened_symbols:
-                tighten_time = _sl_tightened_symbols[sym]
-                age_min = (datetime.now(timezone.utc) - tighten_time).total_seconds() / 60
-                if age_min < 15:
-                    sym_c = sym.replace('cmt_', '').upper()
-                    logger.info(f"  [OPPOSITE] Skipping {sym_c}: SL tightened {age_min:.0f}m ago, waiting")
-                    continue
-                else:
-                    del _sl_tightened_symbols[sym]
-            
+            # V3.2.22: No wait gate — close older side immediately.
+            # Clean up any stale tighten record for this symbol.
+            _sl_tightened_symbols.pop(sym, None)
+
             long_pnl = float(long_pos.get('unrealized_pnl', 0))
             short_pnl = float(short_pos.get('unrealized_pnl', 0))
             long_ctime = int(long_pos.get('ctime', 0) or 0)
@@ -3361,7 +3338,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.21 - resolve_opposite_sides: close older side (not losing)")
+    logger.info("SMT Daemon V3.2.22 - no slot swap; 85%+ opens 5th slot; opposite closes immediately")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3429,6 +3406,7 @@ def run_daemon():
     logger.info("CHANGELOG (recent):")
     logger.info("  V3.2.20: 12H SR fallback | WHALE dual source | FLOW walls fed to Judge (context, not override)")
     logger.info("  V3.2.21: resolve_opposite_sides closes OLDER position, not losing side")
+    logger.info("  V3.2.22: no slot swap; confidence>=85% opens 5th slot; opposite closes immediately (no 15m wait)")
     logger.info("  V3.2.19: Fee bleed tracking — [FEE] per trade + Gross/Fees/Net at close + HEALTH cumulative")
     logger.info("  V3.2.18: Chop penalties removed | Shorts ALL pairs | Trust 80%% floor + 0.5%% TP")
     logger.info("  V3.2.17: Stale auto-close removed | Extreme fear TP cap bug fixed | Gemini PM disabled")
