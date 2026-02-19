@@ -3092,6 +3092,31 @@ class JudgePersona:
         except Exception as _ctx_err:
             print(f"  [JUDGE] Chart context error: {_ctx_err}")
 
+        # V3.2.17: Live chop/ranging detection for Gemini Judge — ADX, BB width, directional consistency
+        chop_context_text = ""
+        try:
+            _chop = detect_sideways_market(symbol)
+            _chop_adx = _chop.get("adx", 25)
+            _chop_bb = _chop.get("bb_width_pct", 3.0)
+            _chop_dir = _chop.get("directional_consistency", 0.7)
+            _chop_disp = _chop.get("net_displacement", 0)
+            _chop_sev = _chop.get("severity", "low")
+            _chop_reason = _chop.get("reason", "OK")
+            _chop_recent = _chop.get("recent_consistency")
+
+            chop_lines = [
+                f"  ADX: {_chop_adx:.0f} (>25=trending, <18=no trend, <12=dead flat)",
+                f"  BB Width: {_chop_bb:.1f}% (wider=volatile/trending, tighter=ranging)",
+                f"  Directional Consistency: {_chop_dir:.0%} (>60%=trending, <35%=flip-flopping)",
+                f"  Net Displacement: {_chop_disp:.1f}% (actual price move over lookback window)",
+                f"  Verdict: {_chop_sev.upper()} — {_chop_reason}",
+            ]
+            if _chop_recent is not None:
+                chop_lines.append(f"  Recent Consistency: {_chop_recent:.0%} (last ~1h of candles — if higher than full, trend is resolving)")
+            chop_context_text = "\n".join(chop_lines)
+        except Exception as _chop_err:
+            print(f"  [JUDGE] Chop context error: {_chop_err}")
+
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
 Your job: analyze all signals and decide the SINGLE BEST action for {pair} right now.
 STRATEGY: High-frequency dip/bounce trades. TP targets are 0.3-0.5% (6-10% ROE at 20x). Volume of good trades beats waiting for perfect ones.
@@ -3117,6 +3142,14 @@ NOTE: Each entry shows the pair, direction, confidence, how many consecutive 10-
 - If THIS PAIR just flipped direction from last cycle (was SHORT now LONG or vice versa) = HIGH NOISE RISK. Favor WAIT unless WHALE+FLOW are both very strong (>75%).
 - If THIS PAIR has no history = first time seeing a signal for it. Treat normally.
 - Other pairs' history gives you cross-market context (is everything flipping? broad trend shift?).
+
+=== MICROSTRUCTURE / CHOP DETECTION (5m candles) ===
+{chop_context_text if chop_context_text else "Chop data unavailable."}
+USE THIS AS CONTEXT — not a hard veto. This tells you if the pair is currently ranging or trending at the micro level.
+- HIGH chop + weak signals = strong WAIT. Market is going nowhere.
+- MEDIUM chop + strong WHALE+FLOW = proceed cautiously. The dip-bounce strategy works in ranges IF the signal is strong.
+- LOW chop (trending) = normal trading. Trust your signals.
+- If ADX is rising and recent consistency is higher than full consistency, the market is BREAKING OUT of a range — good entry opportunity.
 
 === CURRENT POSITIONS ON {pair} ===
 {pair_pos_text}
