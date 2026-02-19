@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 
-**Current version: V3.2.17** — all production code is in `v3/`.
+**Current version: V3.2.18** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -288,15 +288,16 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.17. Next change should be V3.2.18.
+Current: V3.2.18. Next change should be V3.2.19.
 
 **Recent version history:**
-- V3.2.18: CHOP filter penalties removed (logging only); shorts allowed for ALL pairs; 80% floor + 0.5% TP protection
-- V3.2.17: Stale position auto-close removed; extreme fear TP cap bug fixed; Gemini portfolio review disabled
-- V3.2.16: BTC/ETH/BNB re-added; 7 pairs; 4 flat slots; Gemini chart context for TP targeting
-- V3.2.15: (previous stable, documented in CLAUDE.md)
-- V3.2.14: Reduced to LTC/XRP/SOL/ADA only; 3 slots
-- V3.2.11: DOGE removed (erratic SL/orphan behavior)
+- V3.2.18: (**CURRENT**) CHOP filter penalties removed (logging only); shorts allowed for ALL pairs; 80% floor + 0.5% TP protection; trust the signals
+- V3.2.17: Stale position auto-close removed; extreme fear TP cap bug fixed (TypeError silently skipped cap); Gemini portfolio review disabled
+- V3.2.16: BTC/ETH/BNB re-added; 7 pairs; 4 flat slots; Gemini chart context (1D+4H) for TP targeting; XRP TP cap only applies without structural target
+- V3.2.15: (previous stable)
+- V3.2.14: Flat slot cap — no equity scaling; LTC/XRP/SOL/ADA only; 3 slots
+- V3.2.12: TP anchor 6H→2H; extreme fear TP cap extended to LONG signals; XRP/ADA 2-3% TP reduced to 0.5% cap
+- V3.2.11: DOGE removed (erratic SL/orphan behavior); capitulation swap threshold -0.25%→-0.10%
 
 **CRITICAL RULE (V3.1.85+): The 80% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that
