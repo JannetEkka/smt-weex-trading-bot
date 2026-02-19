@@ -3283,7 +3283,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.28 - Discard bad-TP trades; sizing cache reset after each trade")
+    logger.info("SMT Daemon V3.2.29 - Walk resistance list before discarding bad-TP trades")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3352,6 +3352,7 @@ def run_daemon():
     logger.info("  V3.2.21: resolve_opposite_sides closes OLDER position, not losing side")
     logger.info("  V3.2.22: no slot swap; confidence>=85% opens 5th slot; opposite closes immediately (no 15m wait)")
     logger.info("  V3.2.23: banner slot swap lines removed; FLOW calls regime first (fixes mid-block [REGIME] print)")
+    logger.info("  V3.2.29: Walk full SR list (asc LONG / desc SHORT) before discarding — nearest resistance too close → try next; discard only if ALL fail")
     logger.info("  V3.2.28: Bad-TP trades discarded (entry at resistance); sizing cache reset after each trade for accurate available")
     logger.info("  V3.2.27: 12H TP haircut validity check; final TP direction guard before place_order — prevents WEEX 40015 rejection")
     logger.info("  V3.2.26: Margin guard fixed at $1000 (was balance*15%%); sizing floor $1000 — no tiny rejected orders")

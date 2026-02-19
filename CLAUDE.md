@@ -4,9 +4,9 @@
 
 AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 2026).
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
-Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
+Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.24** — all production code is in `v3/`.
+**Current version: V3.2.29** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -114,34 +114,43 @@ MIN_CONFIDENCE_TO_TRADE = 0.80      # 80% HARD FLOOR - NO exceptions (V3.1.85)
 GLOBAL_TRADE_COOLDOWN = 900          # 15min between trades
 SIGNAL_CHECK_INTERVAL = 600          # 10min
 POSITION_MONITOR_INTERVAL = 120      # 2min
-MAX_TOTAL_POSITIONS = 4              # Hard cap: 4 flat slots (V3.2.16, was 3 in V3.2.14)
+MAX_TOTAL_POSITIONS = 4              # Default 4 flat slots (V3.2.25: no hard cap — margin guard is limiter)
 
-# Slot system (V3.2.16: flat 4-slot) — hard cap 4 positions total
+# Slot system (V3.2.25: no hard slot cap)
 # Pairs: BTC, ETH, BNB, LTC, XRP, SOL, ADA (7 pairs, BTC/ETH/BNB re-added V3.2.16)
 # Shorts: ALL pairs as of V3.2.18 (was LTC-only)
-# When all slots are full: only slot swaps can enter (needs 83%+ confidence)
 # If no signals reach 80%, ALL pairs show WAIT — this is expected, not a bug.
 # Existing position + same direction signal = WAIT (already have that side).
 
-# Slot overflow (V3.2.22: slot swap removed)
-# If slots full AND confidence >= 85%: open a 5th slot directly (no existing position closed)
-# If slots full AND confidence < 85%: SLOTS FULL, skip
+# Slot overflow (V3.2.25: no slot cap — all 80%+ signals execute; margin guard is limiter)
+# confidence >= 85% with full slots: opens additional slot directly
+# confidence < 85% with full slots: SLOTS FULL, skip
+# No slot swap (removed V3.2.22); resolve_opposite_sides() runs at cycle end
 
 # Regime exit thresholds (V3.2.17: get_market_regime_for_exit() DISABLED)
 # Regime fight: 35% margin loss | Hard stop: 45% margin loss
 # NOTE: regime-based auto-exits are disabled in V3.2.17 — SL handles exits
 
-# Position sizing (V3.1.92: equity-based)
-# sizing_base = max(min(equity, balance * 2.5), balance)
+# Position sizing (V3.2.25: available-based; V3.2.26: $1000 floor)
+# sizing_base = available (free margin from API)
+# sizing_base = min(sizing_base, balance * 2.5)   # cap at 2.5× balance
+# sizing_base = max(sizing_base, 1000.0)           # floor at $1000 always
 # base_size = sizing_base * 0.25 (confidence tiers: 1.0x / 1.25x / 1.5x)
-# per_slot_cap = (sizing_base * 0.85) / max_slots
-# Margin guard: skip trades if available margin < 15% of balance
+# Per-slot cap REMOVED (V3.2.25) — sizing_base is already free available margin
+# Margin guard: skip trades if available margin < $1000 (V3.2.26, was balance×0.15 ≈ $150)
+# Sizing cache: 60s TTL; invalidated immediately after each trade (V3.2.28)
+# Cycle housekeeping (V3.2.25): dust + orphan sweep at START of every signal cycle
 
-# TP/SL bounds (V3.2.12: wick anchors on chart SR; V3.2.20: 12H SR fallback; V3.2.24: no TP floor)
+# TP/SL bounds (V3.2.24: no TP floor; V3.2.27: 12H haircut validity; V3.2.28: bad-TP discard; V3.2.29: walk list)
 # MIN_TP_PCT removed (V3.2.24) — chart SR is the TP, whatever distance that is
-# COMPETITION_FALLBACK_TP = 0.5% (all tiers, when chart SR fails entirely)
+# COMPETITION_FALLBACK_TP = 0.5% (all tiers, ONLY when chart SR returns NO data at all)
 # TP method: max high of last 2 complete 1H candles (LONG); min low (SHORT)
-#   V3.2.20 fallback: if 2H anchor is at/below entry, scan 12H for nearest resistance
+#   V3.2.20 fallback: if 2H anchor is at/below entry, scan 12H resistance list
+#   V3.2.29: walk full resistance list (ascending LONG / descending SHORT) until one clears entry
+#     → if ALL candidates fail haircut check: tp_not_found → COMPETITION_FALLBACK_TP (no SR data)
+#     → never use COMPETITION_FALLBACK_TP as a workaround for resistance-too-close
+# Final guard (V3.2.28): if TP still wrong-side of entry → discard trade entirely
+# TP caps are ceiling-only; only apply when tp_pct > cap threshold (never raise a low TP)
 # SL method: lowest wick in last 12H (1H grid) + last 3 4H candles
 # MIN_SL_PCT = 1.0%  (floor only — no ceiling, SL sits at real structure)
 
@@ -271,7 +280,7 @@ python3 v3/cryptoracle_client.py
 ## Common Bugs to Watch For
 
 1. **Orphan triggers** — Always cancel orders before closing positions
-2. **Slot swap burning money** — Don't swap young positions (<45min) or barely-negative (<-0.5%)
+2. **Bad-TP discard (V3.2.28)** — If TP lands at/below entry after haircut, trade is discarded. This means entry was at resistance — correct behavior, not a bug. V3.2.29 tries all SR candidates before discarding.
 3. **Gemini timeouts** — 90s timeout + 8s rate limit between calls. Use bulletproof wrapper.
 4. **Regime exits too aggressive** — Trust the 2% SL. Only regime-exit at 35%+ margin loss. (Note: regime exits disabled in V3.2.17)
 5. **Late entries** — Freshness filter blocks entering after a move already happened
@@ -288,10 +297,15 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.24. Next change should be V3.2.25.
+Current: V3.2.29. Next change should be V3.2.30.
 
 **Recent version history:**
-- V3.2.24: (**CURRENT**) MIN_TP_PCT=0.3% floor removed — chart SR is the TP, no artificial minimum. Flooring to 0.3% was placing TP beyond real resistance so price rejected and TP never filled.
+- V3.2.29: (**CURRENT**) Walk full resistance list (ascending LONG / descending SHORT) before discarding. If nearest SR is too close after haircut, try next candidate. Only discard if ALL candidates fail. COMPETITION_FALLBACK_TP reserved for zero-SR-data cases only (never as resistance workaround). TP caps still apply on top as ceiling.
+- V3.2.28: Bad-TP trades discarded — if TP lands at/below entry (haircut + slippage means entry is at resistance), skip the trade entirely. Sizing cache invalidated after each trade so next order sees updated available margin.
+- V3.2.27: 12H SR haircut validity check — haircut must still clear entry; final TP direction guard before place_order() (prevents WEEX 40015 rejection).
+- V3.2.26: Margin guard threshold fixed at $1000 (was balance×0.15 ≈ $150 — too low, produced tiny rejected orders); sizing base floor fixed at $1000 (same reason).
+- V3.2.25: No hard slot cap — margin guard is the natural limiter; cycle housekeeping (dust + orphan sweep) runs at START of every signal cycle; sizing base changed from equity to available free margin, floored at $1000; per-slot cap removed; resolve_opposite_sides() moved to end of cycle.
+- V3.2.24: MIN_TP_PCT=0.3% floor removed — chart SR is the TP, no artificial minimum. Flooring to 0.3% was placing TP beyond real resistance so price rejected and TP never filled.
 - V3.2.23: Banner cleanup (removed stale slot swap lines); FLOW persona calls regime before data fetches so [REGIME] prints before [FLOW] Depth (not mid-block)
 - V3.2.22: Slot swap removed — confidence>=85% opens 5th slot directly (no closing existing positions); opposite sides close immediately (no 15-min wait gate)
 - V3.2.21: resolve_opposite_sides() closes OLDER position, not losing side — newer position represents current signal; ctime fallback to PnL-based close if timestamps unavailable
@@ -321,6 +335,7 @@ lowers the trading threshold below 80%. Quality over quantity wins competitions.
 - `v3/*.bak*`, `v3/*.backup*`, `v3/*.patch`, `v3/*.orig`, `v3/*.rej`, `v3/*.save*` — backups/patches, don't modify
 - `v3/fix_*.py`, `v3/patch_*.py`, `v3/apply_*.py`, `v3/apply_*.sh` — one-shot fix scripts, already applied
 - `v3/close_btc*.py`, `v3/close_eth*.py`, `v3/close_bnb*.py`, etc. — ad-hoc manual close scripts
+- `v3/pm_close_eth_btc.py`, `v3/pm_close_ltc_bnb.py` — ad-hoc portfolio manager close scripts (Feb 2026)
 - `v2/` — backup snapshot, not in active use. Do not run.
 - `v4/` — future version, not in production
 - `v3/all_rl_data.jsonl`, `v3/rl_training_data/` — RL training data, read-only during competition
