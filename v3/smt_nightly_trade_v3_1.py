@@ -1163,18 +1163,17 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         # TP anchor: highest high of the last 2 COMPLETE 1H candles (skip candles[0] = current partial)
         # V3.2.12: 6H→2H — dip entries anchored to pre-dip peak got 2-3% TPs, never hitting
         tp_high_2h = max(highs_1h[1:3])
-        # TP anchor SHORT: nearest support = highest low of the last 2 complete 1H candles
-        # V3.2.32: min→max — targets nearest visible support, not deepest wick.
-        # With 0.5% cap in effect, aiming for deepest wick just creates synthetic TP prices.
-        # max(lows) lands at a real chart level; cap applies on top if TP% >= 0.5%.
-        tp_low_2h  = max(lows_1h[1:3])
+        # TP anchor SHORT: deepest support = lowest low of the last 2 complete 1H candles
+        # V3.2.33: max→min revert — deepest wick IS the real support; if it's within 0.5% cap
+        # it lands at the actual chart level. max (nearest) was picking meaningless noise wicks.
+        tp_low_2h  = min(lows_1h[1:3])
 
         # SL anchor 1H: lowest/highest actual wick in last 12H from 1H candles
         sl_low_12h_1h  = min(lows_1h[0:12])   # LONG SL reference
         sl_high_12h_1h = max(highs_1h[0:12])  # SHORT SL reference
 
         print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 1H anchors: "
-              f"2H_high={tp_high_2h:.4f}, 2H_nearest_low={tp_low_2h:.4f}, "
+              f"2H_high={tp_high_2h:.4f}, 2H_low={tp_low_2h:.4f}, "
               f"12H_low={sl_low_12h_1h:.4f}, 12H_high={sl_high_12h_1h:.4f}")
 
         # === 4H candles — SL only: catch any deep wick the 1H grid may miss ===
@@ -1241,7 +1240,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 result["tp_pct"]   = round(tp_pct, 2)
                 result["tp_price"] = round(tp_price, 8)
                 tp_found = True
-                print(f"  [CHART-SR] SHORT TP: 2H_nearest_low={tp_low_2h:.4f} → {tp_pct:.2f}%")
+                print(f"  [CHART-SR] SHORT TP: 2H_low={tp_low_2h:.4f} → {tp_pct:.2f}%")
             else:
                 # V3.2.20: 2H_low at/above entry — scan 48H support list
                 # V3.2.29: Walk full list descending — take first candidate below entry.
@@ -3174,6 +3173,49 @@ class JudgePersona:
                     parts.append(f"Nearest significant BID wall (support): ${_bw:.6g}")
                 flow_wall_text = "\n".join(parts)
 
+        # V3.2.34: Extract WHALE dual-source data for BTC/ETH — Etherscan + Cryptoracle separately
+        whale_dual_text = ""
+        if pair.upper() in ("BTC", "ETH"):
+            _whale_v = next((v for v in persona_votes if v.get("persona") == "WHALE"), None)
+            if _whale_v and _whale_v.get("data"):
+                _wd = _whale_v["data"]
+                _wparts = []
+                # Etherscan on-chain flow
+                _net = _wd.get("net_flow")
+                _inn = _wd.get("inflow")
+                _out = _wd.get("outflow")
+                _wn  = _wd.get("whales_analyzed", 0)
+                if _net is not None:
+                    _wdir = "accumulation" if _net > 0 else "distribution" if _net < 0 else "neutral"
+                    _wparts.append(f"Etherscan ({_wn} whale wallets): net_flow={_net:+.0f} ETH ({_wdir}), inflow={_inn:.0f}, outflow={_out:.0f}")
+                # Cryptoracle community sentiment
+                _cr = _wd.get("cryptoracle")
+                if _cr:
+                    _cr_sig  = _cr.get("signal", "NEUTRAL")
+                    _cr_conf = _cr.get("confidence", 0)
+                    _cr_ns   = _cr.get("net_sentiment")
+                    _cr_mom  = _cr.get("sentiment_momentum")
+                    _cr_gap  = _cr.get("sentiment_price_gap")
+                    _cr_tr   = _cr.get("trend_1h", "?")
+                    _crp = [f"signal={_cr_sig} ({_cr_conf:.0%})"]
+                    if _cr_ns  is not None: _crp.append(f"net_sentiment={_cr_ns:.3f} (>0.5=bullish, <0.5=bearish)")
+                    if _cr_mom is not None: _crp.append(f"momentum_zscore={_cr_mom:.3f} (>1=overheated, <-1=panic/contrarian-LONG)")
+                    if _cr_gap is not None: _crp.append(f"sentiment_price_gap={_cr_gap:.3f} (>2=reversal risk)")
+                    _crp.append(f"trend={_cr_tr}")
+                    _wparts.append("Cryptoracle community: " + ", ".join(_crp))
+                # BTC prediction market (BTC only)
+                _pm = _wd.get("prediction_market")
+                if _pm:
+                    _pm_sig = _pm.get("pm_signal", "NEUTRAL")
+                    _pm_str = _pm.get("pm_strength", "NEUTRAL")
+                    _pm_val = _pm.get("pm_sentiment")
+                    _pm_txt = f"{_pm_sig} {_pm_str}"
+                    if _pm_val is not None:
+                        _pm_txt += f" (implied_sentiment={_pm_val:+.4f}, >0=bullish, <0=bearish)"
+                    _wparts.append(f"BTC prediction market (CO-P-01-01): {_pm_txt}")
+                if _wparts:
+                    whale_dual_text = "\n".join(_wparts)
+
         # V3.2.16: Multi-TF chart context for Gemini Judge — 1D + 4H structural levels
         chart_context_text = ""
         try:
@@ -3248,7 +3290,14 @@ These are the nearest price levels where large resting orders cluster (>=1.5x av
 - ASK wall = resistance above current price (where sellers are waiting). Relevant for LONG tp_price.
 - BID wall = support below current price (where buyers are waiting). Relevant for SHORT tp_price.
 NOTE: Order book walls are ephemeral and can be pulled. Use them as ONE input for tp_price alongside chart structure, not as the sole basis.
-
+{f"""
+=== WHALE DUAL-SOURCE DATA (BTC/ETH ONLY — ON-CHAIN + CRYPTORACLE) ===
+{whale_dual_text}
+WHALE's vote in PERSONA VOTES above blends both sources into one signal. Use THIS section to weigh them independently.
+- Etherscan: actual on-chain wallet behavior of top whale addresses (structural, slow-moving signal).
+- Cryptoracle: community sentiment + prediction market intelligence (faster crowd signal).
+- If they agree → strong directional conviction. If they diverge → note the conflict and weight conservatively.
+""" if whale_dual_text else ""}
 === CURRENT POSITIONS ON {pair} ===
 {pair_pos_text}
 
@@ -3271,7 +3320,9 @@ CRITICAL: Your confidence score MUST reflect actual signal quality, NOT rules or
 
 SIGNAL RELIABILITY:
   CO-PRIMARY (equal weight, these drive your decision):
-    1. WHALE (Cryptoracle community intelligence) -- smart money / crowd wisdom. Our unique edge.
+    1. WHALE -- smart money / crowd wisdom. Our unique edge.
+       For BTC/ETH: dual-source — Etherscan on-chain whale wallets (structural) + Cryptoracle community sentiment (crowd). See WHALE DUAL-SOURCE DATA section above for raw numbers. When both agree, WHALE signal is very strong. When they diverge, weight conservatively.
+       For other pairs: Cryptoracle community sentiment only.
     2. FLOW (order book taker ratio) -- actual money moving right now.
   SECONDARY (confirmation only, never override WHALE+FLOW):
     3. SENTIMENT (web search price action) -- context, not a trading signal.

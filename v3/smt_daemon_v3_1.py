@@ -3283,7 +3283,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.32 - SHORT TP uses nearest support (max lows), not deepest wick (min lows)")
+    logger.info("SMT Daemon V3.2.34 - Judge sees WHALE dual-source (Etherscan+Cryptoracle) for BTC/ETH separately")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
