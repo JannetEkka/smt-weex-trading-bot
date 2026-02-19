@@ -3250,6 +3250,18 @@ class JudgePersona:
         except Exception as _chop_err:
             print(f"  [JUDGE] Chop context error: {_chop_err}")
 
+        # V3.2.34: Build whale dual-source section for BTC/ETH (outside f-string to avoid nested triple-quotes)
+        whale_section = ""
+        if whale_dual_text:
+            whale_section = (
+                "\n=== WHALE DUAL-SOURCE DATA (BTC/ETH ONLY -- ON-CHAIN + CRYPTORACLE) ===\n"
+                + whale_dual_text + "\n"
+                + "WHALE vote in PERSONA VOTES above blends both sources into one signal. Use THIS section to weigh them independently.\n"
+                + "- Etherscan: actual on-chain wallet behavior of top whale addresses (structural, slow-moving signal).\n"
+                + "- Cryptoracle: community sentiment + prediction market intelligence (faster crowd signal).\n"
+                + "- If they agree: strong directional conviction. If they diverge: note the conflict and weight conservatively.\n"
+            )
+
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
 Your job: analyze all signals and decide the SINGLE BEST action for {pair} right now.
 STRATEGY: High-frequency dip/bounce trades. TP targets are 0.3-0.5% (6-10% ROE at 20x). Volume of good trades beats waiting for perfect ones.
@@ -3290,14 +3302,7 @@ These are the nearest price levels where large resting orders cluster (>=1.5x av
 - ASK wall = resistance above current price (where sellers are waiting). Relevant for LONG tp_price.
 - BID wall = support below current price (where buyers are waiting). Relevant for SHORT tp_price.
 NOTE: Order book walls are ephemeral and can be pulled. Use them as ONE input for tp_price alongside chart structure, not as the sole basis.
-{f"""
-=== WHALE DUAL-SOURCE DATA (BTC/ETH ONLY — ON-CHAIN + CRYPTORACLE) ===
-{whale_dual_text}
-WHALE's vote in PERSONA VOTES above blends both sources into one signal. Use THIS section to weigh them independently.
-- Etherscan: actual on-chain wallet behavior of top whale addresses (structural, slow-moving signal).
-- Cryptoracle: community sentiment + prediction market intelligence (faster crowd signal).
-- If they agree → strong directional conviction. If they diverge → note the conflict and weight conservatively.
-""" if whale_dual_text else ""}
+{whale_section}
 === CURRENT POSITIONS ON {pair} ===
 {pair_pos_text}
 
@@ -3321,7 +3326,7 @@ CRITICAL: Your confidence score MUST reflect actual signal quality, NOT rules or
 SIGNAL RELIABILITY:
   CO-PRIMARY (equal weight, these drive your decision):
     1. WHALE -- smart money / crowd wisdom. Our unique edge.
-       For BTC/ETH: dual-source — Etherscan on-chain whale wallets (structural) + Cryptoracle community sentiment (crowd). See WHALE DUAL-SOURCE DATA section above for raw numbers. When both agree, WHALE signal is very strong. When they diverge, weight conservatively.
+       For BTC/ETH: dual-source -- Etherscan on-chain whale wallets (structural) + Cryptoracle community sentiment (crowd). See WHALE DUAL-SOURCE DATA section above for raw numbers. When both agree, WHALE signal is very strong. When they diverge, weight conservatively.
        For other pairs: Cryptoracle community sentiment only.
     2. FLOW (order book taker ratio) -- actual money moving right now.
   SECONDARY (confirmation only, never override WHALE+FLOW):
