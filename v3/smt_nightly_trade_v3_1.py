@@ -1749,18 +1749,18 @@ def get_sizing_base(balance: float) -> float:
         if equity <= 0:
             equity = balance  # API failed, fall back to balance
 
-        # FLOOR 1: If available margin < 15% of balance, signal "don't trade"
-        if available > 0 and available < balance * 0.15:
-            print(f"  [MARGIN GUARD] Available ${available:.0f} < 15% of balance ${balance:.0f}. Sizing blocked.")
+        # FLOOR 1: If available margin < $1000, signal "don't trade" — not enough free margin to size meaningfully
+        # V3.2.26: fixed $1000 guard (was balance*0.15 ≈ $150 — too low, led to tiny rejected orders)
+        if available > 0 and available < 1000.0:
+            print(f"  [MARGIN GUARD] Available ${available:.0f} < $1000 minimum. Sizing blocked.")
             _sizing_equity_cache = {"sizing_base": 0, "equity": equity, "available": available, "ts": now}
             return 0
 
         # V3.2.25: Size from available free margin — equity minus what's already deployed.
-        # "Everything is compounded": gains increase available, but deployed margin is subtracted.
-        # available IS the correct sizing base: real free capital after all open positions consume their margin.
+        # V3.2.26: Floor at $1000 — always size off at least $1000 base → $250 margin min → $5k notional at 20x
         sizing_base = available if available > 0 else balance
         sizing_base = min(sizing_base, balance * 2.5)   # Cap runaway (e.g. huge UPnL inflating available)
-        sizing_base = max(sizing_base, balance * 0.15)  # Floor: never below the margin-guard threshold
+        sizing_base = max(sizing_base, 1000.0)          # Floor: $1000 minimum sizing base
 
         print(f"  [SIZING] Equity: ${equity:.0f} | Available: ${available:.0f} | Balance: ${balance:.0f} | Sizing base: ${sizing_base:.0f}")
 
