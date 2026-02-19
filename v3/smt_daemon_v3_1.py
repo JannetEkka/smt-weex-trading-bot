@@ -339,10 +339,6 @@ class DaemonState:
         self.runners_triggered = 0  # V3.1.2: Track runner partial closes
         self.errors = 0
 
-        # V3.2.19: Fee bleed tracking — estimated, based on 0.06% taker per side
-        self.session_fees_est = 0.0   # cumulative fees paid (both sides, all trades)
-        self.session_gross_pnl = 0.0  # gross PnL before fees (closed trades only)
-
         self.is_running = True
         self.shutdown_event = Event()
     
@@ -1469,8 +1465,7 @@ def check_trading_signals():
                         _pos_usdt = trade_result.get("position_usdt", 0)
                         if _pos_usdt > 0:
                             _open_fee = _pos_usdt * 20 * TAKER_FEE_RATE
-                            state.session_fees_est += _open_fee
-                            logger.info(f"  [FEE] Open: ~${_open_fee:.2f} (0.06% × ${_pos_usdt*20:.0f} notional) | Session fees so far: ~${state.session_fees_est:.2f}")
+                            logger.info(f"  [FEE] Open: ~${_open_fee:.2f} (0.06% × ${_pos_usdt*20:.0f} notional)")
                         
                         trade_result["confidence"] = confidence  # V3.1.41: Store for profit guard
                         # V3.1.51: Store whale confidence for Smart Hold protection
@@ -1579,11 +1574,8 @@ def monitor_positions():
                             actual_pnl = position_usdt * (pnl_pct / 100)
                         if position_usdt > 0:
                             _rt_fee = position_usdt * 20 * TAKER_FEE_RATE * 2  # both sides
-                            _close_fee = _rt_fee / 2
-                            state.session_fees_est += _close_fee
-                            state.session_gross_pnl += actual_pnl
                             _net_pnl = actual_pnl - _rt_fee
-                            logger.info(f"  Gross PnL: ${actual_pnl:.2f} ({pnl_pct:+.2f}%) | Fees (R/T): ~${_rt_fee:.2f} | Net: ~${_net_pnl:.2f} | Session fees: ~${state.session_fees_est:.2f}")
+                            logger.info(f"  Gross PnL: ${actual_pnl:.2f} ({pnl_pct:+.2f}%) | Fees (R/T): ~${_rt_fee:.2f} | Net: ~${_net_pnl:.2f}")
                         else:
                             logger.info(f"  PnL: ${actual_pnl:.2f} ({pnl_pct:+.2f}%)")
                     except Exception as e:
@@ -2760,13 +2752,11 @@ def log_health():
     uptime_str = str(uptime).split('.')[0]
     active = len(tracker.get_active_symbols())
 
-    _net_pnl_est = state.session_gross_pnl - state.session_fees_est
     logger.info(
         f"HEALTH | Up: {uptime_str} | "
         f"Signals: {state.signals_checked} | "
         f"Trades: {state.trades_opened}/{state.trades_closed} | "
-        f"Active: {active} | "
-        f"Fees: ~${state.session_fees_est:.2f} | Net PnL: ~${_net_pnl_est:.2f}"
+        f"Active: {active}"
     )
 
     # V3.1.82: Mark again after health log (belt and suspenders)
