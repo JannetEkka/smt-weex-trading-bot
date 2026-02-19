@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 
-**Current version: V3.2.23** — all production code is in `v3/`.
+**Current version: V3.2.24** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -137,9 +137,9 @@ MAX_TOTAL_POSITIONS = 4              # Hard cap: 4 flat slots (V3.2.16, was 3 in
 # per_slot_cap = (sizing_base * 0.85) / max_slots
 # Margin guard: skip trades if available margin < 15% of balance
 
-# TP/SL bounds (V3.2.12: wick anchors on chart SR; V3.2.20: 12H SR fallback)
-# MIN_TP_PCT = 0.3%  (floor only — no ceiling, chart finds real resistance)
-# COMPETITION_FALLBACK_TP = 0.5% (all tiers, when chart SR fails)
+# TP/SL bounds (V3.2.12: wick anchors on chart SR; V3.2.20: 12H SR fallback; V3.2.24: no TP floor)
+# MIN_TP_PCT removed (V3.2.24) — chart SR is the TP, whatever distance that is
+# COMPETITION_FALLBACK_TP = 0.5% (all tiers, when chart SR fails entirely)
 # TP method: max high of last 2 complete 1H candles (LONG); min low (SHORT)
 #   V3.2.20 fallback: if 2H anchor is at/below entry, scan 12H for nearest resistance
 # SL method: lowest wick in last 12H (1H grid) + last 3 4H candles
@@ -288,10 +288,11 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.23. Next change should be V3.2.24.
+Current: V3.2.24. Next change should be V3.2.25.
 
 **Recent version history:**
-- V3.2.23: (**CURRENT**) Banner cleanup (removed stale slot swap lines); FLOW persona calls regime before data fetches so [REGIME] prints before [FLOW] Depth (not mid-block)
+- V3.2.24: (**CURRENT**) MIN_TP_PCT=0.3% floor removed — chart SR is the TP, no artificial minimum. Flooring to 0.3% was placing TP beyond real resistance so price rejected and TP never filled.
+- V3.2.23: Banner cleanup (removed stale slot swap lines); FLOW persona calls regime before data fetches so [REGIME] prints before [FLOW] Depth (not mid-block)
 - V3.2.22: Slot swap removed — confidence>=85% opens 5th slot directly (no closing existing positions); opposite sides close immediately (no 15-min wait gate)
 - V3.2.21: resolve_opposite_sides() closes OLDER position, not losing side — newer position represents current signal; ctime fallback to PnL-based close if timestamps unavailable
 - V3.2.20: 12H SR fallback TP scan when 2H anchor is at/below entry; WHALE always uses Etherscan for BTC/ETH (dual source); FLOW order book wall detection (depth limit=200, top-15 levels, 1.5× avg threshold) fed to Judge as context (not hard TP override)
