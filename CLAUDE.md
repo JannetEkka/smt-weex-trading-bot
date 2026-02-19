@@ -6,41 +6,41 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $1,000 USDT. Prelims: +566% ROI, #2 overall.
 
-**Current version: V3.2.19** — all production code is in `v3/`.
+**Current version: V3.2.20** — all production code is in `v3/`.
 
 ## Architecture
 
 ```
 v3/                              # PRIMARY production folder
-├── smt_daemon_v3_1.py          # 24/7 daemon loop (~3521 lines)
-│   - check_trading_signals()    → Signal check cycle (every 10min)   [line 531]
-│   - monitor_positions()        → Position monitor cycle (every 2min) [line 1529]
-│   - regime_aware_exit_check()  → Regime-based exit logic             [line 3137]
-│   - gemini_portfolio_review()  → Gemini AI portfolio optimization    [line 2136] DISABLED V3.2.17
-│   - sync_tracker_with_weex()   → Reconcile local state vs WEEX      [line 2767]
-│   - quick_cleanup_check()      → Orphan order cleanup (every 30s)    [line 2635]
-│   - log_health()               → Health check (every 60s)            [line 2735]
-│   - _check_opposite_swap_gates() → V3.1.100 opposite swap TP gate   [line 1964]
-│   - _execute_deferred_flips()  → Deferred flip queue execution       [line 2021]
-│   - cleanup_dust_positions()   → Remove near-zero positions          [line 2102]
-│   - resolve_opposite_sides()   → Close losing side when both exist   [line 2936]
-│   - get_market_regime_for_exit() → Market regime detection           [line 3061] DISABLED V3.2.17
+├── smt_daemon_v3_1.py          # 24/7 daemon loop (~3503 lines)
+│   - check_trading_signals()    → Signal check cycle (every 10min)   [line 532]
+│   - monitor_positions()        → Position monitor cycle (every 2min) [line 1534]
+│   - regime_aware_exit_check()  → Regime-based exit logic             [line 3147]
+│   - gemini_portfolio_review()  → Gemini AI portfolio optimization    [line 2146] DISABLED V3.2.17
+│   - sync_tracker_with_weex()   → Reconcile local state vs WEEX      [line 2777]
+│   - quick_cleanup_check()      → Orphan order cleanup (every 30s)    [line 2645]
+│   - log_health()               → Health check (every 60s)            [line 2745]
+│   - _check_opposite_swap_gates() → V3.1.100 opposite swap TP gate   [line 1974]
+│   - _execute_deferred_flips()  → Deferred flip queue execution       [line 2031]
+│   - cleanup_dust_positions()   → Remove near-zero positions          [line 2112]
+│   - resolve_opposite_sides()   → Close losing side when both exist   [line 2946]
+│   - get_market_regime_for_exit() → Market regime detection           [line 3071] DISABLED V3.2.17
 │   - fill_rl_outcomes_inline()  → RL training data fill               [line 61]
 │
-├── smt_nightly_trade_v3_1.py   # Core trading logic (~4738 lines)
-│   - MultiPersonaAnalyzer       → 5-persona ensemble                  [line 3567]
-│   - place_order()              → WEEX order placement
-│   - close_position_manually()  → Close + cancel orphan triggers
-│   - cancel_all_orders_for_symbol() → Kill all orders (regular + plan)
-│   - upload_ai_log_to_weex()    → Competition logging (REQUIRED)
-│   - get_open_positions()       → WEEX positions API
-│   - get_balance()              → WEEX balance API
-│   - TRADING_PAIRS              → 7 pairs with tier/symbol config
-│   - TIER_CONFIG                → TP/SL/hold times per tier
+├── smt_nightly_trade_v3_1.py   # Core trading logic (~4819 lines)
+│   - MultiPersonaAnalyzer       → 5-persona ensemble                  [line 3648]
+│   - place_order()              → WEEX order placement                [line 3809]
+│   - close_position_manually()  → Close + cancel orphan triggers      [line 4628]
+│   - cancel_all_orders_for_symbol() → Kill all orders (regular + plan)[line 4549]
+│   - upload_ai_log_to_weex()    → Competition logging (REQUIRED)      [line 3857]
+│   - get_open_positions()       → WEEX positions API                  [line 1979]
+│   - get_balance()              → WEEX balance API                    [line 1922]
+│   - TRADING_PAIRS              → 7 pairs with tier/symbol config     [line 1816]
+│   - TIER_CONFIG                → TP/SL/hold times per tier           [line 1808]
 │   - find_chart_based_tp_sl()   → Support/resistance TP/SL            [line 1104]
 │   - detect_sideways_market()   → Chop filter (logging only, V3.2.18) [line 671]
-│   - get_chart_context()        → Multi-TF Gemini chart context        [line 1261]
-│   - TradeTracker               → Local state management               [line 4191]
+│   - get_chart_context()        → Multi-TF Gemini chart context        [line 1284]
+│   - TradeTracker               → Local state management               [line 4272]
 │
 ├── watchdog.sh                 # Process watchdog — start this, NOT the daemon directly
 │                               # Restarts daemon on crash; hang detection (15min log staleness)
@@ -138,10 +138,11 @@ MAX_TOTAL_POSITIONS = 4              # Hard cap: 4 flat slots (V3.2.16, was 3 in
 # per_slot_cap = (sizing_base * 0.85) / max_slots
 # Margin guard: skip trades if available margin < 15% of balance
 
-# TP/SL bounds (V3.2.12: wick anchors on chart SR)
+# TP/SL bounds (V3.2.12: wick anchors on chart SR; V3.2.20: 12H SR fallback)
 # MIN_TP_PCT = 0.3%  (floor only — no ceiling, chart finds real resistance)
 # COMPETITION_FALLBACK_TP = 0.5% (all tiers, when chart SR fails)
 # TP method: max high of last 2 complete 1H candles (LONG); min low (SHORT)
+#   V3.2.20 fallback: if 2H anchor is at/below entry, scan 12H for nearest resistance
 # SL method: lowest wick in last 12H (1H grid) + last 3 4H candles
 # MIN_SL_PCT = 1.0%  (floor only — no ceiling, SL sits at real structure)
 
@@ -195,11 +196,11 @@ Key endpoints:
 
 ## 5-Persona System
 
-1. **WHALE** — On-chain wallet tracking (Etherscan + Cryptoracle). CEX inflow/outflow signals. Cryptoracle provides community sentiment, prediction market, sentiment momentum Z-score.
+1. **WHALE** — On-chain wallet tracking (Etherscan + Cryptoracle). CEX inflow/outflow signals. Cryptoracle provides community sentiment, prediction market, sentiment momentum Z-score. V3.2.20: BTC and ETH always run Etherscan on-chain flow regardless of `has_whale_data` flag (dual source: Etherscan + Cryptoracle combined).
 2. **SENTIMENT** — Gemini 2.5 Flash with Search Grounding. Real-time news analysis.
-3. **FLOW** — WEEX order book + trades. Taker ratios, bid/ask depth, funding rates.
+3. **FLOW** — WEEX order book + trades. Taker ratios, bid/ask depth, funding rates. V3.2.20: order book wall detection (depth limit=200) — nearest significant ask/bid wall passed to Judge as context.
 4. **TECHNICAL** — RSI(14), SMA 20/50, 5-candle momentum on 1h candles.
-5. **JUDGE** — Aggregates all votes with regime-aware weights. Final LONG/SHORT/WAIT. V3.2.16: receives Gemini chart context (1D + 4H structural levels) to assist TP targeting.
+5. **JUDGE** — Aggregates all votes with regime-aware weights. Final LONG/SHORT/WAIT. V3.2.16: receives Gemini chart context (1D + 4H structural levels). V3.2.17: receives signal cycle memory + live chop microstructure. V3.2.20: receives FLOW order book wall prices as additional TP context.
 
 Post-judge filters (V3.2.18): Freshness filter, Regime veto, Consecutive loss block.
 Chop filter kept for **logging only** — no score penalties applied as of V3.2.18.
@@ -288,10 +289,11 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.19. Next change should be V3.2.20.
+Current: V3.2.20. Next change should be V3.2.21.
 
 **Recent version history:**
-- V3.2.19: (**CURRENT**) Fee bleed tracking — [FEE] Open per trade, Gross/Fees(R-T)/Net at close, session fees in HEALTH line
+- V3.2.20: (**CURRENT**) 12H SR fallback TP scan when 2H anchor is at/below entry; WHALE always uses Etherscan for BTC/ETH (dual source); FLOW order book wall detection (depth limit=200, top-15 levels, 1.5× avg threshold) fed to Judge as context (not hard TP override)
+- V3.2.19: Fee bleed tracking — [FEE] Open per trade, Gross/Fees(R-T)/Net at close
 - V3.2.18: CHOP filter penalties removed (logging only); shorts allowed for ALL pairs; 80% floor + 0.5% TP protection; trust the signals
 - V3.2.17: Stale position auto-close removed; extreme fear TP cap bug fixed (TypeError silently skipped cap); Gemini portfolio review disabled
 - V3.2.16: BTC/ETH/BNB re-added; 7 pairs; 4 flat slots; Gemini chart context (1D+4H) for TP targeting; XRP TP cap only applies without structural target
