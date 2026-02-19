@@ -2731,8 +2731,8 @@ class FlowPersona:
     
     def _get_order_book_depth(self, symbol: str) -> Dict:
         try:
-            # WEEX uses limit=15 or limit=200
-            url = f"{WEEX_BASE_URL}/capi/v2/market/depth?symbol={symbol}&limit=15"
+            # V3.2.20: limit=200 for wall detection (15 levels too tight on liquid pairs)
+            url = f"{WEEX_BASE_URL}/capi/v2/market/depth?symbol={symbol}&limit=200"
             r = requests.get(url, timeout=10)
             data = r.json()
 
@@ -3140,6 +3140,21 @@ class JudgePersona:
         except Exception as _sh_err:
             print(f"  [JUDGE] Signal history error: {_sh_err}")
 
+        # V3.2.20: Extract FLOW order book wall data for Judge context
+        flow_wall_text = ""
+        _flow_v = next((v for v in persona_votes if v.get("persona") == "FLOW"), None)
+        if _flow_v and _flow_v.get("data"):
+            _fw = _flow_v["data"]
+            _aw = _fw.get("nearest_ask_wall")
+            _bw = _fw.get("nearest_bid_wall")
+            if _aw or _bw:
+                parts = []
+                if _aw:
+                    parts.append(f"Nearest significant ASK wall (resistance): ${_aw:.6g}")
+                if _bw:
+                    parts.append(f"Nearest significant BID wall (support): ${_bw:.6g}")
+                flow_wall_text = "\n".join(parts)
+
         # V3.2.16: Multi-TF chart context for Gemini Judge — 1D + 4H structural levels
         chart_context_text = ""
         try:
@@ -3208,6 +3223,13 @@ USE THIS AS CONTEXT — not a hard veto. This tells you if the pair is currently
 - LOW chop (trending) = normal trading. Trust your signals.
 - If ADX is rising and recent consistency is higher than full consistency, the market is BREAKING OUT of a range — good entry opportunity.
 
+=== FLOW ORDER BOOK WALLS (live depth, 200 levels) ===
+{flow_wall_text if flow_wall_text else "No significant walls detected in current order book."}
+These are the nearest price levels where large resting orders cluster (>=1.5x average level volume).
+- ASK wall = resistance above current price (where sellers are waiting). Relevant for LONG tp_price.
+- BID wall = support below current price (where buyers are waiting). Relevant for SHORT tp_price.
+NOTE: Order book walls are ephemeral and can be pulled. Use them as ONE input for tp_price alongside chart structure, not as the sole basis.
+
 === CURRENT POSITIONS ON {pair} ===
 {pair_pos_text}
 
@@ -3243,11 +3265,13 @@ HOW TO DECIDE:
 - If WHALE and FLOW directly contradict (opposite directions, both >60%): WAIT.
 - If neither co-primary signal exceeds 60%: WAIT. No clear edge.
 
-TP TARGET (V3.2.16 — USE CHART STRUCTURE):
-Look at the CHART STRUCTURE section above. If you decide LONG or SHORT, identify the NEAREST structural resistance (for LONG) or support (for SHORT) from the 4H or Daily levels.
-Return this as "tp_price" in your JSON response — the actual price level where you expect the move to stall.
-This should be a REALISTIC near-term target, not the 5D high. Think: "where is the first wall?"
-If chart data is unavailable, omit tp_price and code will use its default.
+TP TARGET (V3.2.20 — USE CHART STRUCTURE + FLOW WALLS):
+Look at CHART STRUCTURE and FLOW ORDER BOOK WALLS above. If you decide LONG or SHORT:
+1. Chart structure (4H/Daily levels) = durable historical S/R. Primary reference.
+2. FLOW walls (live order book) = where large orders sit RIGHT NOW. Secondary reference.
+3. If both agree on a level, high confidence in tp_price. If they conflict, prefer chart structure (more durable).
+Return "tp_price" = the actual price level where you expect the move to stall. REALISTIC near-term target, not the 5D high.
+If neither chart nor walls provide a clear target, omit tp_price and code will use its 0.5% fallback.
 
 === HISTORICAL PAIR PERFORMANCE (from RL training data) ===
 {rl_performance}
@@ -4016,36 +4040,6 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
                     chart_sr["method"] = "chart_mtf"
                 _gemini_tp_used = True
 
-    # V3.2.20: FLOW order book wall TP override — live ask/bid wall detected from order book depth.
-    # Runs ONLY if Gemini didn't already provide a structural TP (Gemini structural takes priority).
-    # Order book walls show EXACTLY where large sellers/buyers are sitting — the natural exit point.
-    _flow_wall_tp_used = False
-    if not _gemini_tp_used:
-        _flow_vote = next((v for v in decision.get("persona_votes", []) if v.get("persona") == "FLOW"), None)
-        _flow_data = _flow_vote.get("data", {}) if _flow_vote else {}
-        if signal == "LONG":
-            _ask_wall = _flow_data.get("nearest_ask_wall")
-            if _ask_wall and _ask_wall > current_price:
-                _wall_tp_pct = ((_ask_wall - current_price) / current_price) * 100
-                if 0.3 <= _wall_tp_pct <= 3.0:
-                    print(f"  [TP/SL] FLOW WALL TP (LONG): ask wall ${_ask_wall:.6g} = {_wall_tp_pct:.2f}%")
-                    chart_sr["tp_pct"] = round(_wall_tp_pct, 2)
-                    chart_sr["tp_price"] = _ask_wall
-                    if chart_sr["method"] == "fallback":
-                        chart_sr["method"] = "chart_mtf"
-                    _flow_wall_tp_used = True
-        elif signal == "SHORT":
-            _bid_wall = _flow_data.get("nearest_bid_wall")
-            if _bid_wall and _bid_wall < current_price:
-                _wall_tp_pct = ((current_price - _bid_wall) / current_price) * 100
-                if 0.3 <= _wall_tp_pct <= 3.0:
-                    print(f"  [TP/SL] FLOW WALL TP (SHORT): bid wall ${_bid_wall:.6g} = {_wall_tp_pct:.2f}%")
-                    chart_sr["tp_pct"] = round(_wall_tp_pct, 2)
-                    chart_sr["tp_price"] = _bid_wall
-                    if chart_sr["method"] == "fallback":
-                        chart_sr["method"] = "chart_mtf"
-                    _flow_wall_tp_used = True
-
     if chart_sr["method"] in ("chart", "chart_mtf") and chart_sr["tp_pct"] and chart_sr["sl_pct"]:
         # CHART-BASED: Real S/R levels from candle swing highs/lows (or Gemini structural target)
         tp_pct_raw = chart_sr["tp_pct"]
@@ -4054,7 +4048,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         sl_price = chart_sr["sl_price"]
         tp_pct = tp_pct_raw / 100
         sl_pct = sl_pct_raw / 100
-        mtf_label = "GEMINI" if _gemini_tp_used else ("FLOW-WALL" if _flow_wall_tp_used else ("MTF" if chart_sr["method"] == "chart_mtf" else "1H"))
+        mtf_label = "GEMINI" if _gemini_tp_used else ("MTF" if chart_sr["method"] == "chart_mtf" else "1H")
         print(f"  [TP/SL] CHART-BASED [{mtf_label}]: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
 
         # V3.2.12: In extreme fear, cap ALL TP at competition fallback (0.5%) — both LONG and SHORT.
@@ -4076,8 +4070,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
         # V3.2.15: XRP-specific TP cap — historical fills show XRP moves 0.34–0.48%.
         # V3.2.16: Only apply if Gemini didn't give us a structural target (Gemini sees the real chart).
-        # V3.2.20: Also skip cap if FLOW wall TP is used (live order book is authoritative).
-        if symbol == "cmt_xrpusdt" and tp_pct_raw > 0.70 and not _gemini_tp_used and not _flow_wall_tp_used:
+        if symbol == "cmt_xrpusdt" and tp_pct_raw > 0.70 and not _gemini_tp_used:
             print(f"  [TP/SL] XRP TP cap: {tp_pct_raw:.2f}% → 0.70% (historical range, no Gemini override)")
             tp_pct_raw = 0.70
             tp_pct = tp_pct_raw / 100
