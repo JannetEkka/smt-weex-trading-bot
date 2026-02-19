@@ -4157,15 +4157,12 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
     set_leverage(symbol, safe_leverage)
 
-    # V3.2.27: Final TP direction guard — haircut or slippage can land TP on wrong side of entry.
-    # If TP is invalid, fall back to competition fallback % from current_price (not None — always send a TP).
-    _fb_tp = COMPETITION_FALLBACK_TP.get(tier, 0.5) / 100
+    # V3.2.28: Final TP direction guard — if TP landed on wrong side of entry (haircut + slippage),
+    # discard the trade. Entry is at or past resistance/support — bad entry, don't take it.
     if signal == "LONG" and tp_price <= current_price:
-        tp_price = round(current_price * (1 + _fb_tp), 8)
-        print(f"  [TP-SAFETY] LONG TP was <= entry, reset to fallback {_fb_tp*100:.2f}%: ${tp_price:.4f}")
+        return {"executed": False, "reason": f"TP {tp_price:.4f} <= entry {current_price:.4f} — resistance too close after slippage, skip"}
     elif signal == "SHORT" and tp_price >= current_price:
-        tp_price = round(current_price * (1 - _fb_tp), 8)
-        print(f"  [TP-SAFETY] SHORT TP was >= entry, reset to fallback {_fb_tp*100:.2f}%: ${tp_price:.4f}")
+        return {"executed": False, "reason": f"TP {tp_price:.4f} >= entry {current_price:.4f} — support too close after slippage, skip"}
 
     print(f"  [TRADE] {signal} {symbol}: {size} @ ${current_price:.4f}")
     print(f"  [TRADE] Tier {tier} ({tier_config['name']}): TP ${tp_price:.4f} ({tp_pct*100:.1f}%), SL ${sl_price:.4f} ({sl_pct*100:.1f}%)")
@@ -4176,6 +4173,9 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
     if not order_id:
         return {"executed": False, "reason": f"Order failed: {result}"}
+
+    # V3.2.28: Invalidate sizing cache after trade — available has changed, next trade must recalculate
+    _sizing_equity_cache["ts"] = 0
 
     # V3.2.6: For DOGE, cancel preset plan orders and re-place TP/SL explicitly.
     # Prevents SL price drift caused by orphan interference with WEEX preset processing.
