@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.2.16 - Gemini Chart Context, 7 pairs, structural TP targeting
+SMT Nightly Trade V3.2.17 - Gemini Cycle Memory, Chart Context, 7 pairs, structural TP targeting
 =============================================================
 No partial closes. Higher conviction trades only.
 
@@ -3055,6 +3055,34 @@ class JudgePersona:
         except Exception:
             rl_performance = "Historical pair performance unavailable."
 
+        # V3.2.17: Signal cycle history for Gemini Judge — gives memory across cycles
+        signal_history_text = ""
+        try:
+            _sh = _hist_tracker.signal_history
+            if _sh:
+                _sh_lines = []
+                for _sh_pair, _sh_data in _sh.items():
+                    _sh_dir = _sh_data.get("direction", "?")
+                    _sh_conf = _sh_data.get("confidence", 0)
+                    _sh_count = _sh_data.get("count", 0)
+                    _sh_first = _sh_data.get("entry_time", "")
+                    _sh_last = _sh_data.get("last_seen", "")
+                    # Calculate age in minutes since first seen
+                    _sh_age_min = 0
+                    if _sh_first:
+                        try:
+                            _sh_first_dt = datetime.fromisoformat(_sh_first.replace("Z", "+00:00"))
+                            _sh_age_min = int((datetime.now(timezone.utc) - _sh_first_dt).total_seconds() / 60)
+                        except Exception:
+                            pass
+                    _is_current = " ← THIS PAIR" if _sh_pair == pair else ""
+                    _sh_lines.append(
+                        f"  {_sh_pair}: {_sh_dir} {_sh_conf:.0%} × {_sh_count} cycles ({_sh_age_min}min ago){_is_current}"
+                    )
+                signal_history_text = "\n".join(_sh_lines)
+        except Exception as _sh_err:
+            print(f"  [JUDGE] Signal history error: {_sh_err}")
+
         # V3.2.16: Multi-TF chart context for Gemini Judge — 1D + 4H structural levels
         chart_context_text = ""
         try:
@@ -3081,6 +3109,15 @@ Funding rate (BTC): {regime.get('btc_funding', 0):.6f}
 === CHART STRUCTURE (1D + 4H) ===
 {chart_context_text if chart_context_text else "Chart data unavailable — use persona votes only."}
 
+=== SIGNAL CYCLE HISTORY (V3.2.17) ===
+{signal_history_text if signal_history_text else "No recent signal history (first cycle or all signals expired)."}
+NOTE: Each entry shows the pair, direction, confidence, how many consecutive 10-min cycles it persisted, and when it first appeared.
+- 2+ cycles same direction = signal is REAL and confirmed. Commit harder (boost confidence).
+- 1 cycle only = fresh signal, could be noise. Normal confidence.
+- If THIS PAIR just flipped direction from last cycle (was SHORT now LONG or vice versa) = HIGH NOISE RISK. Favor WAIT unless WHALE+FLOW are both very strong (>75%).
+- If THIS PAIR has no history = first time seeing a signal for it. Treat normally.
+- Other pairs' history gives you cross-market context (is everything flipping? broad trend shift?).
+
 === CURRENT POSITIONS ON {pair} ===
 {pair_pos_text}
 
@@ -3092,7 +3129,7 @@ Days remaining: {days_left}
 PnL: ${pnl:.0f} ({pnl_pct:+.1f}%)
 Available balance: ${balance:.0f}
 
-=== DECISION GUIDELINES (V3.2.16 CHART-AWARE) ===
+=== DECISION GUIDELINES (V3.2.17 CHART+MEMORY) ===
 
 YOUR ONLY JOB: Decide LONG, SHORT, or WAIT based on signal quality. Position limits, TP/SL, and slot management are handled by code -- ignore them entirely.
 
