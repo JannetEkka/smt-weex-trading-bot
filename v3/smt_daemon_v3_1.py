@@ -630,8 +630,10 @@ def check_trading_signals():
         # V3.1.53: Confidence override constants (restored)
         CONFIDENCE_OVERRIDE_THRESHOLD = 0.85
         MAX_CONFIDENCE_SLOTS = 0  # V3.1.64a: DISABLED - hard cap is absolute
-        
+        CONFIDENCE_EXTRA_SLOT = 0.90  # V3.2.39: 90%+ signals may open 5th slot when all 4 full
+
         # V3.2.38: 4-slot hard cap restored (was removed in V3.2.25)
+        # V3.2.39: base can_open_new on slots; 90%+ exception applied per-signal below
         can_open_new = not low_equity_mode and available_slots > 0
 
         if low_equity_mode:
@@ -902,10 +904,12 @@ def check_trading_signals():
                                 explanation=f"AI decided to maintain SHORT position. Existing SHORT confidence ({existing_conf:.0%}) > new LONG signal ({confidence:.0%}). No directional change warranted."
                             )
                     else:
-                        if can_open_new:
-                            # V3.2.38: 4-slot hard cap enforced via can_open_new
+                        if can_open_new or (not low_equity_mode and confidence >= CONFIDENCE_EXTRA_SLOT):
+                            # V3.2.39: 4-slot hard cap base; 90%+ signals open 5th slot when full
                             can_trade_this = True
                             trade_type = "new"
+                            if not can_open_new:
+                                logger.info(f"    -> 90%+ EXTRA SLOT: {confidence:.0%} >= {CONFIDENCE_EXTRA_SLOT:.0%}, opening beyond {effective_max_positions} slots")
 
                 elif signal == "SHORT":
                     # V3.2.18: Shorts allowed for ALL pairs (was LTC only since V3.2.13)
@@ -942,10 +946,12 @@ def check_trading_signals():
                                 explanation=f"AI decided to maintain LONG position. Existing LONG confidence ({existing_conf:.0%}) > new SHORT signal ({confidence:.0%}). No directional change warranted."
                             )
                     else:
-                        if can_open_new:
-                            # V3.2.38: 4-slot hard cap enforced via can_open_new
+                        if can_open_new or (not low_equity_mode and confidence >= CONFIDENCE_EXTRA_SLOT):
+                            # V3.2.39: 4-slot hard cap base; 90%+ signals open 5th slot when full
                             can_trade_this = True
                             trade_type = "new"
+                            if not can_open_new:
+                                logger.info(f"    -> 90%+ EXTRA SLOT: {confidence:.0%} >= {CONFIDENCE_EXTRA_SLOT:.0%}, opening beyond {effective_max_positions} slots")
 
                 # V3.1.93: Track best non-executed signal for PM context
                 if signal in ("LONG", "SHORT") and confidence >= 0.80 and not can_trade_this:
@@ -1110,7 +1116,7 @@ def check_trading_signals():
                 # V3.1.82: Slot swap trades bypass fallback gate (they create their own slot)
                 # V3.1.82 FIX: Also bypass when regular slots are available (0 positions = don't skip!)
                 is_fallback = opportunity["decision"].get("fallback_only", False)
-                _has_regular_slots = available_slots > 0  # V3.2.38: 4-slot hard cap
+                _has_regular_slots = available_slots > 0 or confidence >= CONFIDENCE_EXTRA_SLOT  # V3.2.39: 90%+ gets extra slot
                 if is_fallback and opportunity.get("trade_type") != "slot_swap" and not _has_regular_slots:
                     if chop_blocked_count > 0:
                         logger.info(f"  CHOP FALLBACK: {opportunity['pair']} ({confidence:.0%}) promoted - chop freed {chop_blocked_count} slot(s)")
@@ -3231,13 +3237,13 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.38 - 4-slot hard cap restored; ANTI-WAIT removed; trust Gemini Judge")
+    logger.info("SMT Daemon V3.2.39 - 90%+ confidence opens 5th slot when 4 full")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
     logger.info("  Pairs: BTC, ETH, BNB, LTC, XRP, SOL, ADA (7)")
-    logger.info("  Max slots: 4 flat | Leverage: 20x flat | Shorts: ALL pairs")
-    logger.info("  When full: SLOTS FULL — all signals skip regardless of confidence")
+    logger.info("  Max slots: 4 flat + 5th for 90%%+ signals | Leverage: 20x flat | Shorts: ALL pairs")
+    logger.info("  When full: signals <90%% skip; signals >=90%% open extra slot")
     # --- Confidence & entry filters ---
     logger.info("ENTRY FILTERS:")
     logger.info("  MIN_CONFIDENCE: 80%% HARD FLOOR — no exceptions, no discounts, no overrides")
