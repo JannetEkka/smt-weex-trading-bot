@@ -6000,3 +6000,703 @@
   [JUDGE] TP: 3.5%, SL: 1.5%, Max Hold: 12h
   [CHOP_FILTER] DETECTED MEDIUM chop: MEDIUM CHOP: BB=0.9% (very tight, T2 thresh=2.0) — NO PENALTY (V3.2.18: trust signals)
 2026-02-19 05:22:25 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:23:53 | INFO     | Trade module imports OK
+2026-02-19 05:23:53 | INFO     | ============================================================
+2026-02-19 05:23:53 | INFO     | SMT Daemon V3.2.24 - MIN_TP_PCT floor removed; chart SR is ground truth
+2026-02-19 05:23:53 | INFO     | ============================================================
+2026-02-19 05:23:53 | INFO     | PAIRS & SLOTS:
+2026-02-19 05:23:53 | INFO     |   Pairs: BTC, ETH, BNB, LTC, XRP, SOL, ADA (7)
+2026-02-19 05:23:53 | INFO     |   Max slots: 4 flat | Leverage: 20x flat | Shorts: ALL pairs
+2026-02-19 05:23:53 | INFO     |   When full: confidence >= 85%% opens a 5th slot directly (no position closed)
+2026-02-19 05:23:53 | INFO     |   Confidence < 85%% with full slots: SLOTS FULL, skip
+2026-02-19 05:23:53 | INFO     | ENTRY FILTERS:
+2026-02-19 05:23:53 | INFO     |   MIN_CONFIDENCE: 80%% HARD FLOOR — no exceptions, no discounts, no overrides
+2026-02-19 05:23:53 | INFO     |   Chop filter: logging only (no penalties since V3.2.18)
+2026-02-19 05:23:53 | INFO     |   Consecutive loss block: 2 losses same direction in 24h = block re-entry
+2026-02-19 05:23:53 | INFO     |   Freshness filter: block entering after move already happened
+2026-02-19 05:23:53 | INFO     |   Regime veto: post-judge filter (not disabled, separate from regime exits)
+2026-02-19 05:23:53 | INFO     |   Margin guard: skip trade if available margin < 15%% of balance
+2026-02-19 05:23:53 | INFO     | TP/SL:
+2026-02-19 05:23:53 | INFO     |   TP priority: Gemini tp_price (chart SR + FLOW walls as context) > 12H SR scan > 0.5%% fallback
+2026-02-19 05:23:53 | INFO     |   TP floor: 0.3%% (MIN_TP_PCT) | Fallback TP: 0.5%% all tiers (COMPETITION_FALLBACK_TP)
+2026-02-19 05:23:53 | INFO     |   Extreme fear TP cap: 0.5%% when F&G < 20 (both LONG and SHORT)
+2026-02-19 05:23:53 | INFO     |   XRP TP cap: 0.70%% (only when no Gemini structural override)
+2026-02-19 05:23:53 | INFO     |   SL method: lowest wick in 12H (1H grid) + last 3 4H candles | SL floor: 1.0%%
+2026-02-19 05:23:53 | INFO     |   TP method: max high of last 2 complete 1H candles (LONG) / min low (SHORT)
+2026-02-19 05:23:53 | INFO     |   FLOW walls in Judge prompt: ask/bid walls from 200-level order book (context, not hard override)
+2026-02-19 05:23:53 | INFO     |   Gemini Judge: sees chart structure (1D+4H) + FLOW walls + chop → returns tp_price
+2026-02-19 05:23:53 | INFO     | POSITION SIZING:
+2026-02-19 05:23:53 | INFO     |   sizing_base = max(min(equity, balance * 2.5), balance)
+2026-02-19 05:23:53 | INFO     |   base_size = sizing_base * 0.25 (conf tiers: 80-84%%=1.0x, 85-89%%=1.25x, 90%%+=1.5x)
+2026-02-19 05:23:53 | INFO     |   per_slot_cap = (sizing_base * 0.85) / max_slots
+2026-02-19 05:23:53 | INFO     | OPPOSITE SWAP (V3.1.100):
+2026-02-19 05:23:53 | INFO     |   Block flip if position < 20min old or >= 30%% toward TP
+2026-02-19 05:23:53 | INFO     |   Blocked signal queued → auto-executes after old position closes
+2026-02-19 05:23:53 | INFO     |   Deferred flip expires after 30min
+2026-02-19 05:23:53 | INFO     | TIMING:
+2026-02-19 05:23:53 | INFO     |   Signal check: 10min | Position monitor: 2min | Orphan sweep: 30s | Health: 60s
+2026-02-19 05:23:53 | INFO     |   Global trade cooldown: 15min between trades
+2026-02-19 05:23:53 | INFO     |   Gemini: 90s timeout + 8s rate limit between calls
+2026-02-19 05:23:53 | INFO     | PERSONA CONFIG:
+2026-02-19 05:23:53 | INFO     |   WHALE: 1.0 | Etherscan on-chain + Cryptoracle (always combined for BTC/ETH)
+2026-02-19 05:23:53 | INFO     |   SENTIMENT: 1.0 | Gemini 2.5 Flash w/ Search Grounding
+2026-02-19 05:23:53 | INFO     |   FLOW: 1.0 | Taker ratio beats depth | 180-flip = confidence halved
+2026-02-19 05:23:53 | INFO     |   TECHNICAL: 1.0 (halved to 0.4 when F&G<30) | RSI(14), SMA 20/50, 5-candle momentum
+2026-02-19 05:23:53 | INFO     |   JUDGE: Gemini aggregator | Receives chart context (1D+4H) for TP targeting
+2026-02-19 05:23:53 | INFO     | DISABLED:
+2026-02-19 05:23:53 | INFO     |   Gemini portfolio review (V3.2.17) | Stale auto-close (V3.2.17)
+2026-02-19 05:23:53 | INFO     |   Regime-based auto-exits (V3.2.17) — SL handles exits
+2026-02-19 05:23:53 | INFO     |   Chop score penalties (V3.2.18) — logging only
+2026-02-19 05:23:53 | INFO     |   Fee tracking: 0.06%%/side taker, logged per trade + session cumulative in HEALTH
+2026-02-19 05:23:53 | INFO     | TIER CONFIG:
+2026-02-19 05:23:53 | INFO     |   Tier 1: BTC, ETH
+2026-02-19 05:23:53 | INFO     |     TP: 3.0%%, SL: 1.5%%, Hold: 24h | No Runner
+2026-02-19 05:23:53 | INFO     |   Tier 2: BNB, LTC, XRP
+2026-02-19 05:23:53 | INFO     |     TP: 3.5%%, SL: 1.5%%, Hold: 12h | No Runner
+2026-02-19 05:23:53 | INFO     |   Tier 3: SOL, ADA
+2026-02-19 05:23:53 | INFO     |     TP: 3.0%%, SL: 1.8%%, Hold: 8h | No Runner
+2026-02-19 05:23:53 | INFO     | CHANGELOG (recent):
+2026-02-19 05:23:53 | INFO     |   V3.2.20: 12H SR fallback | WHALE dual source | FLOW walls fed to Judge (context, not override)
+2026-02-19 05:23:53 | INFO     |   V3.2.21: resolve_opposite_sides closes OLDER position, not losing side
+2026-02-19 05:23:53 | INFO     |   V3.2.22: no slot swap; confidence>=85% opens 5th slot; opposite closes immediately (no 15m wait)
+2026-02-19 05:23:53 | INFO     |   V3.2.23: banner slot swap lines removed; FLOW calls regime first (fixes mid-block [REGIME] print)
+2026-02-19 05:23:53 | INFO     |   V3.2.24: MIN_TP_PCT=0.3%% floor removed — chart SR is the TP, no artificial minimum
+2026-02-19 05:23:53 | INFO     |   V3.2.19: Fee bleed tracking — [FEE] per trade + Gross/Fees/Net at close + HEALTH cumulative
+2026-02-19 05:23:53 | INFO     |   V3.2.18: Chop penalties removed | Shorts ALL pairs | Trust 80%% floor + 0.5%% TP
+2026-02-19 05:23:53 | INFO     |   V3.2.17: Stale auto-close removed | Extreme fear TP cap bug fixed | Gemini PM disabled
+2026-02-19 05:23:53 | INFO     |   V3.2.16: BTC/ETH/BNB re-added (7 pairs) | Gemini chart context (1D+4H) | 4 flat slots
+2026-02-19 05:23:53 | INFO     | ============================================================
+2026-02-19 05:23:53 | INFO     | Syncing tracker with WEEX positions...
+2026-02-19 05:23:53 | INFO     |   Removed orphan cmt_ltcusdt
+2026-02-19 05:23:53 | INFO     | Sync complete. Tracking 3 entries for 3 WEEX positions.
+2026-02-19 05:23:53 | INFO     |   [cmt_btcusdt:LONG] T1 LONG opened=2026-02-19T04:43:23 hold=0.7h/24h (synced)
+2026-02-19 05:23:53 | INFO     |   [cmt_ethusdt] T1 LONG opened=2026-02-19T04:48:37 hold=0.6h/24h (original)
+2026-02-19 05:23:53 | INFO     |   [cmt_bnbusdt] T2 LONG opened=2026-02-19T04:48:45 hold=0.6h/12h (original)
+2026-02-19 05:23:57 | INFO     | Competition ACTIVE - initial signal check
+2026-02-19 05:23:57 | INFO     | ============================================================
+2026-02-19 05:23:57 | INFO     | SIGNAL CHECK - 20260219_052357
+2026-02-19 05:23:57 | INFO     | ============================================================
+2026-02-19 05:23:57 | INFO     | Balance: 1903.31 USDT | Equity: 4048.62 USDT | UPnL: -92.24
+2026-02-19 05:23:57 | INFO     | Open positions: 3
+2026-02-19 05:23:57 | INFO     | Days left: 4
+2026-02-19 05:23:58 | INFO     | CAPITULATION: F&G=9 < 15, hedging DISABLED (pick a side)
+2026-02-19 05:23:58 | INFO     | F&G: 9 (EXTREME FEAR) | Slots: 3/4
+2026-02-19 05:24:06 | INFO     | AFC is enabled with max remote calls: 10.
+  [HOT-RELOAD] Enabled
+
+  === Multi-Persona Analysis: BTC (Tier 1: Blue Chip) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (56%): Whale accumulation: +822 ETH net inflow | Binance Main: +995 ETH; Binance 2: -173 ETH [CR DIVERGES: community=SHORT sent=0.42] [PM: SHORT MILD (-0.148)]
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (85%): Dominant long liquidations and negative short-term price action with weak buying volume.
+  [FLOW] Analyzing...
+  [REGIME] BULLISH (score: 1, conf: 65%)
+  [REGIME] BTC 24h: +0.4% | F&G: 9 | Funding: -0.00005
+  [REGIME] OI Signal: NEUTRAL | Volatility: NORMAL | Alts: +0.9%
+  [REGIME]   > EXTREME FEAR (9): mild contrarian BUY bias
+  [FLOW] Depth - Bids: 15.10, Asks: 7.64, Ratio: 1.98
+  [FLOW] Walls - Ask: $66687.4 (resistance/LONG-TP), Bid: $66687.3 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 0.5461, Sell: 2.2361, Ratio: 0.24
+  [FLOW] Funding rate: -0.000005
+  [FLOW] Taker ratio: 0.24 | Extreme sell: True | Heavy sell: True
+  [FLOW] SHORT (85%): EXTREME taker selling: 0.24
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -2.4%
+  [JUDGE] Deciding...
+2026-02-19 05:24:29 | INFO     | Trade module imports OK
+2026-02-19 05:24:31 | INFO     | AFC is enabled with max remote calls: 10.
+  [CHOP-5M] BTCUSDT: MEDIUM CHOP: BB=0.5% (very tight, T1 thresh=1.3), disp=0.1%
+  [JUDGE] Gemini: WAIT (0%)
+  [JUDGE] Reasoning: Extreme Fear (F&G=9) requires at least two strong co-primary signals to confirm a SHORT. While FLOW is strongly SHORT (85%), WHALE is weakly LONG (56%), failing to meet this requirement. There is no strong LONG signal either, and primary signals are contradictory. Therefore, WAIT is the safest action.
+2026-02-19 05:24:43 | INFO     |   BTC (T1): WAIT (0%) [L:-9.1]
+2026-02-19 05:24:43 | INFO     |     -> reason: Gemini Judge: Extreme Fear (F&G=9) requires at least two strong co-primary signa
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:24:47 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:25:12 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: ETH (Tier 1: Blue Chip) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (69%): Whale accumulation: +822 ETH net inflow | Binance Main: +995 ETH; Binance 2: -173 ETH [CR confirms: sent=0.63, mom=0.62]
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (65%): ETH has experienced a slight price decrease over the last 24 hours, accompanied by a higher volume of long liquidations compared to short liquidations, indicating recent downward pressure and a flush-out of leveraged long positions. The price remains below the key $2,000 resistance level, and the daily chart shows a clean downtrend with lower highs and lower lows.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 195.95, Asks: 231.46, Ratio: 0.85
+  [FLOW] Walls - Ask: $1966.86 (resistance/LONG-TP), Bid: $1966.85 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 22.4950, Sell: 5.9000, Ratio: 3.81
+  [FLOW] Funding rate: -0.000080
+  [FLOW] Taker ratio: 3.81 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (85%): EXTREME taker buying: 3.81
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] NEUTRAL (40%): No clear technical signal. RSI: 50.4
+  [JUDGE] Deciding...
+  [CHOP-5M] ETHUSDT: MEDIUM CHOP: BB=0.7% (very tight, T1 thresh=1.3), disp=0.3%
+  [JUDGE] Gemini: LONG (90%)
+  [JUDGE] Reasoning: Both co-primary signals, WHALE (69% LONG) and FLOW (85% LONG), strongly agree on a LONG position for ETH. The market is in Extreme Fear (F&G 9), which further biases towards contrarian LONG trades. Despite conflicting SENTIMENT, the robust agreement between WHALE and FLOW provides a high-conviction signal.
+2026-02-19 05:25:24 | INFO     |   ETH (T1): WAIT (0%) [L:-37.3]
+2026-02-19 05:25:24 | INFO     |     -> reason: Gemini says LONG but already have LONG on ETH. Votes: WHALE=LONG(69%), SENTIMENT
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:25:27 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:25:46 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: BNB (Tier 2: Mid Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (62%): Strong bullish community sentiment (0.77); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (70%): BNB's price has broken down through a horizontal resistance area at $609.61, which is now acting as a bearish signal, and is currently testing key support around $609. This downward movement is accompanied by high trading volumes on red candles, indicating strong selling pressure and bearish momentum on the 4-hour chart.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 274.10, Asks: 1471.60, Ratio: 0.19
+  [FLOW] Walls - Ask: $606.89 (resistance/LONG-TP), Bid: $606.82 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 158.1000, Sell: 41.3000, Ratio: 3.83
+  [FLOW] Funding rate: -0.000081
+  [FLOW] Taker ratio: 3.83 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (85%): EXTREME taker buying: 3.83
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -2.6%
+  [JUDGE] Deciding...
+  [CHOP-5M] BNBUSDT: MEDIUM CHOP: BB=1.0% (very tight, T2 thresh=2.0), disp=0.1%
+  [JUDGE] Gemini: LONG (85%)
+  [JUDGE] Reasoning: WHALE (62%) and FLOW (85%) both indicate strong buying pressure for BNB, with FLOW showing extreme taker buying. This aligns with a potential contrarian bounce in the current extreme fear market regime (F&G=9). Secondary signals are bearish but are overridden by the strong co-primary signals.
+2026-02-19 05:25:59 | INFO     |   BNB (T2): WAIT (0%) [L:-45.8]
+2026-02-19 05:25:59 | INFO     |     -> reason: Gemini says LONG but already have LONG on BNB. Votes: WHALE=LONG(62%), SENTIMENT
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:26:02 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:26:23 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: LTC (Tier 2: Mid Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (76%): Strong bearish community sentiment (0.00); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] LONG (70%): LTC is trading above a pivotal pivot point on the 4-hour chart and has shown positive price movement in the last hour, with short liquidations dominating in the immediate short term.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 12987.70, Asks: 35566.30, Ratio: 0.37
+  [FLOW] Walls - Ask: $53.29 (resistance/LONG-TP), Bid: $53.18 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 430.0000, Sell: 103.3000, Ratio: 4.16
+  [FLOW] Funding rate: -0.000056
+  [FLOW] Taker ratio: 4.16 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (85%): EXTREME taker buying: 4.16
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -4.1%
+  [JUDGE] Deciding...
+  [CHOP-5M] LTCUSDT: MEDIUM CHOP: BB=0.9% (very tight, T2 thresh=2.0), disp=0.7%
+  [JUDGE] Gemini: WAIT (50%)
+  [JUDGE] Reasoning: The co-primary signals, WHALE and FLOW, are in strong disagreement. WHALE indicates a strong bearish sentiment (76% SHORT), while FLOW shows extreme taker buying (85% LONG). This direct contradiction between the two most important signals means there is no clear edge for either a long or short position at this moment, despite the extreme fear market regime.
+2026-02-19 05:26:30 | INFO     |   LTC (T2): WAIT (0%)
+2026-02-19 05:26:30 | INFO     |     -> reason: Gemini Judge: The co-primary signals, WHALE and FLOW, are in strong disagreement
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:26:33 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:27:00 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: XRP (Tier 2: Mid Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (56%): Neutral community sentiment (0.48); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] LONG (70%): Significant short liquidations in the last 1-4 hours, indicating recent upward price momentum.
+  [FLOW] Analyzing...
+  [REGIME] BULLISH (score: 1, conf: 65%)
+  [REGIME] BTC 24h: +0.4% | F&G: 9 | Funding: -0.00005
+  [REGIME] OI Signal: NEUTRAL | Volatility: NORMAL | Alts: +1.0%
+  [REGIME]   > EXTREME FEAR (9): mild contrarian BUY bias
+  [FLOW] Depth - Bids: 420760.00, Asks: 639580.00, Ratio: 0.66
+  [FLOW] Walls - Ask: $1.4056 (resistance/LONG-TP), Bid: $1.4049 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 11400.0000, Sell: 26730.0000, Ratio: 0.43
+  [FLOW] Funding rate: -0.000064
+  [FLOW] Taker ratio: 0.43 | Extreme sell: False | Heavy sell: True
+  [FLOW] SHORT (85%): Heavy taker selling: 0.43; Ask depth confirms
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -4.6%
+  [JUDGE] Deciding...
+  [CHOP-5M] XRPUSDT: MEDIUM CHOP: BB=1.3% (very tight, T2 thresh=2.0), disp=1.1%
+  [JUDGE] ANTI-WAIT F&G guard: F&G=9, only allowing LONG override
+  [JUDGE] Gemini: WAIT (75%)
+  [JUDGE] Reasoning: FLOW is strongly SHORT (85%) and WHALE is weakly SHORT (56%), indicating a bearish bias from co-primary signals. However, the Fear & Greed Index is 9 (EXTREME FEAR), which requires 2+ strong co-primary signals to confirm a SHORT. Only FLOW meets this strength threshold. Additionally, SENTIMENT is strongly LONG (70%), contradicting the co-primary signals, and microstructure shows medium chop with very tight Bollinger Bands, suggesting indecision. Given these conflicting signals and the F&G rule, waiting for clearer direction is the most disciplined action.
+2026-02-19 05:27:12 | INFO     |   XRP (T2): WAIT (0%)
+2026-02-19 05:27:12 | INFO     |     -> reason: Gemini Judge: FLOW is strongly SHORT (85%) and WHALE is weakly SHORT (56%), indi
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:27:16 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:27:37 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: SOL (Tier 3: Small Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (71%): Strong bullish community sentiment (0.69); Sentiment momentum bullish (z=2.35); Sentiment ahead of price (gap=2.64); Trend: RISING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (80%): Price breaking down through key support levels, specifically below $82 and testing the critical $80 mark, accompanied by a higher volume of long liquidations in the last 1-4 hours.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 9492.80, Asks: 28609.30, Ratio: 0.33
+  [FLOW] Walls - Ask: $81.57 (resistance/LONG-TP), Bid: $81.48 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 1242.5000, Sell: 281.3000, Ratio: 4.42
+  [FLOW] Funding rate: -0.000162
+  [FLOW] Taker ratio: 4.42 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (85%): EXTREME taker buying: 4.42
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -5.7%
+  [JUDGE] Deciding...
+  [CHOP-5M] SOLUSDT: HIGH CHOP: ADX=6 (very weak trend); BB=0.7% (very tight, T3 thresh=2.6), disp=0.3%
+  [JUDGE] Gemini tp_price: $81.5700 (structural target from chart)
+  [JUDGE] Gemini: LONG (80%)
+  [JUDGE] Reasoning: WHALE and FLOW signals are strongly aligned on LONG, indicating significant buying pressure, which aligns with the Extreme Fear F&G index favoring contrarian long positions. While microstructure shows high chop and secondary signals are bearish, the primary signals are robust and the bot's dip/bounce strategy is suited for ranging conditions.
+  [SIZING] Equity: $4038 | Balance: $1903 | Sizing base: $4038 (2.1x)
+  [SIZING] Capped: $1009 -> $858 (4 slots, 85% equity cap)
+2026-02-19 05:27:53 | INFO     |   SOL (T3): LONG (80%)
+  [JUDGE] Final: LONG (80%)
+  [JUDGE] TP: 3.0%, SL: 1.8%, Max Hold: 8h
+  [CHOP_FILTER] DETECTED HIGH chop: HIGH CHOP: ADX=6 (very weak trend); BB=0.7% (very tight, T3 thresh=2.6) — NO PENALTY (V3.2.18: trust signals)
+2026-02-19 05:27:56 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:28:21 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: ADA (Tier 3: Small Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (63%): Strong bullish community sentiment (0.75); Sentiment momentum bullish (z=2.30); Sentiment ahead of price (gap=2.47); Trend: RISING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (60%): Recent price decline and reduced trading volume, indicating a lack of buying conviction.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 6739990.00, Asks: 9610330.00, Ratio: 0.70
+  [FLOW] Walls - Ask: $0.274 (resistance/LONG-TP), Bid: $0.2734 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 2920.0000, Sell: 11420.0000, Ratio: 0.26
+  [FLOW] Funding rate: 0.000061
+  [FLOW] Taker ratio: 0.26 | Extreme sell: True | Heavy sell: True
+  [FLOW] SHORT (85%): EXTREME taker selling: 0.26
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -4.4%
+  [JUDGE] Deciding...
+  [CHOP-5M] ADAUSDT: MEDIUM CHOP: ADX=23 (weak trend); BB=0.7% (very tight, T3 thresh=2.6), disp=0.6%
+  [JUDGE] Gemini: WAIT (0%)
+  [JUDGE] Reasoning: WHALE is signaling LONG (63%), while FLOW is strongly signaling SHORT (85%). These co-primary signals directly contradict each other, and both are above the 60% threshold, triggering a WAIT condition. Furthermore, the market is in Extreme Fear (F&G=9), and microstructure shows medium chop with very tight Bollinger Bands, indicating low volatility and an unclear immediate direction. Waiting for clearer signal alignment is the most disciplined action.
+2026-02-19 05:28:39 | INFO     |   ADA (T3): WAIT (0%)
+2026-02-19 05:28:39 | INFO     |     -> reason: Gemini Judge: WHALE is signaling LONG (63%), while FLOW is strongly signaling SH
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:28:43 | INFO     | CAPITULATION MODE: F&G=9, keeping hard cap at BASE_SLOTS=4
+2026-02-19 05:28:43 | INFO     | EXTREME F&G=9 but 80% floor enforced for SOL (80%)
+2026-02-19 05:28:43 | INFO     | SESSION [ASIA]: 5:00 UTC, 80% >= 80%, proceeding SOL
+2026-02-19 05:28:44 | INFO     | 
+2026-02-19 05:28:44 | INFO     | EXECUTING SOL LONG (T3) - 80%
+  [LEVERAGE] Tier 3 (BULLISH, HIGH 80%): Using 20x
+  [CHART-SR] SOLUSDT 1H anchors: 2H_high=81.9900, 2H_low=81.2400, 12H_low=80.4200, 12H_high=82.9300
+  [CHART-SR] SOLUSDT 4H raw: low=80.7900, high=81.9900
+  [CHART-SR] LONG TP: 2H_high=81.9900 → 0.24%
+  [CHART-SR] LONG SL: min(1H=80.4200, 4H=80.7900)=80.4200 → 1.68%
+  [CHART-SR] SOLUSDT LONG: TP 0.24% ($81.7440), SL 1.68% ($80.1787)
+  [TP/SL] CHART-BASED [MTF]: TP 0.24% SL 1.68% (Tier 3)
+  [ATR-SAFETY] SL 1.68% < 0.8x ATR (1.81%), widening to 1.81%
+  [FINAL] TP: $81.7440 (0.24%) | SL: $80.0739 (1.81%) | R:R 0.1:1 | Method: chart_mtf
+  [LEVERAGE OK] cmt_solusdt set to 20x cross
+  [TRADE] LONG cmt_solusdt: 210.4 @ $81.5500
+  [TRADE] Tier 3 (Small Cap): TP $81.7440 (0.2%), SL $80.0739 (1.8%)
+2026-02-19 05:28:48 | INFO     | Trade executed: 719234753789690725
+2026-02-19 05:28:48 | INFO     |   TP: 0.2%, SL: 1.8%
+2026-02-19 05:28:48 | INFO     |   [FEE] Open: ~$10.30 (0.06% × $17159 notional)
+2026-02-19 05:28:51 | INFO     | 
+2026-02-19 05:28:51 | INFO     | Executed 1 trades this cycle
+2026-02-19 05:28:51 | INFO     | --- Cycle summary: 1 signals (1 at 80%+), 6 WAIT, 0 blocked, 1 opportunities ---
+2026-02-19 05:28:52 | INFO     |   [MONITOR] cmt_btcusdt:LONG T1: -0.10% (peak: 0.07%) conf=75%
+2026-02-19 05:28:53 | INFO     |   [MONITOR] cmt_ethusdt T1: -0.26% (peak: 0.05%) conf=90%
+2026-02-19 05:28:54 | INFO     |   [MONITOR] cmt_bnbusdt T2: -0.25% (peak: 0.10%) conf=90%
+2026-02-19 05:28:54 | INFO     |   [MONITOR] cmt_solusdt T3: +0.02% (peak: 0.02%) conf=80%
+2026-02-19 05:28:56 | INFO     | HEALTH | Up: 0:05:03 | Signals: 1 | Trades: 1/0 | Active: 4
+2026-02-19 05:29:53 | INFO     | HEALTH | Up: 0:06:00 | Signals: 1 | Trades: 1/0 | Active: 4
+2026-02-19 05:30:57 | INFO     |   [MONITOR] cmt_btcusdt:LONG T1: -0.06% (peak: 0.07%) conf=75%
+2026-02-19 05:30:57 | INFO     |   [MONITOR] cmt_ethusdt T1: -0.21% (peak: 0.05%) conf=90%
+2026-02-19 05:30:58 | INFO     |   [MONITOR] cmt_bnbusdt T2: -0.24% (peak: 0.10%) conf=90%
+2026-02-19 05:30:59 | INFO     |   [MONITOR] cmt_solusdt T3: +0.00% (peak: 0.02%) conf=80%
+2026-02-19 05:30:59 | INFO     | HEALTH | Up: 0:07:06 | Signals: 1 | Trades: 1/0 | Active: 4
+2026-02-19 05:31:57 | INFO     | HEALTH | Up: 0:08:04 | Signals: 1 | Trades: 1/0 | Active: 4
+2026-02-19 05:33:01 | INFO     |   [MONITOR] cmt_btcusdt:LONG T1: -0.10% (peak: 0.07%) conf=75%
+2026-02-19 05:33:02 | INFO     |   [MONITOR] cmt_ethusdt T1: -0.29% (peak: 0.05%) conf=90%
+2026-02-19 05:33:03 | INFO     |   [MONITOR] cmt_bnbusdt T2: -0.27% (peak: 0.10%) conf=90%
+2026-02-19 05:33:03 | INFO     |   [MONITOR] cmt_solusdt T3: -0.09% (peak: 0.02%) conf=80%
+2026-02-19 05:33:04 | INFO     | HEALTH | Up: 0:09:11 | Signals: 1 | Trades: 1/0 | Active: 4
+2026-02-19 05:34:02 | INFO     | HEALTH | Up: 0:10:09 | Signals: 1 | Trades: 1/0 | Active: 4
+2026-02-19 05:35:06 | INFO     |   [MONITOR] cmt_btcusdt:LONG T1: -0.02% (peak: 0.07%) conf=75%
+2026-02-19 05:35:06 | INFO     |   [MONITOR] cmt_ethusdt T1: -0.17% (peak: 0.05%) conf=90%
+2026-02-19 05:35:07 | INFO     |   [MONITOR] cmt_bnbusdt T2: -0.23% (peak: 0.10%) conf=90%
+2026-02-19 05:35:08 | INFO     |   [MONITOR] cmt_solusdt T3: +0.07% (peak: 0.07%) conf=80%
+2026-02-19 05:35:08 | INFO     | HEALTH | Up: 0:11:15 | Signals: 1 | Trades: 1/0 | Active: 4
+2026-02-19 05:36:06 | INFO     | HEALTH | Up: 0:12:13 | Signals: 1 | Trades: 1/0 | Active: 4
+2026-02-19 05:37:10 | INFO     |   [MONITOR] cmt_btcusdt:LONG T1: -0.05% (peak: 0.07%) conf=75%
+2026-02-19 05:37:11 | INFO     |   [MONITOR] cmt_ethusdt T1: -0.18% (peak: 0.05%) conf=90%
+2026-02-19 05:37:11 | INFO     |   [MONITOR] cmt_bnbusdt T2: -0.23% (peak: 0.10%) conf=90%
+2026-02-19 05:37:12 | INFO     |   [MONITOR] cmt_solusdt T3: +0.07% (peak: 0.07%) conf=80%
+2026-02-19 05:37:13 | INFO     | HEALTH | Up: 0:13:19 | Signals: 1 | Trades: 1/0 | Active: 4
+2026-02-19 05:38:11 | INFO     | HEALTH | Up: 0:14:17 | Signals: 1 | Trades: 1/0 | Active: 4
+2026-02-19 05:38:52 | INFO     | ============================================================
+2026-02-19 05:38:52 | INFO     | SIGNAL CHECK - 20260219_053852
+2026-02-19 05:38:52 | INFO     | ============================================================
+2026-02-19 05:38:53 | INFO     | Balance: 1113.99 USDT | Equity: 4121.17 USDT | UPnL: -12.82
+2026-02-19 05:38:53 | INFO     | Open positions: 4
+2026-02-19 05:38:53 | INFO     | Days left: 4
+2026-02-19 05:38:53 | INFO     | Max positions (4/4) - Analysis only
+2026-02-19 05:38:54 | INFO     | CAPITULATION: F&G=9 < 15, hedging DISABLED (pick a side)
+2026-02-19 05:38:54 | INFO     | F&G: 9 (EXTREME FEAR) | Slots: 4/4
+2026-02-19 05:39:01 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:39:27 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: BTC (Tier 1: Blue Chip) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (54%): Whale accumulation: +707 ETH net inflow | Binance Main: +1772 ETH; Binance 3: -1047 ETH [CR DIVERGES: community=SHORT sent=0.42] [PM: SHORT MILD (-0.157)]
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (70%): BTC has shown a negative price movement over the last 24 hours, with $72,000 acting as resistance and recent reports indicating a weakening structure below this level.
+  [FLOW] Analyzing...
+  [REGIME] BULLISH (score: 1, conf: 65%)
+  [REGIME] BTC 24h: +0.3% | F&G: 9 | Funding: -0.00004
+  [REGIME] OI Signal: NEUTRAL | Volatility: NORMAL | Alts: +0.7%
+  [REGIME]   > EXTREME FEAR (9): mild contrarian BUY bias
+  [FLOW] Depth - Bids: 7.86, Asks: 14.49, Ratio: 0.54
+  [FLOW] Walls - Ask: $66750 (resistance/LONG-TP), Bid: $66749.9 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 1.1113, Sell: 7.1002, Ratio: 0.16
+  [FLOW] Funding rate: -0.000000
+  [FLOW] Taker ratio: 0.16 | Extreme sell: True | Heavy sell: True
+  [FLOW] SHORT (85%): EXTREME taker selling: 0.16
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -2.3%
+  [JUDGE] Deciding...
+  [JUDGE] Gemini: WAIT (85%)
+  [JUDGE] Reasoning: FLOW shows strong SHORT (85%) due to extreme taker selling, but WHALE is weakly LONG (54%). In Extreme Fear (F&G=9), we require 2+ co-primary signals to confirm SHORT before taking it, which is not met here. The market microstructure indicates medium chop with very tight order book walls, suggesting indecision. Given the conflicting co-primary signals and the F&G rule, waiting is the most disciplined action.
+2026-02-19 05:39:40 | INFO     |   BTC (T1): WAIT (0%) [L:+1.4]
+2026-02-19 05:39:40 | INFO     |     -> reason: Gemini Judge: FLOW shows strong SHORT (85%) due to extreme taker selling, but WH
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:39:44 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:40:02 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: ETH (Tier 1: Blue Chip) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (67%): Whale accumulation: +707 ETH net inflow | Binance Main: +1772 ETH; Binance 3: -1047 ETH [CR confirms: sent=0.63, mom=0.62]
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (75%): Dominance of long liquidations in the last 24 hours and recent 1-4 hour periods, indicating selling pressure and unfavorable conditions for bullish positions.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 192.20, Asks: 232.84, Ratio: 0.83
+  [FLOW] Walls - Ask: $1966.52 (resistance/LONG-TP), Bid: $1966.51 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 5.8830, Sell: 16.1100, Ratio: 0.37
+  [FLOW] Funding rate: -0.000076
+  [FLOW] Taker ratio: 0.37 | Extreme sell: False | Heavy sell: True
+  [FLOW] FLIP DISCOUNT: LONG->SHORT, conf 70% -> 35% (wait for confirmation)
+  [FLOW] SHORT (35%): Heavy taker selling: 0.37 [FLIP LONG->SHORT, conf discounted]
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] NEUTRAL (40%): No clear technical signal. RSI: 50.4
+  [JUDGE] Deciding...
+  [CHOP-5M] ETHUSDT: MEDIUM CHOP: ADX=24 (weak trend); BB=0.7% (very tight, T1 thresh=1.3), disp=0.1%
+  [JUDGE] Gemini: LONG (60%)
+  [JUDGE] Reasoning: Strong WHALE accumulation (67% LONG) is the primary driver. Despite weak contradictory FLOW (35% SHORT) and strong contradictory SENTIMENT (75% SHORT), the decision guidelines prioritize strong WHALE when FLOW is weak. The Extreme Fear F&G index (9) also provides a slight contrarian LONG bias, and the microstructure indicates medium chop where dip-bounce strategies can be effective.
+2026-02-19 05:40:19 | INFO     |   ETH (T1): WAIT (0%) [L:-21.1]
+2026-02-19 05:40:19 | INFO     |     -> reason: Gemini says LONG but already have LONG on ETH. Votes: WHALE=LONG(67%), SENTIMENT
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:40:22 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:40:42 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: BNB (Tier 2: Mid Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (62%): Strong bullish community sentiment (0.77); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (70%): Intraday action favoring sellers and price trading below key moving average supports.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 864.80, Asks: 675.40, Ratio: 1.28
+  [FLOW] Walls - Ask: $607.49 (resistance/LONG-TP), Bid: $607.41 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 34.7000, Sell: 20.1000, Ratio: 1.73
+  [FLOW] Funding rate: -0.000077
+  [FLOW] Taker ratio: 1.73 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (50%): Taker buy pressure: 1.73
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -2.5%
+  [JUDGE] Deciding...
+  [CHOP-5M] BNBUSDT: HIGH CHOP: ADX=10 (very weak trend); BB=1.0% (very tight, T2 thresh=2.0), disp=0.0%
+  [JUDGE] Gemini: WAIT (0%)
+  [JUDGE] Reasoning: WHALE is leaning LONG (62%), but FLOW is neutral (50%). SENTIMENT and TECHNICAL are both SHORT, creating mixed signals. Crucially, the microstructure indicates HIGH CHOP (ADX=10, BB Width=1.0%), meaning the market is dead flat and going nowhere, making high-frequency trades difficult. Given the mixed signals and high chop, waiting for a clearer trend or stronger signal alignment is the most disciplined action.
+2026-02-19 05:40:58 | INFO     |   BNB (T2): WAIT (0%) [L:-24.6]
+2026-02-19 05:40:58 | INFO     |     -> reason: Gemini Judge: WHALE is leaning LONG (62%), but FLOW is neutral (50%). SENTIMENT 
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:41:01 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:41:22 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: LTC (Tier 2: Mid Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (76%): Strong bearish community sentiment (0.00); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] LONG (60%): Significant short liquidations in the last hour, indicating upward price pressure as short positions are forced to close.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 30644.30, Asks: 32941.50, Ratio: 0.93
+  [FLOW] Walls - Ask: $53.25 (resistance/LONG-TP), Bid: $53.22 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 213.6000, Sell: 310.1000, Ratio: 0.69
+  [FLOW] Funding rate: -0.000054
+  [FLOW] Taker ratio: 0.69 | Extreme sell: False | Heavy sell: False
+  [FLOW] FLIP DISCOUNT: LONG->SHORT, conf 50% -> 25% (wait for confirmation)
+  [FLOW] SHORT (25%): Taker sell pressure: 0.69 [FLIP LONG->SHORT, conf discounted]
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -4.1%
+  [JUDGE] Deciding...
+  [CHOP-5M] LTCUSDT: MEDIUM CHOP: BB=1.0% (very tight, T2 thresh=2.0), disp=0.4%
+  [JUDGE] Gemini: WAIT (75%)
+  [JUDGE] Reasoning: WHALE is strongly SHORT (76%), but FLOW is very weak (25%) and discounted due to a recent flip. The Fear & Greed Index is 9 (Extreme Fear), which requires at least two strong co-primary signals to confirm a SHORT trade. With only one strong co-primary (WHALE) and conflicting SENTIMENT (60% LONG), the signals are too mixed and lack the necessary conviction for a trade in this market condition.
+2026-02-19 05:41:38 | INFO     |   LTC (T2): WAIT (0%)
+2026-02-19 05:41:38 | INFO     |     -> reason: Gemini Judge: WHALE is strongly SHORT (76%), but FLOW is very weak (25%) and dis
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:41:41 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:42:10 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: XRP (Tier 2: Mid Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (56%): Neutral community sentiment (0.48); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (80%): XRP has experienced a decline over the last 24 hours, with current price action showing consolidation near short-term support levels. Volume has decreased, and indicators suggest continued selling pressure and increasing short positions, indicating a lack of bullish momentum to break immediate resistance.
+  [FLOW] Analyzing...
+  [REGIME] BULLISH (score: 1, conf: 65%)
+  [REGIME] BTC 24h: +0.3% | F&G: 9 | Funding: -0.00004
+  [REGIME] OI Signal: NEUTRAL | Volatility: NORMAL | Alts: +0.6%
+  [REGIME]   > EXTREME FEAR (9): mild contrarian BUY bias
+  [FLOW] Depth - Bids: 628480.00, Asks: 592110.00, Ratio: 1.06
+  [FLOW] Walls - Ask: $1.4091 (resistance/LONG-TP), Bid: $1.4082 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 1610.0000, Sell: 13500.0000, Ratio: 0.12
+  [FLOW] Funding rate: -0.000060
+  [FLOW] Taker ratio: 0.12 | Extreme sell: True | Heavy sell: True
+  [FLOW] SHORT (85%): EXTREME taker selling: 0.12
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -4.3%
+  [JUDGE] Deciding...
+  [CHOP-5M] XRPUSDT: MEDIUM CHOP: BB=1.7% (very tight, T2 thresh=2.0), disp=1.1%
+  [JUDGE] Gemini tp_price: $1.4082 (structural target from chart)
+  [JUDGE] Gemini: SHORT (80%)
+  [JUDGE] Reasoning: FLOW shows extreme taker selling at 85% SHORT, strongly indicating bearish momentum. WHALE (56% SHORT) and SENTIMENT (80% SHORT) align with this direction. Despite Extreme Fear (F&G=9) which typically favors LONG, the strong consensus from co-primary signals (FLOW and WHALE agreeing) meets the criteria for a SHORT trade, especially with FLOW being very strong.
+  [SIZING] Equity: $4121 | Balance: $1114 | Sizing base: $2785 (2.5x)
+  [SIZING] Capped: $696 -> $592 (4 slots, 85% equity cap)
+2026-02-19 05:42:27 | INFO     |   XRP (T2): SHORT (80%)
+2026-02-19 05:42:27 | INFO     |     -> SLOTS FULL: 80% < 85% high-conviction threshold (4/4)
+  [JUDGE] Final: SHORT (80%)
+  [JUDGE] TP: 3.5%, SL: 1.5%, Max Hold: 12h
+  [CHOP_FILTER] DETECTED MEDIUM chop: MEDIUM CHOP: BB=1.7% (very tight, T2 thresh=2.0) — NO PENALTY (V3.2.18: trust signals)
+2026-02-19 05:42:30 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:42:52 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: SOL (Tier 3: Small Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (71%): Strong bullish community sentiment (0.69); Sentiment momentum bullish (z=2.35); Sentiment ahead of price (gap=2.64); Trend: RISING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (80%): SOL was rejected at a key resistance level around $89 and is currently testing critical support at $84. Liquidation data for the last 1-4 hours shows significantly higher long liquidations compared to short liquidations, indicating downward pressure.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 27118.40, Asks: 13026.10, Ratio: 2.08
+  [FLOW] Walls - Ask: $81.7 (resistance/LONG-TP), Bid: $81.66 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 559.4000, Sell: 0.0000, Ratio: 2.00
+  [FLOW] Funding rate: -0.000154
+  [FLOW] Taker ratio: 2.00 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (85%): Taker buy pressure: 2.00; Strong bid depth
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -5.5%
+  [JUDGE] Deciding...
+  [CHOP-5M] SOLUSDT: MEDIUM CHOP: ADX=19 (weak trend); BB=0.7% (very tight, T3 thresh=2.6), disp=0.0%
+  [JUDGE] Gemini tp_price: $81.7000 (structural target from chart)
+  [JUDGE] Gemini: LONG (85%)
+  [JUDGE] Reasoning: WHALE and FLOW signals strongly agree on a LONG direction (71% and 85% respectively), indicating significant buying pressure and bullish sentiment. The Extreme Fear market regime (F&G=9) also provides a contrarian bias towards LONG. Although secondary signals are bearish, they are overridden by the strong co-primary agreement, and the microstructure supports dip/bounce trades.
+2026-02-19 05:43:05 | INFO     |   SOL (T3): WAIT (0%) [L:+31.6]
+2026-02-19 05:43:05 | INFO     |     -> reason: Gemini says LONG but already have LONG on SOL. Votes: WHALE=LONG(71%), SENTIMENT
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:43:08 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:43:31 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: ADA (Tier 3: Small Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (63%): Strong bullish community sentiment (0.75); Sentiment momentum bullish (z=2.30); Sentiment ahead of price (gap=2.47); Trend: RISING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] LONG (60%): Higher short liquidations in the last 1-4 hours, indicating short-term upward pressure or short squeezes.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 8034910.00, Asks: 8603810.00, Ratio: 0.93
+  [FLOW] Walls - Ask: $0.2742 (resistance/LONG-TP), Bid: $0.273 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 12240.0000, Sell: 1000.0000, Ratio: 12.24
+  [FLOW] Funding rate: 0.000058
+  [FLOW] Taker ratio: 12.24 | Extreme sell: False | Heavy sell: False
+  [FLOW] FLIP DISCOUNT: SHORT->LONG, conf 85% -> 42% (wait for confirmation)
+  [FLOW] LONG (42%): EXTREME taker buying: 12.24 [FLIP SHORT->LONG, conf discounted]
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -4.2%
+  [JUDGE] Deciding...
+  [CHOP-5M] ADAUSDT: HIGH CHOP: ADX=0 (very weak trend); BB=0.7% (very tight, T3 thresh=2.6), disp=0.1%
+  [JUDGE] ANTI-WAIT: WAIT->LONG (reasoning: 3 long words, conf=90%)
+  [JUDGE] Gemini: LONG (90%)
+  [JUDGE] Reasoning: While WHALE shows a moderate LONG signal (63%) supported by SENTIMENT, FLOW is weak (42%) and discounted due to a recent flip. Crucially, microstructure indicates HIGH CHOP with ADX=0 and very tight Bollinger Bands, making high-frequency dip/bounce trades unfeasible. This, combined with ADA's losing historical performance and the overall competition PnL, warrants waiting for clearer signals and market movement.
+  [SIZING] Equity: $4117 | Balance: $1114 | Sizing base: $2785 (2.5x)
+  [SIZING] Capped: $870 -> $592 (4 slots, 85% equity cap)
+2026-02-19 05:43:44 | INFO     |   ADA (T3): LONG (90%)
+2026-02-19 05:43:44 | INFO     |     -> HIGH CONVICTION: 90% >= 85%, opening beyond slot cap (4/4)
+  [JUDGE] Final: LONG (90%)
+  [JUDGE] TP: 3.0%, SL: 1.8%, Max Hold: 8h
+  [CHOP_FILTER] DETECTED HIGH chop: HIGH CHOP: ADX=0 (very weak trend); BB=0.7% (very tight, T3 thresh=2.6) — NO PENALTY (V3.2.18: trust signals)
+2026-02-19 05:43:48 | INFO     | CAPITULATION MODE: F&G=9, keeping hard cap at BASE_SLOTS=4
+2026-02-19 05:43:48 | INFO     | Max positions reached, skipping ADA
+2026-02-19 05:43:48 | INFO     | --- Cycle summary: 2 signals (2 at 80%+), 5 WAIT, 0 blocked, 1 opportunities ---
+2026-02-19 05:43:54 | INFO     |   [MONITOR] cmt_btcusdt:LONG T1: -0.00% (peak: 0.07%) conf=75%
+2026-02-19 05:43:55 | INFO     |   [MONITOR] cmt_ethusdt T1: -0.14% (peak: 0.05%) conf=90%
+2026-02-19 05:43:55 | INFO     |   [MONITOR] cmt_bnbusdt T2: -0.15% (peak: 0.10%) conf=90%
+2026-02-19 05:43:56 | INFO     |   [MONITOR] cmt_solusdt T3: +0.18% (peak: 0.18%) conf=80%
+2026-02-19 05:43:58 | INFO     | HEALTH | Up: 0:20:05 | Signals: 2 | Trades: 1/0 | Active: 4
+2026-02-19 05:44:54 | INFO     | HEALTH | Up: 0:21:01 | Signals: 2 | Trades: 1/0 | Active: 4
+2026-02-19 05:45:58 | INFO     |   [MONITOR] cmt_btcusdt:LONG T1: -0.09% (peak: 0.07%) conf=75%
+2026-02-19 05:45:59 | INFO     |   [MONITOR] cmt_ethusdt T1: -0.20% (peak: 0.05%) conf=90%
+2026-02-19 05:46:00 | INFO     |   [MONITOR] cmt_bnbusdt T2: -0.24% (peak: 0.10%) conf=90%
+2026-02-19 05:46:00 | INFO     |   [MONITOR] cmt_solusdt T3: +0.06% (peak: 0.18%) conf=80%
+2026-02-19 05:46:01 | INFO     | HEALTH | Up: 0:22:08 | Signals: 2 | Trades: 1/0 | Active: 4
+2026-02-19 05:46:59 | INFO     | HEALTH | Up: 0:23:06 | Signals: 2 | Trades: 1/0 | Active: 4
+2026-02-19 05:48:03 | INFO     |   [MONITOR] cmt_btcusdt:LONG T1: +0.03% (peak: 0.07%) conf=75%
+2026-02-19 05:48:03 | INFO     |   [MONITOR] cmt_ethusdt T1: -0.08% (peak: 0.05%) conf=90%
+2026-02-19 05:48:04 | INFO     |   [MONITOR] cmt_bnbusdt T2: -0.11% (peak: 0.10%) conf=90%
+2026-02-19 05:48:05 | INFO     |   [MONITOR] cmt_solusdt T3: +0.18% (peak: 0.18%) conf=80%
+2026-02-19 05:48:05 | INFO     | HEALTH | Up: 0:24:12 | Signals: 2 | Trades: 1/0 | Active: 4
+2026-02-19 05:48:53 | INFO     | ============================================================
+2026-02-19 05:48:53 | INFO     | SIGNAL CHECK - 20260219_054853
+2026-02-19 05:48:53 | INFO     | ============================================================
+2026-02-19 05:48:54 | INFO     | Balance: 1114.42 USDT | Equity: 4121.63 USDT | UPnL: -12.37
+2026-02-19 05:48:54 | INFO     | Open positions: 4
+2026-02-19 05:48:54 | INFO     | Days left: 4
+2026-02-19 05:48:54 | INFO     | Max positions (4/4) - Analysis only
+2026-02-19 05:48:55 | INFO     | CAPITULATION: F&G=9 < 15, hedging DISABLED (pick a side)
+2026-02-19 05:48:55 | INFO     | F&G: 9 (EXTREME FEAR) | Slots: 4/4
+2026-02-19 05:49:02 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:49:27 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: BTC (Tier 1: Blue Chip) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (77%): Whale distribution: -1044 ETH net outflow | Binance Main: -21993 ETH; Binance 3: +20974 ETH [CR confirms: sent=0.42, mom=-0.98] [PM: SHORT MILD (-0.157)]
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (70%): BTC has broken below a key short-term support level, accompanied by significant long liquidations and a bearish pennant formation on the 4-hour chart.
+  [FLOW] Analyzing...
+  [REGIME] BULLISH (score: 1, conf: 65%)
+  [REGIME] BTC 24h: +0.3% | F&G: 9 | Funding: -0.00004
+  [REGIME] OI Signal: NEUTRAL | Volatility: NORMAL | Alts: +0.7%
+  [REGIME]   > EXTREME FEAR (9): mild contrarian BUY bias
+  [FLOW] Depth - Bids: 11.26, Asks: 7.90, Ratio: 1.43
+  [FLOW] Walls - Ask: $66785.2 (resistance/LONG-TP), Bid: $66785.1 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 1.0761, Sell: 5.5452, Ratio: 0.19
+  [FLOW] Funding rate: 0.000004
+  [FLOW] Taker ratio: 0.19 | Extreme sell: True | Heavy sell: True
+  [FLOW] SHORT (85%): EXTREME taker selling: 0.19
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -2.3%
+  [JUDGE] Deciding...
+  [CHOP-5M] BTCUSDT: MEDIUM CHOP: BB=0.5% (very tight, T1 thresh=1.3), disp=0.2%
+  [JUDGE] Gemini: SHORT (85%)
+  [JUDGE] Reasoning: WHALE (77%) and FLOW (85%) signals are strongly bearish, indicating extreme taker selling and smart money distribution. Despite extreme fear (F&G=9), the confluence of multiple strong bearish signals (WHALE, FLOW, SENTIMENT) confirms a high-probability short opportunity. The microstructure suggests a potential downside resolution from a tight range.
+  [SIZING] Equity: $4119 | Balance: $1114 | Sizing base: $2786 (2.5x)
+  [SIZING] Capped: $697 -> $592 (4 slots, 85% equity cap)
+2026-02-19 05:49:45 | INFO     |   BTC (T1): SHORT (85%) [L:+3.7]
+2026-02-19 05:49:45 | INFO     |     -> OPPOSITE: SHORT 85% >= LONG 75%. Tighten LONG SL + open SHORT
+  [JUDGE] Final: SHORT (85%)
+  [JUDGE] TP: 3.0%, SL: 1.5%, Max Hold: 24h
+  [CHOP_FILTER] DETECTED MEDIUM chop: MEDIUM CHOP: BB=0.5% (very tight, T1 thresh=1.3) — NO PENALTY (V3.2.18: trust signals)
+2026-02-19 05:49:49 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:50:08 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: ETH (Tier 1: Blue Chip) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (66%): Whale distribution: -1044 ETH net outflow | Binance Main: -21993 ETH; Binance 3: +20974 ETH [CR DIVERGES: community=LONG sent=0.63]
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (70%): Higher long liquidations in the last 1-4 hours indicate downward price pressure and positions being closed out.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 214.02, Asks: 171.00, Ratio: 1.25
+  [FLOW] Walls - Ask: $1967.5 (resistance/LONG-TP), Bid: $1967.49 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 15.1560, Sell: 11.8240, Ratio: 1.28
+  [FLOW] Funding rate: -0.000074
+  [FLOW] Taker ratio: 1.28 | Extreme sell: False | Heavy sell: False
+  [FLOW] FLIP DISCOUNT: SHORT->LONG, conf 50% -> 25% (wait for confirmation)
+  [FLOW] LONG (25%): Taker buy pressure: 1.28 [FLIP SHORT->LONG, conf discounted]
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] NEUTRAL (40%): No clear technical signal. RSI: 50.7
+  [JUDGE] Deciding...
+  [JUDGE] Gemini: WAIT (85%)
+  [JUDGE] Reasoning: Despite WHALE indicating SHORT (66%), the Extreme Fear (F&G=9) regime requires 2+ co-primary signals to confirm a SHORT. FLOW is weak (25%) and contradictory (LONG), failing to meet this condition. There are no strong signals for a LONG either, as WHALE and SENTIMENT are bearish, and FLOW is very weak and high-noise. Given the conflicting and weak signals, especially under extreme fear, WAIT is the most disciplined action.
+2026-02-19 05:50:22 | INFO     |   ETH (T1): WAIT (0%) [L:-16.0]
+2026-02-19 05:50:22 | INFO     |     -> reason: Gemini Judge: Despite WHALE indicating SHORT (66%), the Extreme Fear (F&G=9) reg
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:50:25 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:50:44 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: BNB (Tier 2: Mid Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (62%): Strong bullish community sentiment (0.77); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] LONG (60%): Dominance of short liquidations in the last 1-4 hours, indicating short-term upward pressure.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 1200.80, Asks: 1389.70, Ratio: 0.86
+  [FLOW] Walls - Ask: $607.54 (resistance/LONG-TP), Bid: $607.53 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 18.8000, Sell: 34.8000, Ratio: 0.54
+  [FLOW] Funding rate: -0.000073
+  [FLOW] Taker ratio: 0.54 | Extreme sell: False | Heavy sell: False
+  [FLOW] FLIP DISCOUNT: LONG->SHORT, conf 50% -> 25% (wait for confirmation)
+  [FLOW] SHORT (25%): Taker sell pressure: 0.54 [FLIP LONG->SHORT, conf discounted]
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -2.5%
+  [JUDGE] Deciding...
+  [JUDGE] Gemini: WAIT (0%)
+  [JUDGE] Reasoning: Co-primary signals are contradictory and weak. WHALE is LONG (62%), but FLOW is SHORT (25%) and has just flipped direction, indicating high noise risk. The microstructure also shows high chop, suggesting the market is ranging with no clear trend. Given the conflicting signals and high chop, waiting for clearer direction is the most disciplined action.
+2026-02-19 05:50:58 | INFO     |   BNB (T2): WAIT (0%) [L:-23.2]
+2026-02-19 05:50:58 | INFO     |     -> reason: Gemini Judge: Co-primary signals are contradictory and weak. WHALE is LONG (62%)
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:51:01 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:51:21 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: LTC (Tier 2: Mid Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (76%): Strong bearish community sentiment (0.00); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] NEUTRAL (60%): Price consolidating around immediate pivot point with mixed short-term liquidation data.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 30363.40, Asks: 38519.60, Ratio: 0.79
+  [FLOW] Walls - Ask: $53.22 (resistance/LONG-TP), Bid: $53.21 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 354.0000, Sell: 111.9000, Ratio: 3.16
+  [FLOW] Funding rate: -0.000053
+  [FLOW] Taker ratio: 3.16 | Extreme sell: False | Heavy sell: False
+  [FLOW] FLIP DISCOUNT: SHORT->LONG, conf 85% -> 42% (wait for confirmation)
+  [FLOW] LONG (42%): EXTREME taker buying: 3.16 [FLIP SHORT->LONG, conf discounted]
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -4.1%
+  [JUDGE] Deciding...
+  [JUDGE] Gemini: WAIT (0%)
+  [JUDGE] Reasoning: WHALE is strongly SHORT (76%), but FLOW is weakly LONG (42%) and just flipped, indicating high noise. With Fear & Greed at 9 (EXTREME FEAR), a SHORT requires 2+ co-primary signals, which is not met as FLOW contradicts. No strong LONG signal exists against the strong WHALE SHORT.
+2026-02-19 05:51:34 | INFO     |   LTC (T2): WAIT (0%)
+2026-02-19 05:51:34 | INFO     |     -> reason: Gemini Judge: WHALE is strongly SHORT (76%), but FLOW is weakly LONG (42%) and j
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:51:37 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:51:59 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: XRP (Tier 2: Mid Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (56%): Neutral community sentiment (0.48); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] LONG (70%): Dominance of short liquidations in the last 1-4 hours, indicating a potential short squeeze or bounce.
+  [FLOW] Analyzing...
+  [REGIME] BULLISH (score: 1, conf: 65%)
+  [REGIME] BTC 24h: +0.3% | F&G: 9 | Funding: -0.00004
+  [REGIME] OI Signal: NEUTRAL | Volatility: NORMAL | Alts: +0.6%
+  [REGIME]   > EXTREME FEAR (9): mild contrarian BUY bias
+  [FLOW] Depth - Bids: 409880.00, Asks: 417840.00, Ratio: 0.98
+  [FLOW] Walls - Ask: $1.4103 (resistance/LONG-TP), Bid: $1.4102 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 6180.0000, Sell: 13800.0000, Ratio: 0.45
+  [FLOW] Funding rate: -0.000058
+  [FLOW] Taker ratio: 0.45 | Extreme sell: False | Heavy sell: True
+  [FLOW] SHORT (70%): Heavy taker selling: 0.45
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -4.2%
+  [JUDGE] Deciding...
+  [JUDGE] Gemini tp_price: $1.4102 (structural target from chart)
+  [JUDGE] Gemini: SHORT (70%)
+  [JUDGE] Reasoning: Co-primary signals WHALE (56% SHORT) and FLOW (70% SHORT) both indicate a SHORT, with FLOW showing strong taker selling. Despite extreme fear (F&G=9) and strong sentiment for LONG, the agreement of co-primary signals meets the condition for shorting in this market regime. The microstructure shows medium chop but trending, allowing for dip/bounce trades.
+2026-02-19 05:52:13 | INFO     |   XRP (T2): WAIT (0%)
+2026-02-19 05:52:13 | INFO     |     -> reason: Gemini confidence too low: 70% < 80%. Votes: WHALE=SHORT(56%), SENTIMENT=LONG(70
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:52:16 | INFO     | AFC is enabled with max remote calls: 10.
+2026-02-19 05:52:39 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: SOL (Tier 3: Small Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (71%): Strong bullish community sentiment (0.69); Sentiment momentum bullish (z=2.35); Sentiment ahead of price (gap=2.64); Trend: RISING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (70%): SOL is trading under a strong descending trendline on the 1-hour timeframe, and there have been significantly more long liquidations than short liquidations over the past 4 hours, indicating downward pressure.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 28699.70, Asks: 19954.30, Ratio: 1.44
+  [FLOW] Walls - Ask: $81.68 (resistance/LONG-TP), Bid: $81.58 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 429.1000, Sell: 111.4000, Ratio: 3.85
+  [FLOW] Funding rate: -0.000151
+  [FLOW] Taker ratio: 3.85 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (85%): EXTREME taker buying: 3.85
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -5.5%
+  [JUDGE] Deciding...
+  [JUDGE] Gemini: LONG (88%)
+  [JUDGE] Reasoning: Co-primary signals WHALE (71%) and FLOW (85%) both strongly indicate a LONG, supported by the Extreme Fear F&G index. Secondary signals are disregarded as they contradict the primary drivers and are less reliable. SOL also shows positive average PnL historically.
+2026-02-19 05:52:53 | INFO     |   SOL (T3): WAIT (0%) [L:+23.1]
+2026-02-19 05:52:53 | INFO     |     -> reason: Gemini says LONG but already have LONG on SOL. Votes: WHALE=LONG(71%), SENTIMENT
+  [JUDGE] Final: WAIT (0%)
+2026-02-19 05:52:56 | INFO     | AFC is enabled with max remote calls: 10.
