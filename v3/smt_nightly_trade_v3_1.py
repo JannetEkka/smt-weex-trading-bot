@@ -2775,6 +2775,10 @@ class FlowPersona:
                     if nearest_bid_wall is None:
                         nearest_bid_wall = max(bid_levels[:10], key=lambda x: x[1])[0]
 
+            _ask_str = f"${nearest_ask_wall:.6g}" if nearest_ask_wall else "none"
+            _bid_str = f"${nearest_bid_wall:.6g}" if nearest_bid_wall else "none"
+            print(f"  [FLOW] Walls - Ask: {_ask_str} (resistance/LONG-TP), Bid: {_bid_str} (support/SHORT-TP)")
+
             return {
                 "bid_volume": bid_volume,
                 "ask_volume": ask_volume,
