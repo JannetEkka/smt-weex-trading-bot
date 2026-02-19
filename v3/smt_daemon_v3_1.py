@@ -3360,14 +3360,14 @@ def run_daemon():
     logger.info("  Margin guard: skip trade if available margin < 15%% of balance")
     # --- TP/SL ---
     logger.info("TP/SL:")
-    logger.info("  TP priority: Gemini structural > FLOW wall > 12H SR scan > 0.5%% fallback")
+    logger.info("  TP priority: Gemini tp_price (chart SR + FLOW walls as context) > 12H SR scan > 0.5%% fallback")
     logger.info("  TP floor: 0.3%% (MIN_TP_PCT) | Fallback TP: 0.5%% all tiers (COMPETITION_FALLBACK_TP)")
     logger.info("  Extreme fear TP cap: 0.5%% when F&G < 20 (both LONG and SHORT)")
-    logger.info("  XRP TP cap: 0.70%% (only when no Gemini/FLOW wall override)")
+    logger.info("  XRP TP cap: 0.70%% (only when no Gemini structural override)")
     logger.info("  SL method: lowest wick in 12H (1H grid) + last 3 4H candles | SL floor: 1.0%%")
     logger.info("  TP method: max high of last 2 complete 1H candles (LONG) / min low (SHORT)")
-    logger.info("  FLOW wall TP: nearest ask/bid wall >=1.5x avg volume from 200-level order book (0.3-3.0%%)")
-    logger.info("  Gemini structural: 1D+4H chart context → Judge returns tp_price (0.3-5.0%% sanity)")
+    logger.info("  FLOW walls in Judge prompt: ask/bid walls from 200-level order book (context, not hard override)")
+    logger.info("  Gemini Judge: sees chart structure (1D+4H) + FLOW walls + chop → returns tp_price")
     # --- Position sizing ---
     logger.info("POSITION SIZING:")
     logger.info("  sizing_base = max(min(equity, balance * 2.5), balance)")
@@ -3407,7 +3407,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.20: Chart SR 12H fallback when 2H below entry | WHALE dual source | FLOW wall TP")
+    logger.info("  V3.2.20: 12H SR fallback | WHALE dual source | FLOW walls fed to Judge (context, not override)")
     logger.info("  V3.2.19: Fee bleed tracking — [FEE] per trade + Gross/Fees/Net at close + HEALTH cumulative")
     logger.info("  V3.2.18: Chop penalties removed | Shorts ALL pairs | Trust 80%% floor + 0.5%% TP")
     logger.info("  V3.2.17: Stale auto-close removed | Extreme fear TP cap bug fixed | Gemini PM disabled")
