@@ -2601,15 +2601,15 @@ class FlowPersona:
     
     def analyze(self, pair: str, pair_info: Dict) -> Dict:
         symbol = pair_info["symbol"]
-        
+
         try:
+            # V3.2.23: Fetch regime first so [REGIME] prints before [FLOW] data lines (not mid-block)
+            regime = get_enhanced_market_regime()
+            is_bearish = regime.get("regime") == "BEARISH" or regime.get("btc_24h", 0) < -0.3
+
             depth = self._get_order_book_depth(symbol)
             taker_ratio = self._get_taker_ratio(symbol)
             funding = self._get_funding_rate(symbol)
-            
-            # V3.1.18: Get regime to cap taker buying in bearish conditions
-            regime = get_enhanced_market_regime()
-            is_bearish = regime.get("regime") == "BEARISH" or regime.get("btc_24h", 0) < -0.3
             
             signals = []
             
