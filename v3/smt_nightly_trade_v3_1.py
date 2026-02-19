@@ -1850,7 +1850,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.16-GeminiChartContext-7Pairs"
+PIPELINE_VERSION = "SMT-v3.2.40-CloseOrderId-AiLogFix"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4578,6 +4578,27 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
         pass
     
     return result
+
+
+def get_recent_close_order_id(symbol: str) -> Optional[int]:
+    """V3.2.40: Query WEEX for the most recently filled close order for a symbol.
+    Used to attach a close orderId to the AI log when WEEX auto-executes a TP/SL trigger.
+    Returns None on failure — AI log still uploads, just without orderId.
+    """
+    try:
+        endpoint = f"/capi/v2/order/orders?symbol={symbol}&status=2"
+        r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=10)
+        if r.status_code == 200:
+            resp = r.json()
+            orders = resp if isinstance(resp, list) else (resp.get("data") or [])
+            # Filter for close order types (3=close long, 4=close short)
+            close_orders = [o for o in orders if str(o.get("type", "")) in ("3", "4")]
+            if close_orders:
+                oid = close_orders[0].get("order_id")
+                return int(oid) if oid and str(oid).isdigit() else None
+    except Exception:
+        pass
+    return None
 
 
 def _fix_plan_orders(symbol: str, signal: str, size: float, tp_price: float, sl_price: float) -> None:
