@@ -1163,18 +1163,17 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         # TP anchor: highest high of the last 2 COMPLETE 1H candles (skip candles[0] = current partial)
         # V3.2.12: 6H→2H — dip entries anchored to pre-dip peak got 2-3% TPs, never hitting
         tp_high_2h = max(highs_1h[1:3])
-        # TP anchor SHORT: nearest support = highest low of the last 2 complete 1H candles
-        # V3.2.32: min→max — targets nearest visible support, not deepest wick.
-        # With 0.5% cap in effect, aiming for deepest wick just creates synthetic TP prices.
-        # max(lows) lands at a real chart level; cap applies on top if TP% >= 0.5%.
-        tp_low_2h  = max(lows_1h[1:3])
+        # TP anchor SHORT: deepest support = lowest low of the last 2 complete 1H candles
+        # V3.2.33: max→min revert — deepest wick IS the real support; if it's within 0.5% cap
+        # it lands at the actual chart level. max (nearest) was picking meaningless noise wicks.
+        tp_low_2h  = min(lows_1h[1:3])
 
         # SL anchor 1H: lowest/highest actual wick in last 12H from 1H candles
         sl_low_12h_1h  = min(lows_1h[0:12])   # LONG SL reference
         sl_high_12h_1h = max(highs_1h[0:12])  # SHORT SL reference
 
         print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 1H anchors: "
-              f"2H_high={tp_high_2h:.4f}, 2H_nearest_low={tp_low_2h:.4f}, "
+              f"2H_high={tp_high_2h:.4f}, 2H_low={tp_low_2h:.4f}, "
               f"12H_low={sl_low_12h_1h:.4f}, 12H_high={sl_high_12h_1h:.4f}")
 
         # === 4H candles — SL only: catch any deep wick the 1H grid may miss ===
@@ -1241,7 +1240,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 result["tp_pct"]   = round(tp_pct, 2)
                 result["tp_price"] = round(tp_price, 8)
                 tp_found = True
-                print(f"  [CHART-SR] SHORT TP: 2H_nearest_low={tp_low_2h:.4f} → {tp_pct:.2f}%")
+                print(f"  [CHART-SR] SHORT TP: 2H_low={tp_low_2h:.4f} → {tp_pct:.2f}%")
             else:
                 # V3.2.20: 2H_low at/above entry — scan 48H support list
                 # V3.2.29: Walk full list descending — take first candidate below entry.

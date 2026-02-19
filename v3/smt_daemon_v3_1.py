@@ -3283,7 +3283,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.32 - SHORT TP uses nearest support (max lows), not deepest wick (min lows)")
+    logger.info("SMT Daemon V3.2.33 - SHORT TP reverted to deepest wick (min lows); max was picking noise wicks")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
