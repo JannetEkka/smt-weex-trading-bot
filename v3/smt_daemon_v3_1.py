@@ -1266,113 +1266,63 @@ def check_trading_signals():
                 type_label = "[FLIP] " if trade_type == "flip" else ""
                 logger.info(f"EXECUTING {type_label}{pair} {signal} (T{tier}) - {confidence:.0%}")
                 
-                # V3.1.53: OPPOSITE SIDE - tighten SL on existing + open new direction
+                # V3.2.35: OPPOSITE SIDE - close existing position first, then open new direction
                 if trade_type == "opposite":
                     try:
                         opp_side = "SHORT" if signal == "LONG" else "LONG"
                         sym = opportunity["pair_info"]["symbol"]
                         sym_positions = position_map.get(sym, {})
                         opp_pos = sym_positions.get(opp_side)
-                        
+
                         if opp_pos:
                             opp_size = float(opp_pos.get("size", 0))
                             opp_entry = float(opp_pos.get("entry_price", 0))
                             opp_pnl = float(opp_pos.get("unrealized_pnl", 0))
-                            current_price = get_price(sym)
-                            
-                            # TIGHTEN SL: Move SL to 50% of original distance from current price
-                            # This gives the old position a short leash - it'll close itself if wrong
-                            from smt_nightly_trade_v3_1 import round_price_to_tick, cancel_all_orders_for_symbol, place_order, round_size_to_step
-                            
-                            if opp_side == "LONG":
-                                # LONG position - tighten SL upward (closer to current price)
-                                old_sl_dist = opp_entry * 0.02  # Original ~2% SL
-                                new_sl = round_price_to_tick(current_price * 0.992, sym)  # 0.8% SL
-                                # Don't set SL above entry (would be instant loss lock)
-                                new_sl = max(new_sl, round_price_to_tick(opp_entry * 0.995, sym))
-                            else:
-                                # SHORT position - tighten SL downward (closer to current price)
-                                new_sl = round_price_to_tick(current_price * 1.008, sym)  # 0.8% SL
-                                # Don't set SL below entry
-                                new_sl = min(new_sl, round_price_to_tick(opp_entry * 1.005, sym))
-                            
-                            logger.info(f"  [SL TIGHTEN] {opp_side} {pair}: Moving SL to ${new_sl:.4f} (entry: ${opp_entry:.4f}, current: ${current_price:.4f})")
-                            
-                            # Cancel old TP/SL and place new tighter ones
-                            try:
-                                # We can't easily modify just the SL on WEEX, 
-                                # so we cancel all orders and re-place with tight SL
-                                cancel_result = cancel_all_orders_for_symbol(sym)
-                                
-                                # Re-place the existing position's TP/SL with tighter SL
-                                # Use plan order or just let the monitor handle it
-                                # For now, the position will be monitored with tighter threshold
-                                
-                                # Update tracker with tighter SL
-                                trade_key = sym
-                                existing_trade = tracker.get_active_trade(trade_key)
-                                if not existing_trade:
-                                    trade_key = f"{sym}:{opp_side}"
-                                    existing_trade = tracker.get_active_trade(trade_key)
-                                
-                                if existing_trade:
-                                    existing_trade["sl_tightened"] = True
-                                    existing_trade["sl_tightened_at"] = datetime.now(timezone.utc).isoformat()
-                                    existing_trade["sl_price"] = new_sl
-                                    existing_trade["tighten_reason"] = f"Opposite {signal} at {confidence:.0%}"
-                                    tracker.save_state()
-                                
 
-                                # V3.1.56: ACTUALLY PLACE SL ORDER ON WEEX
-                                try:
-                                    close_type = "3" if opp_side == "LONG" else "4"  # 3=close long, 4=close short
-                                    opp_size = float(opp_pos.get("size", 0))
-                                    plan_order_endpoint = "/capi/v2/order/plan_order"
-                                    sl_body = json.dumps({
+                            from smt_nightly_trade_v3_1 import close_position_manually
+
+                            logger.info(f"  [OPPOSITE] Closing {opp_side} {pair} (entry=${opp_entry:.4f}, PnL={opp_pnl:.2f}) before opening {signal}")
+                            try:
+                                close_result = close_position_manually(sym, opp_side, opp_size)
+                                logger.info(f"  [OPPOSITE] Closed {opp_side} {pair}: {close_result.get('order_id', 'no order id')}")
+
+                                # Remove from tracker
+                                _opp_pnl_pct = (opp_pnl / (opp_entry * opp_size) * 100) if opp_entry and opp_size else 0
+                                for key in [f"{sym}:{opp_side}", sym]:
+                                    if key in tracker.active_trades:
+                                        tracker.close_trade(key, {
+                                            "reason": f"opposite_signal_{signal.lower()}",
+                                            "pnl": opp_pnl,
+                                            "final_pnl_pct": _opp_pnl_pct,
+                                        })
+                                        break
+
+                                upload_ai_log_to_weex(
+                                    stage=f"Directional Shift: {pair} {opp_side} closed for {signal}",
+                                    input_data={
                                         "symbol": sym,
-                                        "client_oid": f"smt_tighten_{int(time.time()*1000)}",
-                                        "size": str(opp_size),
-                                        "type": close_type,
-                                        "match_type": "1",
-                                        "execute_price": "0",
-                                        "trigger_price": str(new_sl)
-                                    })
-                                    import requests as req_mod
-                                    from smt_nightly_trade_v3_1 import WEEX_BASE_URL, weex_headers
-                                    sl_r = req_mod.post(f"{WEEX_BASE_URL}{plan_order_endpoint}",
-                                                       headers=weex_headers("POST", plan_order_endpoint, sl_body),
-                                                       data=sl_body, timeout=15)
-                                    logger.info(f"  [SL TIGHTEN] Placed SL order on WEEX: {sl_r.status_code} {sl_r.text[:100]}")
-                                except Exception as place_err:
-                                    logger.warning(f"  [SL TIGHTEN] Could not place SL order: {place_err}")
-                                logger.info(f"  [SL TIGHTEN] Done. {opp_side} will close soon via tight SL.")
-                                _sl_tightened_symbols[sym] = datetime.now(timezone.utc)
-                            except Exception as sl_err:
-                                logger.warning(f"  [SL TIGHTEN] Could not tighten: {sl_err}")
-                            
-                            # Upload AI log for SL tightening
-                            upload_ai_log_to_weex(
-                                stage=f"Directional Shift: {pair} {opp_side}->SL tightened",
-                                input_data={
-                                    "symbol": sym,
-                                    "existing_side": opp_side,
-                                    "existing_size": opp_size,
-                                    "existing_entry": opp_entry,
-                                    "existing_pnl": round(opp_pnl, 2),
-                                    "new_signal": signal,
-                                    "new_confidence": confidence,
-                                },
-                                output_data={
-                                    "action": "SL_TIGHTENED",
-                                    "new_sl": new_sl,
-                                    "reason": "opposite_signal_stronger",
-                                },
-                                explanation=f"AI detected directional shift on {pair}. New {signal} signal at {confidence:.0%} is stronger than existing {opp_side}. Tightened {opp_side} stop-loss to ${new_sl:.4f} (was wider). {opp_side} will exit soon. Opening {signal} to capture new direction."
-                            )
+                                        "closed_side": opp_side,
+                                        "closed_size": opp_size,
+                                        "closed_entry": opp_entry,
+                                        "closed_pnl": round(opp_pnl, 2),
+                                        "new_signal": signal,
+                                        "new_confidence": confidence,
+                                    },
+                                    output_data={
+                                        "action": "OPPOSITE_CLOSE",
+                                        "reason": "opposite_signal_stronger",
+                                    },
+                                    explanation=f"AI closed {opp_side} {pair} (entry ${opp_entry:.4f}, PnL {opp_pnl:.2f}) to open {signal} at {confidence:.0%} confidence. Clean flip."[:1000]
+                                )
+                            except Exception as close_err:
+                                logger.error(f"  [OPPOSITE] Error closing {opp_side} {pair}: {close_err}")
+                                import traceback
+                                logger.error(traceback.format_exc())
                     except Exception as e:
-                        logger.error(f"  [OPPOSITE] Error tightening SL: {e}")
+                        logger.error(f"  [OPPOSITE] Error in opposite handler: {e}")
                         import traceback
                         logger.error(traceback.format_exc())
+
                 
                 try:
                     trade_result = run_with_retry(
