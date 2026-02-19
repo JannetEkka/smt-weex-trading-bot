@@ -338,7 +338,11 @@ class DaemonState:
         self.early_exits = 0
         self.runners_triggered = 0  # V3.1.2: Track runner partial closes
         self.errors = 0
-        
+
+        # V3.2.19: Fee bleed tracking — estimated, based on 0.06% taker per side
+        self.session_fees_est = 0.0   # cumulative fees paid (both sides, all trades)
+        self.session_gross_pnl = 0.0  # gross PnL before fees (closed trades only)
+
         self.is_running = True
         self.shutdown_event = Event()
     
@@ -410,6 +414,7 @@ analyzer = MultiPersonaAnalyzer()
 # V3.1.65: GLOBAL TRADE COOLDOWN - prevent fee bleed from rapid trading
 _last_trade_opened_at = 0  # unix timestamp
 GLOBAL_TRADE_COOLDOWN = 900  # V3.1.66c: 15 minutes (was 30min, too slow for competition)
+TAKER_FEE_RATE = 0.0006       # V3.2.19: 0.06%/side taker fee. At 20x → ~2.4% margin drag per round-trip
 
 # V3.1.93: Last signal cycle summary for PM context
 _last_signal_summary = {}
@@ -1461,6 +1466,11 @@ def check_trading_signals():
                     if trade_result.get("executed"):
                         logger.info(f"Trade executed: {trade_result.get('order_id')}")
                         logger.info(f"  TP: {trade_result.get('tp_pct'):.1f}%, SL: {trade_result.get('sl_pct'):.1f}%")
+                        _pos_usdt = trade_result.get("position_usdt", 0)
+                        if _pos_usdt > 0:
+                            _open_fee = _pos_usdt * 20 * TAKER_FEE_RATE
+                            state.session_fees_est += _open_fee
+                            logger.info(f"  [FEE] Open: ~${_open_fee:.2f} (0.06% × ${_pos_usdt*20:.0f} notional) | Session fees so far: ~${state.session_fees_est:.2f}")
                         
                         trade_result["confidence"] = confidence  # V3.1.41: Store for profit guard
                         # V3.1.51: Store whale confidence for Smart Hold protection
@@ -1567,7 +1577,15 @@ def monitor_positions():
                             else:
                                 pnl_pct = ((entry_price - current_price) / entry_price) * 100
                             actual_pnl = position_usdt * (pnl_pct / 100)
-                        logger.info(f"  PnL: ${actual_pnl:.2f} ({pnl_pct:+.2f}%)")
+                        if position_usdt > 0:
+                            _rt_fee = position_usdt * 20 * TAKER_FEE_RATE * 2  # both sides
+                            _close_fee = _rt_fee / 2
+                            state.session_fees_est += _close_fee
+                            state.session_gross_pnl += actual_pnl
+                            _net_pnl = actual_pnl - _rt_fee
+                            logger.info(f"  Gross PnL: ${actual_pnl:.2f} ({pnl_pct:+.2f}%) | Fees (R/T): ~${_rt_fee:.2f} | Net: ~${_net_pnl:.2f} | Session fees: ~${state.session_fees_est:.2f}")
+                        else:
+                            logger.info(f"  PnL: ${actual_pnl:.2f} ({pnl_pct:+.2f}%)")
                     except Exception as e:
                         logger.debug(f"PnL calc error: {e}")
                     
@@ -2742,11 +2760,13 @@ def log_health():
     uptime_str = str(uptime).split('.')[0]
     active = len(tracker.get_active_symbols())
 
+    _net_pnl_est = state.session_gross_pnl - state.session_fees_est
     logger.info(
         f"HEALTH | Up: {uptime_str} | "
         f"Signals: {state.signals_checked} | "
         f"Trades: {state.trades_opened}/{state.trades_closed} | "
-        f"Active: {active}"
+        f"Active: {active} | "
+        f"Fees: ~${state.session_fees_est:.2f} | Net PnL: ~${_net_pnl_est:.2f}"
     )
 
     # V3.1.82: Mark again after health log (belt and suspenders)
@@ -3331,8 +3351,12 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.18 - chop penalties removed, shorts all pairs, trust the signals")
+    logger.info("SMT Daemon V3.2.19 - fee bleed tracking in logs")
     logger.info("=" * 60)
+    logger.info("V3.2.19 CHANGES:")
+    logger.info("  - V3.2.19: Fee bleed tracking — [FEE] Open logged per trade, Gross/Fees(R-T)/Net at close")
+    logger.info("  - V3.2.19: HEALTH line now shows cumulative session fees + estimated net PnL")
+    logger.info("  - V3.2.19: TAKER_FEE_RATE=0.06%%/side. At 20x leverage = ~2.4%% margin drag per round-trip")
     logger.info("V3.2.18 CHANGES:")
     logger.info("  - V3.2.18: CHOP FILTER PENALTIES REMOVED — detection kept for logging, no blocking/penalty")
     logger.info("  - V3.2.18: 80%% confidence floor + 0.5%% extreme fear TP cap = sufficient protection")
