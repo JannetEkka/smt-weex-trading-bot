@@ -1,5 +1,5 @@
 """
-SMT Nightly Trade V3.2.30 - WEEX TP/SL confirmation logging after placement
+SMT Nightly Trade V3.2.31 - Extend 1H candle lookback from 12H to 48H for resistance walk
 =============================================================
 No partial closes. Higher conviction trades only.
 
@@ -1144,8 +1144,12 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
 
     try:
         # === 1H candles — primary source for both TP and SL ===
-        # limit=13: candles[0] = current (may be partial), candles[1:7] = last 6 complete, candles[0:12] = last 12H
-        url_1h = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1h&limit=13"
+        # V3.2.31: limit=49 (was 13) — fetch 48H of 1H candles so the resistance walk has a full
+        # 48-candle pool to search. When entry is near recent highs, the 12H pool had only 1-2
+        # candidates above entry and both failed the haircut, discarding high-confidence signals.
+        # The competition TP cap (0.5%) applies on top regardless of how far out the level is.
+        # candles[0] = current (may be partial), candles[1:] = complete candles, newest first.
+        url_1h = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1h&limit=49"
         r_1h = requests.get(url_1h, timeout=10)
         candles_1h = r_1h.json()
 
@@ -1190,32 +1194,31 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         sl_found = False
 
         if signal == "LONG":
-            # TP: just inside the 2H ceiling (where sellers appeared most recently)
-            tp_price = tp_high_2h * 0.997
+            # TP: raw 2H ceiling (where sellers appeared most recently)
+            # V3.2.31: Haircut removed — raw resistance IS the TP. Competition cap (0.5%) handles sizing.
+            tp_price = tp_high_2h
             tp_pct   = (tp_price - entry_price) / entry_price * 100
             if tp_price > entry_price:
                 result["tp_pct"]   = round(tp_pct, 2)
-                result["tp_price"] = round(entry_price * (1 + tp_pct / 100), 8)
+                result["tp_price"] = round(tp_price, 8)
                 tp_found = True
                 print(f"  [CHART-SR] LONG TP: 2H_high={tp_high_2h:.4f} → {tp_pct:.2f}%")
             else:
-                # V3.2.20: 2H_high at/below entry (entered above recent ceiling) — scan 12H resistance list
-                # V3.2.29: Walk full list ascending — take first candidate whose haircut still clears entry.
+                # V3.2.20: 2H_high at/below entry — scan 48H resistance list
+                # V3.2.29: Walk full list ascending — take first candidate above entry.
+                # V3.2.31: Haircut removed + extended from 12H to 48H pool.
                 # Only discard if ALL candidates fail. COMPETITION_FALLBACK_TP is NOT a resistance workaround.
-                _cands = sorted([h for h in highs_1h[1:13] if h > entry_price])
+                _cands = sorted([h for h in highs_1h[1:49] if h > entry_price])
                 for _candidate_res in _cands:
-                    _tp12_price = _candidate_res * 0.997
-                    _tp12_pct   = (_tp12_price - entry_price) / entry_price * 100
-                    if _tp12_price > entry_price:  # haircut clears entry — use this resistance
+                    _tp12_pct = (_candidate_res - entry_price) / entry_price * 100
+                    if _tp12_pct > 0:  # above entry — use this resistance
                         result["tp_pct"]   = round(_tp12_pct, 2)
-                        result["tp_price"] = round(entry_price * (1 + _tp12_pct / 100), 8)
+                        result["tp_price"] = round(_candidate_res, 8)
                         tp_found = True
-                        print(f"  [CHART-SR] LONG TP (12H walk): {_candidate_res:.4f} → {_tp12_pct:.2f}%")
+                        print(f"  [CHART-SR] LONG TP (48H walk): {_candidate_res:.4f} → {_tp12_pct:.2f}%")
                         break
-                    else:
-                        print(f"  [CHART-SR] LONG skip {_candidate_res:.4f}: haircut={_tp12_price:.4f} <= entry")
                 if not tp_found and _cands:
-                    print(f"  [CHART-SR] LONG: all {len(_cands)} resistances below entry after haircut — tp_not_found")
+                    print(f"  [CHART-SR] LONG: all {len(_cands)} resistances at/below entry — tp_not_found")
 
             # SL: lowest actual wick in 12H from either timeframe ("take whichever is lowest")
             sl_price = min(sl_low_12h_1h, sl_low_12h_4h) * 0.997
@@ -1227,32 +1230,31 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
             print(f"  [CHART-SR] LONG SL: min(1H={sl_low_12h_1h:.4f}, 4H={sl_low_12h_4h:.4f})={min(sl_low_12h_1h,sl_low_12h_4h):.4f} → {sl_pct:.2f}%")
 
         elif signal == "SHORT":
-            # TP: just inside the 2H floor (where buyers appeared most recently)
-            tp_price = tp_low_2h * 1.003
+            # TP: raw 2H floor (where buyers appeared most recently)
+            # V3.2.31: Haircut removed — raw support IS the TP. Competition cap (0.5%) handles sizing.
+            tp_price = tp_low_2h
             tp_pct   = (entry_price - tp_price) / entry_price * 100
             if tp_price < entry_price:
                 result["tp_pct"]   = round(tp_pct, 2)
-                result["tp_price"] = round(entry_price * (1 - tp_pct / 100), 8)
+                result["tp_price"] = round(tp_price, 8)
                 tp_found = True
                 print(f"  [CHART-SR] SHORT TP: 2H_low={tp_low_2h:.4f} → {tp_pct:.2f}%")
             else:
-                # V3.2.20: 2H_low at/above entry — scan 12H support list
-                # V3.2.29: Walk full list descending — take first candidate whose haircut still clears entry.
+                # V3.2.20: 2H_low at/above entry — scan 48H support list
+                # V3.2.29: Walk full list descending — take first candidate below entry.
+                # V3.2.31: Haircut removed + extended from 12H to 48H pool.
                 # Only discard if ALL candidates fail. COMPETITION_FALLBACK_TP is NOT a resistance workaround.
-                _cands = sorted([l for l in lows_1h[1:13] if l < entry_price], reverse=True)
+                _cands = sorted([l for l in lows_1h[1:49] if l < entry_price], reverse=True)
                 for _candidate_sup in _cands:
-                    _tp12_price = _candidate_sup * 1.003
-                    _tp12_pct   = (entry_price - _tp12_price) / entry_price * 100
-                    if _tp12_price < entry_price:  # haircut clears entry — use this support
+                    _tp12_pct = (entry_price - _candidate_sup) / entry_price * 100
+                    if _tp12_pct > 0:  # below entry — use this support
                         result["tp_pct"]   = round(_tp12_pct, 2)
-                        result["tp_price"] = round(entry_price * (1 - _tp12_pct / 100), 8)
+                        result["tp_price"] = round(_candidate_sup, 8)
                         tp_found = True
-                        print(f"  [CHART-SR] SHORT TP (12H walk): {_candidate_sup:.4f} → {_tp12_pct:.2f}%")
+                        print(f"  [CHART-SR] SHORT TP (48H walk): {_candidate_sup:.4f} → {_tp12_pct:.2f}%")
                         break
-                    else:
-                        print(f"  [CHART-SR] SHORT skip {_candidate_sup:.4f}: haircut={_tp12_price:.4f} >= entry")
                 if not tp_found and _cands:
-                    print(f"  [CHART-SR] SHORT: all {len(_cands)} supports above entry after haircut — tp_not_found")
+                    print(f"  [CHART-SR] SHORT: all {len(_cands)} supports at/above entry — tp_not_found")
 
             # SL: highest actual wick in 12H from either timeframe
             sl_price = max(sl_high_12h_1h, sl_high_12h_4h) * 1.003
