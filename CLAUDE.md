@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.33** — all production code is in `v3/`.
+**Current version: V3.2.34** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -299,10 +299,11 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.33. Next change should be V3.2.34.
+Current: V3.2.34. Next change should be V3.2.35.
 
 **Recent version history:**
-- V3.2.33: (**CURRENT**) Revert V3.2.32 — SHORT TP back to `min(lows_1h[1:3])` (deepest wick). The deepest wick IS the real support; when it's within 0.5% of entry the cap doesn't apply and TP lands at the actual chart level. max (nearest wick) was picking meaningless noise wicks closer to entry.
+- V3.2.34: (**CURRENT**) Judge receives WHALE dual-source data for BTC/ETH as a dedicated prompt section — Etherscan on-chain whale flow (net_flow, inflow, outflow, wallet count) and Cryptoracle (net_sentiment, momentum_zscore, sentiment_price_gap, trend) shown separately so Judge can weigh them independently. BTC also shows prediction market (CO-P-01-01). SIGNAL RELIABILITY guideline updated to explain dual-source nature. Non-BTC/ETH pairs unchanged.
+- V3.2.33: Revert V3.2.32 — SHORT TP back to `min(lows_1h[1:3])` (deepest wick). The deepest wick IS the real support; when it's within 0.5% of entry the cap doesn't apply and TP lands at the actual chart level. max (nearest wick) was picking meaningless noise wicks closer to entry.
 - V3.2.32: SHORT TP anchor changed from `min(lows_1h[1:3])` → `max(lows_1h[1:3])`. Reverted in V3.2.33.
 - V3.2.31: Extended 1H candle lookback from 12H (13 candles) to 48H (49 candles) for resistance/support walk. When entry is near recent highs, the 12H pool had only 1-2 candidates above entry and both failed the haircut, discarding high-confidence signals. Competition TP cap (0.5%) applies on top regardless of how far out the level is.
 - V3.2.30: WEEX TP/SL confirmation logging — after each trade, query WEEX plan orders and compare actual stored trigger prices vs what was sent. Logs `[WEEX-CONFIRM]` with delta % and *** MISMATCH *** flag for any discrepancy > 0.1%.
