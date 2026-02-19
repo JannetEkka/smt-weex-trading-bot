@@ -3341,6 +3341,8 @@ def run_daemon():
     logger.info("V3.2.17 CHANGES:")
     logger.info("  - V3.2.17: Stale position auto-close REMOVED — slot swap already handles underperformers")
     logger.info("  - V3.2.17: Prevents premature exits like SOL +0.23%% stale-closed then re-entered at worse price")
+    logger.info("  - V3.2.17: CRITICAL BUG FIX — extreme fear TP cap was NEVER firing (REGIME_CACHE.get passed {{}} as TTL)")
+    logger.info("  - V3.2.17: LTC had 2.52%% TP in F&G=8 — cap at 0.5%% was silently skipped by TypeError in try/except")
     logger.info("V3.2.16 CHANGES:")
     logger.info("  - V3.2.16: BTC/ETH/BNB RE-ADDED — 7 pairs with Gemini 1D+4H chart context for smarter TP targeting")
     logger.info("  - V3.2.16: get_chart_context() — pulls 5D daily + 32H 4H candles, feeds structural S/R to Judge")

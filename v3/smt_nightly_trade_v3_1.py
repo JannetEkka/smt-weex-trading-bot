@@ -3953,7 +3953,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         # 2H anchor helps a lot, but fear markets can still produce 1-2% TPs when 2H had a big swing.
         # XRP at +0.28% peak, ADA at +0.25% peak both had chart TPs 2-3% away — positions never exited.
         try:
-            _fg_tp_regime = REGIME_CACHE.get("regime", {})
+            _fg_tp_regime = REGIME_CACHE.get("regime", 300)
             _fg_tp = _fg_tp_regime.get("fear_greed", 50) if _fg_tp_regime else 50
             _tp_cap = COMPETITION_FALLBACK_TP.get(tier, 0.5)
             if _fg_tp < 20 and tp_pct_raw > _tp_cap:
