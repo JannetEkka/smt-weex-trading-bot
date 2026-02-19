@@ -3403,48 +3403,7 @@ Respond with JSON ONLY (no markdown, no backticks):
             confidence = min(0.95, max(0.0, float(raw_conf))) if raw_conf is not None else 0.0
             reasoning = data.get("reasoning") or "Gemini Judge decision"
             
-            # V3.1.75 FIX #6: ANTI-WAIT V3 - respects F&G context
-            # Layer 1: If 2+ personas agree on direction at >= 70% each, force that direction
-            # Layer 2: Reasoning word-count fallback
-            # GUARD: Never force SHORT in extreme fear or LONG in extreme greed
-            _fg_for_antiwait = regime.get("fear_greed", 50) if regime else 50
-            if decision == "WAIT" and confidence >= 0.75:
-                _long_voters = [v for v in persona_votes if v["signal"] == "LONG" and v["confidence"] >= 0.70]
-                _short_voters = [v for v in persona_votes if v["signal"] == "SHORT" and v["confidence"] >= 0.70]
-
-                # F&G guard: block nonsensical forced overrides
-                if _fg_for_antiwait < 20:
-                    _short_voters = []  # Never force SHORT in extreme fear
-                    if _long_voters:
-                        print(f"  [JUDGE] ANTI-WAIT F&G guard: F&G={_fg_for_antiwait}, only allowing LONG override")
-                elif _fg_for_antiwait > 80:
-                    _long_voters = []  # Never force LONG in extreme greed
-                    if _short_voters:
-                        print(f"  [JUDGE] ANTI-WAIT F&G guard: F&G={_fg_for_antiwait}, only allowing SHORT override")
-
-                if len(_long_voters) >= 2 and len(_short_voters) == 0:
-                    decision = "LONG"
-                    _voter_names = [v["persona"] for v in _long_voters]
-                    print(f"  [JUDGE] ANTI-WAIT: WAIT->LONG (consensus: {_voter_names}, conf={confidence:.0%})")
-                elif len(_short_voters) >= 2 and len(_long_voters) == 0:
-                    decision = "SHORT"
-                    _voter_names = [v["persona"] for v in _short_voters]
-                    print(f"  [JUDGE] ANTI-WAIT: WAIT->SHORT (consensus: {_voter_names}, conf={confidence:.0%})")
-                else:
-                    # Layer 2: Reasoning text analysis (fallback) - also F&G guarded
-                    reasoning_lower = reasoning.lower() if reasoning else ""
-                    long_words = sum(1 for w in ["long", "buy", "bullish", "accumulation", "oversold", "bounce", "support"] if w in reasoning_lower)
-                    short_words = sum(1 for w in ["short", "sell", "bearish", "distribution", "overbought", "dump", "resistance"] if w in reasoning_lower)
-                    if _fg_for_antiwait < 20:
-                        short_words = 0  # Block SHORT reasoning override in extreme fear
-                    elif _fg_for_antiwait > 80:
-                        long_words = 0  # Block LONG reasoning override in extreme greed
-                    if long_words >= 2 and short_words == 0:
-                        decision = "LONG"
-                        print(f"  [JUDGE] ANTI-WAIT: WAIT->LONG (reasoning: {long_words} long words, conf={confidence:.0%})")
-                    elif short_words >= 2 and long_words == 0:
-                        decision = "SHORT"
-                        print(f"  [JUDGE] ANTI-WAIT: WAIT->SHORT (reasoning: {short_words} short words, conf={confidence:.0%})")
+            # V3.2.37: ANTI-WAIT removed — trust Gemini Judge. WAIT means WAIT.
             raw_tp = data.get("tp_pct")
             tp_pct = float(raw_tp) if raw_tp is not None else tier_config["tp_pct"]
             raw_sl = data.get("sl_pct")

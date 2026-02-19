@@ -3231,7 +3231,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.36 - MIN_VIABLE_TP_PCT=0.20: skip SR < 0.20%% from entry (entry at resistance = discard)")
+    logger.info("SMT Daemon V3.2.37 - ANTI-WAIT removed: Gemini Judge WAIT = WAIT, no override")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3296,6 +3296,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.37: ANTI-WAIT removed — Gemini Judge WAIT = WAIT; no persona-consensus or keyword override")
     logger.info("  V3.2.36: MIN_VIABLE_TP_PCT=0.20%% — skip SR levels < 0.20%% from entry; entry at resistance = tp_not_found = discard")
     logger.info("  V3.2.35: Opposite signal = close existing position first, then open new side (was SL-tighten + dual-open)")
     logger.info("  V3.2.34: Judge receives WHALE dual-source data (Etherscan+Cryptoracle) separately for BTC/ETH")
