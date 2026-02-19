@@ -1078,6 +1078,8 @@ def check_trading_signals():
                 logger.error(f"Error analyzing {pair}: {e}")
         
 # V3.2.25: Execute ALL qualifying trades — no slot cap, margin guard is the limiter
+        trades_executed = 0  # V3.2.36 fix: initialize before if/else so it's always defined
+
         if trade_opportunities:
             # Sort by confidence (highest first)
             trade_opportunities.sort(key=lambda x: x["decision"]["confidence"], reverse=True)
@@ -1087,8 +1089,6 @@ def check_trading_signals():
             logger.info(f"  Executing {len(trade_opportunities)} opportunit{'y' if len(trade_opportunities)==1 else 'ies'} ({current_positions} positions currently open)")
 
             trades_executed_count_ref = 0  # kept for slot_swap compat below
-            
-            trades_executed = 0
             
             # V3.1.41: Count directional exposure BEFORE executing
             long_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "LONG")
@@ -1316,11 +1316,9 @@ def check_trading_signals():
                                 )
                             except Exception as close_err:
                                 logger.error(f"  [OPPOSITE] Error closing {opp_side} {pair}: {close_err}")
-                                import traceback
                                 logger.error(traceback.format_exc())
                     except Exception as e:
                         logger.error(f"  [OPPOSITE] Error in opposite handler: {e}")
-                        import traceback
                         logger.error(traceback.format_exc())
 
                 
@@ -3233,7 +3231,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.34 - Judge sees WHALE dual-source (Etherscan+Cryptoracle) for BTC/ETH separately")
+    logger.info("SMT Daemon V3.2.36 - MIN_VIABLE_TP_PCT=0.20: skip SR < 0.20%% from entry (entry at resistance = discard)")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3298,20 +3296,16 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.20: 12H SR fallback | WHALE dual source | FLOW walls fed to Judge (context, not override)")
-    logger.info("  V3.2.21: resolve_opposite_sides closes OLDER position, not losing side")
-    logger.info("  V3.2.22: no slot swap; confidence>=85% opens 5th slot; opposite closes immediately (no 15m wait)")
-    logger.info("  V3.2.23: banner slot swap lines removed; FLOW calls regime first (fixes mid-block [REGIME] print)")
+    logger.info("  V3.2.36: MIN_VIABLE_TP_PCT=0.20%% — skip SR levels < 0.20%% from entry; entry at resistance = tp_not_found = discard")
+    logger.info("  V3.2.35: Opposite signal = close existing position first, then open new side (was SL-tighten + dual-open)")
+    logger.info("  V3.2.34: Judge receives WHALE dual-source data (Etherscan+Cryptoracle) separately for BTC/ETH")
+    logger.info("  V3.2.33: SHORT TP back to min(lows_1h[1:3]) (deepest wick = real support)")
+    logger.info("  V3.2.31: 48H SR lookback (was 12H); 0.5%% TP cap universal ceiling on ALL trades")
     logger.info("  V3.2.29: Walk SR list before discard; 0.5%% TP cap on ALL trades (not just fear); no-SR = no trade (no fallback)")
     logger.info("  V3.2.28: Bad-TP trades discarded (entry at resistance); sizing cache reset after each trade for accurate available")
-    logger.info("  V3.2.27: 12H TP haircut validity check; final TP direction guard before place_order — prevents WEEX 40015 rejection")
-    logger.info("  V3.2.26: Margin guard fixed at $1000 (was balance*15%%); sizing floor $1000 — no tiny rejected orders")
     logger.info("  V3.2.25: No slot cap (margin guard limits); dust+orphan sweep every cycle; opp-side resolve at cycle end; sizing from available margin")
     logger.info("  V3.2.24: MIN_TP_PCT=0.3%% floor removed — chart SR is the TP, no artificial minimum")
-    logger.info("  V3.2.19: Fee bleed tracking — [FEE] per trade + Gross/Fees/Net at close + HEALTH cumulative")
     logger.info("  V3.2.18: Chop penalties removed | Shorts ALL pairs | Trust 80%% floor + 0.5%% TP")
-    logger.info("  V3.2.17: Stale auto-close removed | Extreme fear TP cap bug fixed | Gemini PM disabled")
-    logger.info("  V3.2.16: BTC/ETH/BNB re-added (7 pairs) | Gemini chart context (1D+4H) | 4 flat slots")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup

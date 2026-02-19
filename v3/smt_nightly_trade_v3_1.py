@@ -1140,7 +1140,10 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
 
     # V3.2.24: MIN_TP_PCT removed — chart SR is the ground truth. Flooring to 0.3% was placing
     # TP beyond real resistance; price rejected at SR and TP never filled, bleeding to SL instead.
-    MIN_SL_PCT = 1.0   # SL must be at least 1.0% from entry (20x = 20% margin loss min)
+    # V3.2.36: MIN_VIABLE_TP_PCT added — skip SR levels < 0.20% from entry (entry IS the resistance).
+    # This is NOT a TP floor; it's a discard threshold. The walk continues to find the next level.
+    MIN_SL_PCT = 1.0          # SL must be at least 1.0% from entry (20x = 20% margin loss min)
+    MIN_VIABLE_TP_PCT = 0.20  # V3.2.36: skip SR levels closer than 0.20% — entry is at resistance
 
     try:
         # === 1H candles — primary source for both TP and SL ===
@@ -1200,7 +1203,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
             # V3.2.31: Haircut removed — raw resistance IS the TP. Competition cap (0.5%) handles sizing.
             tp_price = tp_high_2h
             tp_pct   = (tp_price - entry_price) / entry_price * 100
-            if tp_price > entry_price:
+            if tp_price > entry_price and tp_pct >= MIN_VIABLE_TP_PCT:
                 result["tp_pct"]   = round(tp_pct, 2)
                 result["tp_price"] = round(tp_price, 8)
                 tp_found = True
@@ -1209,18 +1212,19 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 # V3.2.20: 2H_high at/below entry — scan 48H resistance list
                 # V3.2.29: Walk full list ascending — take first candidate above entry.
                 # V3.2.31: Haircut removed + extended from 12H to 48H pool.
+                # V3.2.36: also walk if 2H_high gives < MIN_VIABLE_TP_PCT (entry at resistance).
                 # Only discard if ALL candidates fail. COMPETITION_FALLBACK_TP is NOT a resistance workaround.
                 _cands = sorted([h for h in highs_1h[1:49] if h > entry_price])
                 for _candidate_res in _cands:
                     _tp12_pct = (_candidate_res - entry_price) / entry_price * 100
-                    if _tp12_pct > 0:  # above entry — use this resistance
+                    if _tp12_pct >= MIN_VIABLE_TP_PCT:  # V3.2.36: must clear minimum viable distance
                         result["tp_pct"]   = round(_tp12_pct, 2)
                         result["tp_price"] = round(_candidate_res, 8)
                         tp_found = True
                         print(f"  [CHART-SR] LONG TP (48H walk): {_candidate_res:.4f} → {_tp12_pct:.2f}%")
                         break
-                if not tp_found and _cands:
-                    print(f"  [CHART-SR] LONG: all {len(_cands)} resistances at/below entry — tp_not_found")
+                if not tp_found:
+                    print(f"  [CHART-SR] LONG: no resistance >= {MIN_VIABLE_TP_PCT:.2f}% above entry in 48H — tp_not_found (entry at ceiling)")
 
             # SL: lowest actual wick in 12H from either timeframe ("take whichever is lowest")
             sl_price = min(sl_low_12h_1h, sl_low_12h_4h) * 0.997
@@ -1236,7 +1240,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
             # V3.2.31: Haircut removed — raw support IS the TP. Competition cap (0.5%) handles sizing.
             tp_price = tp_low_2h
             tp_pct   = (entry_price - tp_price) / entry_price * 100
-            if tp_price < entry_price:
+            if tp_price < entry_price and tp_pct >= MIN_VIABLE_TP_PCT:
                 result["tp_pct"]   = round(tp_pct, 2)
                 result["tp_price"] = round(tp_price, 8)
                 tp_found = True
@@ -1245,18 +1249,19 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 # V3.2.20: 2H_low at/above entry — scan 48H support list
                 # V3.2.29: Walk full list descending — take first candidate below entry.
                 # V3.2.31: Haircut removed + extended from 12H to 48H pool.
+                # V3.2.36: also walk if 2H_low gives < MIN_VIABLE_TP_PCT (entry at support floor).
                 # Only discard if ALL candidates fail. COMPETITION_FALLBACK_TP is NOT a resistance workaround.
                 _cands = sorted([l for l in lows_1h[1:49] if l < entry_price], reverse=True)
                 for _candidate_sup in _cands:
                     _tp12_pct = (entry_price - _candidate_sup) / entry_price * 100
-                    if _tp12_pct > 0:  # below entry — use this support
+                    if _tp12_pct >= MIN_VIABLE_TP_PCT:  # V3.2.36: must clear minimum viable distance
                         result["tp_pct"]   = round(_tp12_pct, 2)
                         result["tp_price"] = round(_candidate_sup, 8)
                         tp_found = True
                         print(f"  [CHART-SR] SHORT TP (48H walk): {_candidate_sup:.4f} → {_tp12_pct:.2f}%")
                         break
-                if not tp_found and _cands:
-                    print(f"  [CHART-SR] SHORT: all {len(_cands)} supports at/above entry — tp_not_found")
+                if not tp_found:
+                    print(f"  [CHART-SR] SHORT: no support >= {MIN_VIABLE_TP_PCT:.2f}% below entry in 48H — tp_not_found (entry at floor)")
 
             # SL: highest actual wick in 12H from either timeframe
             sl_price = max(sl_high_12h_1h, sl_high_12h_4h) * 1.003
