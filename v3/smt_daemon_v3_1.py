@@ -3341,8 +3341,12 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.19 - fee bleed tracking in logs")
+    logger.info("SMT Daemon V3.2.20 - 12H SR TP scan + WHALE dual source")
     logger.info("=" * 60)
+    logger.info("V3.2.20 CHANGES:")
+    logger.info("  - V3.2.20: Chart SR TP: when 2H_high below entry, scan 12H for nearest resistance above entry")
+    logger.info("  - V3.2.20: Fixes 0.5%% fallback firing every trade in bear/chop when entry is above recent ceiling")
+    logger.info("  - V3.2.20: WHALE BTC/ETH now always runs Etherscan on-chain + Cryptoracle combined (not either/or)")
     logger.info("V3.2.19 CHANGES:")
     logger.info("  - V3.2.19: Fee bleed tracking — [FEE] Open logged per trade, Gross/Fees(R-T)/Net at close")
     logger.info("  - V3.2.19: HEALTH line now shows cumulative session fees + estimated net PnL")

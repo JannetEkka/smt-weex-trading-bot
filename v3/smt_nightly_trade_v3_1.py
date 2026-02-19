@@ -1198,6 +1198,18 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 result["tp_price"] = round(entry_price * (1 + tp_pct / 100), 8)
                 tp_found = True
                 print(f"  [CHART-SR] LONG TP: 2H_high={tp_high_2h:.4f} → {tp_pct:.2f}%")
+            else:
+                # V3.2.20: 2H_high at/below entry (entered above recent ceiling) — scan 12H for nearest resistance
+                _cands = sorted([h for h in highs_1h[1:13] if h > entry_price])
+                if _cands:
+                    _nearest_res = _cands[0]
+                    _tp12_price  = _nearest_res * 0.997
+                    _tp12_pct    = (_tp12_price - entry_price) / entry_price * 100
+                    _tp12_pct    = max(_tp12_pct, MIN_TP_PCT)
+                    result["tp_pct"]   = round(_tp12_pct, 2)
+                    result["tp_price"] = round(entry_price * (1 + _tp12_pct / 100), 8)
+                    tp_found = True
+                    print(f"  [CHART-SR] LONG TP (12H nearest): {_nearest_res:.4f} → {_tp12_pct:.2f}%")
 
             # SL: lowest actual wick in 12H from either timeframe ("take whichever is lowest")
             sl_price = min(sl_low_12h_1h, sl_low_12h_4h) * 0.997
@@ -1218,6 +1230,18 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 result["tp_price"] = round(entry_price * (1 - tp_pct / 100), 8)
                 tp_found = True
                 print(f"  [CHART-SR] SHORT TP: 2H_low={tp_low_2h:.4f} → {tp_pct:.2f}%")
+            else:
+                # V3.2.20: 2H_low at/above entry — scan 12H for nearest support below entry
+                _cands = sorted([l for l in lows_1h[1:13] if l < entry_price], reverse=True)
+                if _cands:
+                    _nearest_sup = _cands[0]
+                    _tp12_price  = _nearest_sup * 1.003
+                    _tp12_pct    = (entry_price - _tp12_price) / entry_price * 100
+                    _tp12_pct    = max(_tp12_pct, MIN_TP_PCT)
+                    result["tp_pct"]   = round(_tp12_pct, 2)
+                    result["tp_price"] = round(entry_price * (1 - _tp12_pct / 100), 8)
+                    tp_found = True
+                    print(f"  [CHART-SR] SHORT TP (12H nearest): {_nearest_sup:.4f} → {_tp12_pct:.2f}%")
 
             # SL: highest actual wick in 12H from either timeframe
             sl_price = max(sl_high_12h_1h, sl_high_12h_4h) * 1.003
@@ -2099,34 +2123,25 @@ class WhalePersona:
     
     def analyze(self, pair: str, pair_info: Dict) -> Dict:
         """Analyze whale/smart money activity for trading signal.
-        
-        V3.1.64: EMERGENCY FALLBACK - Cryptoracle cloud shutdown.
-        Priority: Cryptoracle (fast timeout) -> Etherscan whales (BTC/ETH) -> Neutral hold.
+
+        V3.2.20: BTC/ETH always run Etherscan on-chain flow + Cryptoracle combined.
+        Previously Etherscan was only used when Cryptoracle was neutral/down — wasting
+        real whale wallet data even when Cryptoracle was perfectly healthy.
+        Other pairs: Cryptoracle community sentiment only (no ERC-20 on-chain data).
         """
-        
-        # Try Cryptoracle first (fast fail - 5s timeout)
+
+        # Fetch Cryptoracle (cached 10min, 5s hard timeout)
         cr_data = self._get_cryptoracle_data()
         cr_signal = cr_data.get(pair.upper()) if cr_data else None
-        
-        # If Cryptoracle has data, use it (works for ALL pairs)
+
+        # V3.2.20: BTC/ETH always use Etherscan whale flow + Cryptoracle boost/veto combined
+        if pair.upper() in ("BTC", "ETH"):
+            return self._analyze_with_etherscan(pair, pair_info, cr_signal)
+
+        # Other pairs: Cryptoracle only (no on-chain fallback available)
         if cr_signal and cr_signal.get("signal") != "NEUTRAL":
             return self._analyze_with_cryptoracle(pair, pair_info, cr_signal)
-        
-        # FALLBACK: Etherscan whale flow for BTC/ETH
-        if pair.upper() in ("BTC", "ETH"):
-            # V3.1.77b: Better error logging for Cryptoracle issues
-            if not cr_data:
-                _cr_reason = "API returned no data (down/timeout)"
-            elif cr_signal is None:
-                _cr_reason = f"API returned data for {list(cr_data.keys())} but {pair} missing"
-            elif cr_signal.get("signal") == "NEUTRAL":
-                _cr_reason = f"signal=NEUTRAL (conf={cr_signal.get('confidence', '?')}, net_sent={cr_signal.get('net_sentiment', '?')})"
-            else:
-                _cr_reason = f"unknown: signal={cr_signal}"
-            print(f"  [WHALE] Cryptoracle fallback for {pair}: {_cr_reason}")
-            return self._analyze_with_etherscan(pair, pair_info, cr_signal)
-        
-        # Other pairs: no Cryptoracle = neutral hold (cannot fabricate signal)
+
         if not cr_signal:
             print(f"  [WHALE] No data for {pair} (Cryptoracle down, no Etherscan fallback for altcoins)")
             return {
@@ -2135,7 +2150,7 @@ class WhalePersona:
                 "confidence": 0.30,
                 "reasoning": f"Cryptoracle unavailable, no on-chain fallback for {pair}. Deferring to FLOW+SENTIMENT.",
             }
-        
+
         # Cryptoracle returned but neutral - pass it through
         return self._analyze_with_cryptoracle(pair, pair_info, cr_signal)
     
