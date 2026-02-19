@@ -2731,8 +2731,8 @@ class FlowPersona:
     
     def _get_order_book_depth(self, symbol: str) -> Dict:
         try:
-            # WEEX uses limit=15 or limit=200
-            url = f"{WEEX_BASE_URL}/capi/v2/market/depth?symbol={symbol}&limit=15"
+            # V3.2.20: limit=200 for wall detection (15 levels too tight on liquid pairs)
+            url = f"{WEEX_BASE_URL}/capi/v2/market/depth?symbol={symbol}&limit=200"
             r = requests.get(url, timeout=10)
             data = r.json()
 
