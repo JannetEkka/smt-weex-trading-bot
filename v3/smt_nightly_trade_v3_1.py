@@ -1205,10 +1205,13 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                     _nearest_res = _cands[0]
                     _tp12_price  = _nearest_res * 0.997
                     _tp12_pct    = (_tp12_price - entry_price) / entry_price * 100
-                    result["tp_pct"]   = round(_tp12_pct, 2)
-                    result["tp_price"] = round(entry_price * (1 + _tp12_pct / 100), 8)
-                    tp_found = True
-                    print(f"  [CHART-SR] LONG TP (12H nearest): {_nearest_res:.4f} → {_tp12_pct:.2f}%")
+                    if _tp12_price > entry_price:  # V3.2.27: haircut must still clear entry
+                        result["tp_pct"]   = round(_tp12_pct, 2)
+                        result["tp_price"] = round(entry_price * (1 + _tp12_pct / 100), 8)
+                        tp_found = True
+                        print(f"  [CHART-SR] LONG TP (12H nearest): {_nearest_res:.4f} → {_tp12_pct:.2f}%")
+                    else:
+                        print(f"  [CHART-SR] LONG TP (12H nearest): {_nearest_res:.4f} haircut={_tp12_price:.4f} below entry — tp_not_found")
 
             # SL: lowest actual wick in 12H from either timeframe ("take whichever is lowest")
             sl_price = min(sl_low_12h_1h, sl_low_12h_4h) * 0.997
@@ -1235,10 +1238,13 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                     _nearest_sup = _cands[0]
                     _tp12_price  = _nearest_sup * 1.003
                     _tp12_pct    = (entry_price - _tp12_price) / entry_price * 100
-                    result["tp_pct"]   = round(_tp12_pct, 2)
-                    result["tp_price"] = round(entry_price * (1 - _tp12_pct / 100), 8)
-                    tp_found = True
-                    print(f"  [CHART-SR] SHORT TP (12H nearest): {_nearest_sup:.4f} → {_tp12_pct:.2f}%")
+                    if _tp12_price < entry_price:  # V3.2.27: haircut must still clear entry
+                        result["tp_pct"]   = round(_tp12_pct, 2)
+                        result["tp_price"] = round(entry_price * (1 - _tp12_pct / 100), 8)
+                        tp_found = True
+                        print(f"  [CHART-SR] SHORT TP (12H nearest): {_nearest_sup:.4f} → {_tp12_pct:.2f}%")
+                    else:
+                        print(f"  [CHART-SR] SHORT TP (12H nearest): {_nearest_sup:.4f} haircut={_tp12_price:.4f} above entry — tp_not_found")
 
             # SL: highest actual wick in 12H from either timeframe
             sl_price = max(sl_high_12h_1h, sl_high_12h_4h) * 1.003
@@ -1749,18 +1755,18 @@ def get_sizing_base(balance: float) -> float:
         if equity <= 0:
             equity = balance  # API failed, fall back to balance
 
-        # FLOOR 1: If available margin < 15% of balance, signal "don't trade"
-        if available > 0 and available < balance * 0.15:
-            print(f"  [MARGIN GUARD] Available ${available:.0f} < 15% of balance ${balance:.0f}. Sizing blocked.")
+        # FLOOR 1: If available margin < $1000, signal "don't trade" — not enough free margin to size meaningfully
+        # V3.2.26: fixed $1000 guard (was balance*0.15 ≈ $150 — too low, led to tiny rejected orders)
+        if available > 0 and available < 1000.0:
+            print(f"  [MARGIN GUARD] Available ${available:.0f} < $1000 minimum. Sizing blocked.")
             _sizing_equity_cache = {"sizing_base": 0, "equity": equity, "available": available, "ts": now}
             return 0
 
         # V3.2.25: Size from available free margin — equity minus what's already deployed.
-        # "Everything is compounded": gains increase available, but deployed margin is subtracted.
-        # available IS the correct sizing base: real free capital after all open positions consume their margin.
+        # V3.2.26: Floor at $1000 — always size off at least $1000 base → $250 margin min → $5k notional at 20x
         sizing_base = available if available > 0 else balance
         sizing_base = min(sizing_base, balance * 2.5)   # Cap runaway (e.g. huge UPnL inflating available)
-        sizing_base = max(sizing_base, balance * 0.15)  # Floor: never below the margin-guard threshold
+        sizing_base = max(sizing_base, 1000.0)          # Floor: $1000 minimum sizing base
 
         print(f"  [SIZING] Equity: ${equity:.0f} | Available: ${available:.0f} | Balance: ${balance:.0f} | Sizing base: ${sizing_base:.0f}")
 
@@ -4151,6 +4157,13 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
     set_leverage(symbol, safe_leverage)
 
+    # V3.2.28: Final TP direction guard — if TP landed on wrong side of entry (haircut + slippage),
+    # discard the trade. Entry is at or past resistance/support — bad entry, don't take it.
+    if signal == "LONG" and tp_price <= current_price:
+        return {"executed": False, "reason": f"TP {tp_price:.4f} <= entry {current_price:.4f} — resistance too close after slippage, skip"}
+    elif signal == "SHORT" and tp_price >= current_price:
+        return {"executed": False, "reason": f"TP {tp_price:.4f} >= entry {current_price:.4f} — support too close after slippage, skip"}
+
     print(f"  [TRADE] {signal} {symbol}: {size} @ ${current_price:.4f}")
     print(f"  [TRADE] Tier {tier} ({tier_config['name']}): TP ${tp_price:.4f} ({tp_pct*100:.1f}%), SL ${sl_price:.4f} ({sl_pct*100:.1f}%)")
 
@@ -4160,6 +4173,9 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
     if not order_id:
         return {"executed": False, "reason": f"Order failed: {result}"}
+
+    # V3.2.28: Invalidate sizing cache after trade — available has changed, next trade must recalculate
+    _sizing_equity_cache["ts"] = 0
 
     # V3.2.6: For DOGE, cancel preset plan orders and re-place TP/SL explicitly.
     # Prevents SL price drift caused by orphan interference with WEEX preset processing.
