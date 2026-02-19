@@ -3565,75 +3565,23 @@ class MultiPersonaAnalyzer:
         
         # V3.1.97: REMOVED freshness filter. Ensemble sees momentum data already.
 
-        # V3.1.80: CHOP FILTER - don't enter choppy/sideways markets
-        # Daily trading needs trending markets. Choppy = ping-pong = SL hits.
-        # Runs AFTER Judge confidence check so we only compute for tradeable signals.
+        # V3.1.80: CHOP FILTER - detect choppy/sideways markets
+        # V3.2.18: PENALTIES REMOVED — trust the signals. 80% confidence floor + 0.5% TP cap = protection.
+        # Chop filter was blocking correct signals (ADA 88% SHORT, BNB 88% LONG) and letting wrong ones
+        # through via FLOW EXTREME overrides. Detection kept for logging only.
         if final['decision'] in ("LONG", "SHORT"):
             symbol = pair_info["symbol"]
             chop = detect_sideways_market(symbol)
-            final['chop_data'] = chop  # Attach for daemon fallback logic
+            final['chop_data'] = chop  # Attach for daemon visibility
 
             if chop.get("is_choppy", False):
                 severity = chop.get("severity", "medium")
-                orig_decision = final['decision']  # Save before overwriting
-
-                # V3.2.3: FLOW EXTREME OVERRIDE — when FLOW is extreme AND aligned with
-                # the trade direction, the market is breaking out of the tight range, not chopping.
-                # Extreme taker flow (>=85% conf, same direction) = breakout signal, not chop.
-                _flow_dir = flow_vote.get("signal", "NEUTRAL")
-                _flow_conf = flow_vote.get("confidence", 0)
-                _flow_extreme = (_flow_conf >= 0.85 and _flow_dir == orig_decision)
-
-                if severity == "high":
-                    if _flow_extreme:
-                        # V3.2.18: HIGH CHOP + EXTREME FLOW: -8% penalty (was -15%)
-                        # In F&G<20, even extreme taker ratios don't sustain moves.
-                        # -8% means only 88%+ signals survive (ADA 88% SHORT was correct).
-                        old_conf = final.get('confidence', 0)
-                        new_conf = old_conf - 0.08
-                        print(f"  [CHOP_FILTER] FLOW EXTREME override: HIGH CHOP -> reduced penalty (FLOW {_flow_dir} {_flow_conf:.0%})")
-                        print(f"  [CHOP_FILTER] PENALTY {orig_decision}: {chop['reason']} (conf {old_conf:.0%} -> {new_conf:.0%})")
-                        final['chop_original_decision'] = orig_decision
-                        final['chop_pre_penalty_confidence'] = old_conf
-                        final['confidence'] = new_conf
-                        final['chop_penalized'] = True
-                        if new_conf < MIN_CONFIDENCE_TO_TRADE:
-                            print(f"  [CHOP_FILTER] BLOCKED after penalty: {new_conf:.0%} < {MIN_CONFIDENCE_TO_TRADE:.0%}")
-                            final['decision'] = 'WAIT'
-                            final['confidence'] = 0
-                            final['chop_blocked'] = True
-                    else:
-                        # HIGH CHOP: Hard block - this market is going nowhere
-                        print(f"  [CHOP_FILTER] BLOCKED {orig_decision}: {chop['reason']}")
-                        final['chop_original_decision'] = orig_decision
-                        final['chop_pre_penalty_confidence'] = final.get('confidence', 0)  # V3.1.93
-                        final['decision'] = 'WAIT'
-                        final['confidence'] = 0
-                        final['chop_blocked'] = True
-                elif severity == "medium":
-                    if _flow_extreme:
-                        # V3.2.3: MEDIUM CHOP + EXTREME FLOW: skip penalty entirely — breakout incoming
-                        # V3.2.18: KEPT as skip. ETH 80% LONG with clear ascending trendline was correct.
-                        # FLOW EXTREME on medium chop = real buying/selling pressure in a slow trend.
-                        print(f"  [CHOP_FILTER] FLOW EXTREME override: skip MEDIUM CHOP penalty (FLOW {_flow_dir} {_flow_conf:.0%} >= 85%)")
-                        final['chop_original_decision'] = orig_decision
-                        final['chop_pre_penalty_confidence'] = final.get('confidence', 0)
-                        final['chop_flow_override'] = True
-                    else:
-                        # MEDIUM CHOP: Confidence penalty (-15%), may still pass if very strong signal
-                        old_conf = final.get('confidence', 0)
-                        final['chop_original_decision'] = final['decision']  # V3.1.93
-                        final['chop_pre_penalty_confidence'] = old_conf  # V3.1.93
-                        new_conf = old_conf - 0.15
-                        print(f"  [CHOP_FILTER] PENALTY {final['decision']}: {chop['reason']} (conf {old_conf:.0%} -> {new_conf:.0%})")
-                        final['confidence'] = new_conf
-                        final['chop_penalized'] = True
-                        # If penalty drops below MIN_CONFIDENCE_TO_TRADE, it becomes a WAIT
-                        if new_conf < MIN_CONFIDENCE_TO_TRADE:
-                            print(f"  [CHOP_FILTER] BLOCKED after penalty: {new_conf:.0%} < {MIN_CONFIDENCE_TO_TRADE:.0%}")
-                            final['decision'] = 'WAIT'
-                            final['confidence'] = 0
-                            final['chop_blocked'] = True
+                # Log only — no penalty, no block
+                print(f"  [CHOP_FILTER] DETECTED {severity.upper()} chop: {chop['reason']} — NO PENALTY (V3.2.18: trust signals)")
+                final['chop_original_decision'] = final['decision']
+                final['chop_pre_penalty_confidence'] = final.get('confidence', 0)
+                final['chop_detected'] = True
+                final['chop_severity'] = severity
         else:
             final['chop_data'] = None
 
