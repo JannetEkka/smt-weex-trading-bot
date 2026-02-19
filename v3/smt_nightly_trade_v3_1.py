@@ -3612,23 +3612,13 @@ class MultiPersonaAnalyzer:
                         final['chop_blocked'] = True
                 elif severity == "medium":
                     if _flow_extreme:
-                        # V3.2.18: MEDIUM CHOP + EXTREME FLOW: -8% penalty (was skip entirely)
-                        # ETH 80% got through with skip — only moved +0.17% in dead ADX market.
-                        # -8% blocks marginal 80% signals, lets genuine 88%+ through.
-                        old_conf = final.get('confidence', 0)
-                        new_conf = old_conf - 0.08
-                        print(f"  [CHOP_FILTER] FLOW EXTREME override: MEDIUM CHOP -> reduced penalty (FLOW {_flow_dir} {_flow_conf:.0%})")
-                        print(f"  [CHOP_FILTER] PENALTY {orig_decision}: {chop['reason']} (conf {old_conf:.0%} -> {new_conf:.0%})")
+                        # V3.2.3: MEDIUM CHOP + EXTREME FLOW: skip penalty entirely — breakout incoming
+                        # V3.2.18: KEPT as skip. ETH 80% LONG with clear ascending trendline was correct.
+                        # FLOW EXTREME on medium chop = real buying/selling pressure in a slow trend.
+                        print(f"  [CHOP_FILTER] FLOW EXTREME override: skip MEDIUM CHOP penalty (FLOW {_flow_dir} {_flow_conf:.0%} >= 85%)")
                         final['chop_original_decision'] = orig_decision
-                        final['chop_pre_penalty_confidence'] = old_conf
-                        final['confidence'] = new_conf
-                        final['chop_penalized'] = True
+                        final['chop_pre_penalty_confidence'] = final.get('confidence', 0)
                         final['chop_flow_override'] = True
-                        if new_conf < MIN_CONFIDENCE_TO_TRADE:
-                            print(f"  [CHOP_FILTER] BLOCKED after penalty: {new_conf:.0%} < {MIN_CONFIDENCE_TO_TRADE:.0%}")
-                            final['decision'] = 'WAIT'
-                            final['confidence'] = 0
-                            final['chop_blocked'] = True
                     else:
                         # MEDIUM CHOP: Confidence penalty (-15%), may still pass if very strong signal
                         old_conf = final.get('confidence', 0)
