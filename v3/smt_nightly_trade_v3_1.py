@@ -1755,11 +1755,14 @@ def get_sizing_base(balance: float) -> float:
             _sizing_equity_cache = {"sizing_base": 0, "equity": equity, "available": available, "ts": now}
             return 0
 
-        # FLOOR 2: Never size below balance (don't amplify losses when UPnL negative)
-        # CAP: Never size above balance * 2.5 (prevent runaway in extreme UPnL)
-        sizing_base = max(min(equity, balance * 2.5), balance)
+        # V3.2.25: Size from available free margin — equity minus what's already deployed.
+        # "Everything is compounded": gains increase available, but deployed margin is subtracted.
+        # available IS the correct sizing base: real free capital after all open positions consume their margin.
+        sizing_base = available if available > 0 else balance
+        sizing_base = min(sizing_base, balance * 2.5)   # Cap runaway (e.g. huge UPnL inflating available)
+        sizing_base = max(sizing_base, balance * 0.15)  # Floor: never below the margin-guard threshold
 
-        print(f"  [SIZING] Equity: ${equity:.0f} | Balance: ${balance:.0f} | Sizing base: ${sizing_base:.0f} ({sizing_base/balance:.1f}x)")
+        print(f"  [SIZING] Equity: ${equity:.0f} | Available: ${available:.0f} | Balance: ${balance:.0f} | Sizing base: ${sizing_base:.0f}")
 
         _sizing_equity_cache = {"sizing_base": sizing_base, "equity": equity, "available": available, "ts": now}
         return sizing_base
@@ -3435,13 +3438,8 @@ Respond with JSON ONLY (no markdown, no backticks):
             else:
                 position_usdt = base_size * 1.0  # NORMAL
 
-            # V3.1.78: Bound by position count - prevent over-allocation at higher equity tiers
-            # V3.2.6: Slot count uses equity (was balance — regression fix)
-            max_slots = get_max_positions_for_equity(_sizing_equity_cache.get("equity", balance))
-            per_slot_cap = (sizing_base * 0.85) / max(max_slots, 1)
-            if position_usdt > per_slot_cap:
-                print(f"  [SIZING] Capped: ${position_usdt:.0f} -> ${per_slot_cap:.0f} ({max_slots} slots, 85% equity cap)")
-                position_usdt = per_slot_cap
+            # V3.2.25: No per-slot cap — sizing_base is already the available free margin.
+            # MAX_SINGLE_POSITION_PCT (50%) and MIN_SINGLE_POSITION_PCT (20%) are the bounds.
 
             # Balance protection
             if balance < 200:
@@ -3944,13 +3942,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)   # Floor stays on balance
     position_usdt = min(position_usdt, sizing_base * MAX_SINGLE_POSITION_PCT)  # Cap scales with equity
 
-    # V3.1.78: Bound by equity tier position count (mirrors Judge sizing cap)
-    # V3.2.6: Slot count uses equity (was balance — regression fix)
-    max_slots = get_max_positions_for_equity(_sizing_equity_cache.get("equity", balance))
-    per_slot_cap = (sizing_base * 0.85) / max(max_slots, 1)
-    if position_usdt > per_slot_cap:
-        print(f"  [SIZING] Execute cap: ${position_usdt:.0f} -> ${per_slot_cap:.0f} ({max_slots} slots)")
-        position_usdt = per_slot_cap
+    # V3.2.25: No per-slot cap — sizing_base is already available free margin; MIN/MAX_SINGLE_POSITION_PCT bound it.
 
     # V3.1.77: RL-based sizing adjustment - reduce size for historically losing pairs
     try:

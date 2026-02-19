@@ -554,7 +554,23 @@ def check_trading_signals():
         total_upnl = account_info["unrealized_pnl"]
         
         open_positions = get_open_positions()
-        
+
+        # V3.2.25: Cycle-start housekeeping — dust + orphan sweep every signal cycle
+        try:
+            cleanup_dust_positions()
+            open_positions = get_open_positions()  # Refresh after dust cleanup
+        except Exception as _dust_err:
+            logger.warning(f"Cycle dust cleanup error: {_dust_err}")
+        _open_syms = {p.get('symbol') for p in open_positions}
+        for _tracked_sym in list(tracker.get_active_symbols()):
+            _base_sym = _tracked_sym.split(':')[0]
+            if _base_sym not in _open_syms:
+                try:
+                    cancel_all_orders_for_symbol(_base_sym)
+                    logger.info(f"  [ORPHAN] Swept orders for closed {_base_sym}")
+                except Exception as _oe:
+                    logger.debug(f"  [ORPHAN] Sweep error {_base_sym}: {_oe}")
+
         # V3.1.19: LIQUIDATION PROTECTION
         # Safety thresholds based on ACTUAL equity from WEEX
         CRITICAL_EQUITY = 150.0  # Below this = EMERGENCY MODE (close all)
@@ -615,16 +631,11 @@ def check_trading_signals():
         CONFIDENCE_OVERRIDE_THRESHOLD = 0.85
         MAX_CONFIDENCE_SLOTS = 0  # V3.1.64a: DISABLED - hard cap is absolute
         
-        # V3.1.19: Override slot availability if low equity
-        can_open_new = available_slots > 0 and not low_equity_mode
-        
-        if bonus_slots > 0:
-            logger.info(f"Smart Slots: {weex_position_count}/{effective_max_positions} (base {BASE_SLOTS} + {bonus_slots} risk-free bonus)")
-        
+        # V3.2.25: No hard slot cap — margin guard in get_sizing_base() limits naturally
+        can_open_new = not low_equity_mode
+
         if low_equity_mode:
             logger.info(f"Low equity mode - no new trades allowed")
-        elif not can_open_new:
-            logger.info(f"Max positions ({weex_position_count}/{effective_max_positions}) - Analysis only")
         
         ai_log = {
             "run_id": f"v3_1_7_{run_timestamp}",
@@ -656,7 +667,7 @@ def check_trading_signals():
             pass
         # V3.1.88: Always log F&G in cycle header for observability
         _fg_label = "EXTREME FEAR" if _fg_value < 20 else "FEAR" if _fg_value < 40 else "NEUTRAL" if _fg_value < 60 else "GREED" if _fg_value < 80 else "EXTREME GREED"
-        logger.info(f"F&G: {_fg_value} ({_fg_label}) | Slots: {weex_position_count}/{effective_max_positions}")
+        logger.info(f"F&G: {_fg_value} ({_fg_label}) | Positions open: {weex_position_count} (no slot cap)")
         
         # Build map: symbol -> {side: position}
         # This tracks BOTH long and short for each symbol
@@ -892,15 +903,9 @@ def check_trading_signals():
                             )
                     else:
                         if can_open_new:
+                            # V3.2.25: No slot cap — margin guard is the natural limiter
                             can_trade_this = True
                             trade_type = "new"
-                        elif confidence >= 0.85:
-                            # V3.2.22: No slot swap — high conviction opens a new slot (5th slot override)
-                            can_trade_this = True
-                            trade_type = "new"
-                            logger.info(f"    -> HIGH CONVICTION: {confidence:.0%} >= 85%, opening beyond slot cap ({weex_position_count}/{effective_max_positions})")
-                        else:
-                            logger.info(f"    -> SLOTS FULL: {confidence:.0%} < 85% high-conviction threshold ({weex_position_count}/{effective_max_positions})")
 
                 elif signal == "SHORT":
                     # V3.2.18: Shorts allowed for ALL pairs (was LTC only since V3.2.13)
@@ -938,15 +943,9 @@ def check_trading_signals():
                             )
                     else:
                         if can_open_new:
+                            # V3.2.25: No slot cap — margin guard is the natural limiter
                             can_trade_this = True
                             trade_type = "new"
-                        elif confidence >= 0.85:
-                            # V3.2.22: No slot swap — high conviction opens a new slot (5th slot override)
-                            can_trade_this = True
-                            trade_type = "new"
-                            logger.info(f"    -> HIGH CONVICTION: {confidence:.0%} >= 85%, opening beyond slot cap ({weex_position_count}/{effective_max_positions})")
-                        else:
-                            logger.info(f"    -> SLOTS FULL: {confidence:.0%} < 85% high-conviction threshold ({weex_position_count}/{effective_max_positions})")
 
                 # V3.1.93: Track best non-executed signal for PM context
                 if signal in ("LONG", "SHORT") and confidence >= 0.80 and not can_trade_this:
@@ -1078,27 +1077,16 @@ def check_trading_signals():
             except Exception as e:
                 logger.error(f"Error analyzing {pair}: {e}")
         
-# Execute ALL qualifying trades (up to available slots)
+# V3.2.25: Execute ALL qualifying trades — no slot cap, margin guard is the limiter
         if trade_opportunities:
             # Sort by confidence (highest first)
             trade_opportunities.sort(key=lambda x: x["decision"]["confidence"], reverse=True)
 
-            # V3.1.78: CONFIDENCE CASCADE - only consider top N candidates for current equity tier
-            # This is a code-level filter AFTER Gemini scoring. No prompt changes needed.
             current_positions = len(open_positions)
-            available_slots = effective_max_positions - current_positions
-            # V3.1.64: HARD CAP - never exceed BASE_SLOTS total regardless of mode
-            if current_positions >= BASE_SLOTS:
-                available_slots = 0
+            # V3.2.25: No cascade truncation — all 80%+ qualified signals execute
+            logger.info(f"  Executing {len(trade_opportunities)} opportunit{'y' if len(trade_opportunities)==1 else 'ies'} ({current_positions} positions currently open)")
 
-            if available_slots > 0 and len(trade_opportunities) > available_slots:
-                dropped = trade_opportunities[available_slots:]
-                trade_opportunities = trade_opportunities[:available_slots]
-                for d in dropped:
-                    logger.info(f"  CASCADE DROP: {d['pair']} ({d['decision']['confidence']:.0%}) - only top {available_slots} candidates selected")
-
-            # V3.1.26: Track confidence override slots used
-            confidence_slots_used = 0
+            trades_executed_count_ref = 0  # kept for slot_swap compat below
             
             trades_executed = 0
             
@@ -1122,7 +1110,7 @@ def check_trading_signals():
                 # V3.1.82: Slot swap trades bypass fallback gate (they create their own slot)
                 # V3.1.82 FIX: Also bypass when regular slots are available (0 positions = don't skip!)
                 is_fallback = opportunity["decision"].get("fallback_only", False)
-                _has_regular_slots = (trades_executed < available_slots)
+                _has_regular_slots = True  # V3.2.25: No slot cap
                 if is_fallback and opportunity.get("trade_type") != "slot_swap" and not _has_regular_slots:
                     if chop_blocked_count > 0:
                         logger.info(f"  CHOP FALLBACK: {opportunity['pair']} ({confidence:.0%}) promoted - chop freed {chop_blocked_count} slot(s)")
@@ -1137,50 +1125,8 @@ def check_trading_signals():
                         logger.info(f"  FALLBACK SKIP: {opportunity['pair']} ({confidence:.0%}) - no chop slots available, needs {0.80:.0%}+")
                         continue
 
-                # Check if we still have slots
+                # V3.2.25: No slot-bypass needed — all 80%+ signals execute; resolve_opposite_sides() at cycle end cleans up
                 trade_type_check = opportunity.get("trade_type", "none")
-
-                # V3.1.73: Opposite trades bypass slot check by closing existing position first
-                # Only if existing position is profitable (avoids realizing losses + fees)
-                if trade_type_check == "opposite" and trades_executed >= available_slots:
-                    opp_symbol = opportunity["pair_info"]["symbol"]
-                    opp_signal = opportunity["decision"]["decision"]
-                    existing_side = "SHORT" if opp_signal == "LONG" else "LONG"
-
-                    # Find existing position PnL
-                    existing_pos = None
-                    for _p in open_positions:
-                        if _p.get("symbol") == opp_symbol and _p.get("side", "").upper() == existing_side:
-                            existing_pos = _p
-                            break
-
-                    existing_pnl = float(existing_pos.get("unrealized_pnl", 0)) if existing_pos else 0
-
-                    if existing_pnl > 0:
-                        # Close profitable existing position to free slot for opposite trade
-                        logger.info(f"OPPOSITE SWAP: Closing {opp_symbol} {existing_side} (PnL ${existing_pnl:+.1f}) to flip to {opp_signal}")
-                        close_result = close_position_manually(
-                            symbol=opp_symbol,
-                            side=existing_side,
-                            size=existing_pos.get("size", 0)
-                        )
-                        tracker.close_trade(opp_symbol, {
-                            "reason": f"opposite_swap_{opp_signal.lower()}",
-                            "pnl": existing_pnl,
-                            "final_pnl_pct": 0,  # Will be filled by RL
-                        })
-                        upload_ai_log_to_weex(
-                            stage=f"Opposite Swap: {opp_symbol.replace('cmt_','').upper()} {existing_side} -> {opp_signal}",
-                            input_data={"symbol": opp_symbol, "old_side": existing_side, "new_signal": opp_signal, "old_pnl": existing_pnl},
-                            output_data={"action": "SWAP", "confidence": confidence},
-                            explanation=f"Closed profitable {existing_side} (PnL ${existing_pnl:+.1f}) to flip to {opp_signal} at {confidence:.0%} confidence."
-                        )
-                        state.trades_closed += 1
-                        available_slots += 1  # Freed a slot
-                    else:
-                        logger.info(f"OPPOSITE TRADE: {opportunity['pair']} {existing_side} losing ${existing_pnl:.1f}, won't realize loss (tighten SL instead)")
-                        # TODO: could tighten SL on losing position instead
-                        continue
 
                 # V3.1.82: SLOT SWAP - close weakest position to free slot for stronger signal
                 if trade_type_check == "slot_swap":
@@ -1248,15 +1194,6 @@ def check_trading_signals():
                         logger.info(f"SLOT SWAP: No weak position found for {opportunity['pair']}, skipping")
                         continue
 
-                if trades_executed >= available_slots:
-                    # V3.1.26: High confidence override - can use extra slots
-                    if confidence >= CONFIDENCE_OVERRIDE_THRESHOLD and confidence_slots_used < MAX_CONFIDENCE_SLOTS:
-                        logger.info(f"CONFIDENCE OVERRIDE: {confidence:.0%} >= 85% - using conviction slot {confidence_slots_used + 1}/{MAX_CONFIDENCE_SLOTS}")
-                        confidence_slots_used += 1
-                    else:
-                        logger.info(f"Max positions reached, skipping {opportunity['pair']}")
-                        break
-                
                 # V3.1.41: DIRECTIONAL LIMIT CHECK
                 sig_check = opportunity["decision"]["decision"]
                 if sig_check == "LONG" and long_count >= MAX_SAME_DIRECTION:
@@ -1488,6 +1425,14 @@ def check_trading_signals():
         else:
             logger.info(f"")
             logger.info("No trade opportunities")
+
+        # V3.2.25: Resolve opposite sides immediately after execution (not deferred to 2-min loop)
+        if trades_executed > 0:
+            try:
+                resolve_opposite_sides()
+            except Exception as _re:
+                logger.warning(f"Cycle-end opposite resolution error: {_re}")
+
         # V3.1.88: Cycle-end summary for observability
         _opp_count = len(trade_opportunities) if trade_opportunities else 0
         logger.info(f"--- Cycle summary: {_cycle_signals} signals ({_cycle_above_80} at 80%+), {_cycle_wait} WAIT, {_cycle_blocked} blocked, {_opp_count} opportunities ---")
@@ -3338,7 +3283,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.24 - MIN_TP_PCT floor removed; chart SR is ground truth")
+    logger.info("SMT Daemon V3.2.25 - No slot cap; cycle-start dust/orphan sweep; opp-side resolve at cycle end; available-based sizing")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3407,6 +3352,7 @@ def run_daemon():
     logger.info("  V3.2.21: resolve_opposite_sides closes OLDER position, not losing side")
     logger.info("  V3.2.22: no slot swap; confidence>=85% opens 5th slot; opposite closes immediately (no 15m wait)")
     logger.info("  V3.2.23: banner slot swap lines removed; FLOW calls regime first (fixes mid-block [REGIME] print)")
+    logger.info("  V3.2.25: No slot cap (margin guard limits); dust+orphan sweep every cycle; opp-side resolve at cycle end; sizing from available margin")
     logger.info("  V3.2.24: MIN_TP_PCT=0.3%% floor removed — chart SR is the TP, no artificial minimum")
     logger.info("  V3.2.19: Fee bleed tracking — [FEE] per trade + Gross/Fees/Net at close + HEALTH cumulative")
     logger.info("  V3.2.18: Chop penalties removed | Shorts ALL pairs | Trust 80%% floor + 0.5%% TP")
