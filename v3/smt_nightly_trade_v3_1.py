@@ -1205,10 +1205,13 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                     _nearest_res = _cands[0]
                     _tp12_price  = _nearest_res * 0.997
                     _tp12_pct    = (_tp12_price - entry_price) / entry_price * 100
-                    result["tp_pct"]   = round(_tp12_pct, 2)
-                    result["tp_price"] = round(entry_price * (1 + _tp12_pct / 100), 8)
-                    tp_found = True
-                    print(f"  [CHART-SR] LONG TP (12H nearest): {_nearest_res:.4f} → {_tp12_pct:.2f}%")
+                    if _tp12_price > entry_price:  # V3.2.27: haircut must still clear entry
+                        result["tp_pct"]   = round(_tp12_pct, 2)
+                        result["tp_price"] = round(entry_price * (1 + _tp12_pct / 100), 8)
+                        tp_found = True
+                        print(f"  [CHART-SR] LONG TP (12H nearest): {_nearest_res:.4f} → {_tp12_pct:.2f}%")
+                    else:
+                        print(f"  [CHART-SR] LONG TP (12H nearest): {_nearest_res:.4f} haircut={_tp12_price:.4f} below entry — tp_not_found")
 
             # SL: lowest actual wick in 12H from either timeframe ("take whichever is lowest")
             sl_price = min(sl_low_12h_1h, sl_low_12h_4h) * 0.997
@@ -1235,10 +1238,13 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                     _nearest_sup = _cands[0]
                     _tp12_price  = _nearest_sup * 1.003
                     _tp12_pct    = (entry_price - _tp12_price) / entry_price * 100
-                    result["tp_pct"]   = round(_tp12_pct, 2)
-                    result["tp_price"] = round(entry_price * (1 - _tp12_pct / 100), 8)
-                    tp_found = True
-                    print(f"  [CHART-SR] SHORT TP (12H nearest): {_nearest_sup:.4f} → {_tp12_pct:.2f}%")
+                    if _tp12_price < entry_price:  # V3.2.27: haircut must still clear entry
+                        result["tp_pct"]   = round(_tp12_pct, 2)
+                        result["tp_price"] = round(entry_price * (1 - _tp12_pct / 100), 8)
+                        tp_found = True
+                        print(f"  [CHART-SR] SHORT TP (12H nearest): {_nearest_sup:.4f} → {_tp12_pct:.2f}%")
+                    else:
+                        print(f"  [CHART-SR] SHORT TP (12H nearest): {_nearest_sup:.4f} haircut={_tp12_price:.4f} above entry — tp_not_found")
 
             # SL: highest actual wick in 12H from either timeframe
             sl_price = max(sl_high_12h_1h, sl_high_12h_4h) * 1.003
@@ -4150,6 +4156,16 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         pass
 
     set_leverage(symbol, safe_leverage)
+
+    # V3.2.27: Final TP direction guard — haircut or slippage can land TP on wrong side of entry.
+    # If TP is invalid, fall back to competition fallback % from current_price (not None — always send a TP).
+    _fb_tp = COMPETITION_FALLBACK_TP.get(tier, 0.5) / 100
+    if signal == "LONG" and tp_price <= current_price:
+        tp_price = round(current_price * (1 + _fb_tp), 8)
+        print(f"  [TP-SAFETY] LONG TP was <= entry, reset to fallback {_fb_tp*100:.2f}%: ${tp_price:.4f}")
+    elif signal == "SHORT" and tp_price >= current_price:
+        tp_price = round(current_price * (1 - _fb_tp), 8)
+        print(f"  [TP-SAFETY] SHORT TP was >= entry, reset to fallback {_fb_tp*100:.2f}%: ${tp_price:.4f}")
 
     print(f"  [TRADE] {signal} {symbol}: {size} @ ${current_price:.4f}")
     print(f"  [TRADE] Tier {tier} ({tier_config['name']}): TP ${tp_price:.4f} ({tp_pct*100:.1f}%), SL ${sl_price:.4f} ({sl_pct*100:.1f}%)")
