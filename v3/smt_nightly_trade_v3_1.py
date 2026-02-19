@@ -2697,6 +2697,10 @@ class FlowPersona:
                     "signal": "LONG",
                     "confidence": min(0.85, long_score),
                     "reasoning": "; ".join(s[2] for s in signals if s[0] == "LONG"),
+                    "data": {
+                        "nearest_ask_wall": depth.get("nearest_ask_wall"),
+                        "nearest_bid_wall": depth.get("nearest_bid_wall"),
+                    },
                 }
             elif short_score > long_score and short_score >= 0.4:
                 return {
@@ -2704,8 +2708,12 @@ class FlowPersona:
                     "signal": "SHORT",
                     "confidence": min(0.85, short_score),
                     "reasoning": "; ".join(s[2] for s in signals if s[0] == "SHORT"),
+                    "data": {
+                        "nearest_ask_wall": depth.get("nearest_ask_wall"),
+                        "nearest_bid_wall": depth.get("nearest_bid_wall"),
+                    },
                 }
-            
+
             return {
                 "persona": self.name,
                 "signal": "NEUTRAL",
@@ -2727,27 +2735,57 @@ class FlowPersona:
             url = f"{WEEX_BASE_URL}/capi/v2/market/depth?symbol={symbol}&limit=15"
             r = requests.get(url, timeout=10)
             data = r.json()
-            
+
             bids = data.get("bids", [])
             asks = data.get("asks", [])
-            
+
             # WEEX format: [[price, quantity], ...]
             bid_volume = sum(float(b[1]) for b in bids[:10]) if bids else 0
             ask_volume = sum(float(a[1]) for a in asks[:10]) if asks else 0
-            
+
             ratio = bid_volume / ask_volume if ask_volume > 0 else 1.0
-            
+
             print(f"  [FLOW] Depth - Bids: {bid_volume:.2f}, Asks: {ask_volume:.2f}, Ratio: {ratio:.2f}")
-            
+
+            # V3.2.20: Find nearest significant order book wall for TP targeting.
+            # asks are sorted low→high (nearest resistance first); bids high→low (nearest support first).
+            # "Significant" = volume ≥ 1.5x average level volume. Fallback: highest-vol level in top 10.
+            nearest_ask_wall = None  # Resistance → LONG TP anchor
+            nearest_bid_wall = None  # Support    → SHORT TP anchor
+
+            if asks and len(asks) >= 3:
+                ask_levels = [(float(a[0]), float(a[1])) for a in asks[:15] if float(a[0]) > 0 and float(a[1]) > 0]
+                if ask_levels:
+                    avg_vol = sum(v for _, v in ask_levels) / len(ask_levels)
+                    for price, vol in sorted(ask_levels, key=lambda x: x[0]):  # nearest first
+                        if vol >= avg_vol * 1.5:
+                            nearest_ask_wall = price
+                            break
+                    if nearest_ask_wall is None:
+                        nearest_ask_wall = max(ask_levels[:10], key=lambda x: x[1])[0]
+
+            if bids and len(bids) >= 3:
+                bid_levels = [(float(b[0]), float(b[1])) for b in bids[:15] if float(b[0]) > 0 and float(b[1]) > 0]
+                if bid_levels:
+                    avg_vol = sum(v for _, v in bid_levels) / len(bid_levels)
+                    for price, vol in sorted(bid_levels, key=lambda x: x[0], reverse=True):  # nearest first
+                        if vol >= avg_vol * 1.5:
+                            nearest_bid_wall = price
+                            break
+                    if nearest_bid_wall is None:
+                        nearest_bid_wall = max(bid_levels[:10], key=lambda x: x[1])[0]
+
             return {
                 "bid_volume": bid_volume,
                 "ask_volume": ask_volume,
                 "bid_strength": ratio,
                 "ask_strength": 1/ratio if ratio > 0 else 1.0,
+                "nearest_ask_wall": nearest_ask_wall,
+                "nearest_bid_wall": nearest_bid_wall,
             }
         except Exception as e:
             print(f"  [FLOW] Depth error: {e}")
-            return {"bid_strength": 1.0, "ask_strength": 1.0}
+            return {"bid_strength": 1.0, "ask_strength": 1.0, "nearest_ask_wall": None, "nearest_bid_wall": None}
     
     def _get_taker_ratio(self, symbol: str) -> float:
         try:
@@ -3974,6 +4012,36 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
                     chart_sr["method"] = "chart_mtf"
                 _gemini_tp_used = True
 
+    # V3.2.20: FLOW order book wall TP override — live ask/bid wall detected from order book depth.
+    # Runs ONLY if Gemini didn't already provide a structural TP (Gemini structural takes priority).
+    # Order book walls show EXACTLY where large sellers/buyers are sitting — the natural exit point.
+    _flow_wall_tp_used = False
+    if not _gemini_tp_used:
+        _flow_vote = next((v for v in decision.get("persona_votes", []) if v.get("persona") == "FLOW"), None)
+        _flow_data = _flow_vote.get("data", {}) if _flow_vote else {}
+        if signal == "LONG":
+            _ask_wall = _flow_data.get("nearest_ask_wall")
+            if _ask_wall and _ask_wall > current_price:
+                _wall_tp_pct = ((_ask_wall - current_price) / current_price) * 100
+                if 0.3 <= _wall_tp_pct <= 3.0:
+                    print(f"  [TP/SL] FLOW WALL TP (LONG): ask wall ${_ask_wall:.6g} = {_wall_tp_pct:.2f}%")
+                    chart_sr["tp_pct"] = round(_wall_tp_pct, 2)
+                    chart_sr["tp_price"] = _ask_wall
+                    if chart_sr["method"] == "fallback":
+                        chart_sr["method"] = "chart_mtf"
+                    _flow_wall_tp_used = True
+        elif signal == "SHORT":
+            _bid_wall = _flow_data.get("nearest_bid_wall")
+            if _bid_wall and _bid_wall < current_price:
+                _wall_tp_pct = ((current_price - _bid_wall) / current_price) * 100
+                if 0.3 <= _wall_tp_pct <= 3.0:
+                    print(f"  [TP/SL] FLOW WALL TP (SHORT): bid wall ${_bid_wall:.6g} = {_wall_tp_pct:.2f}%")
+                    chart_sr["tp_pct"] = round(_wall_tp_pct, 2)
+                    chart_sr["tp_price"] = _bid_wall
+                    if chart_sr["method"] == "fallback":
+                        chart_sr["method"] = "chart_mtf"
+                    _flow_wall_tp_used = True
+
     if chart_sr["method"] in ("chart", "chart_mtf") and chart_sr["tp_pct"] and chart_sr["sl_pct"]:
         # CHART-BASED: Real S/R levels from candle swing highs/lows (or Gemini structural target)
         tp_pct_raw = chart_sr["tp_pct"]
@@ -3982,7 +4050,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         sl_price = chart_sr["sl_price"]
         tp_pct = tp_pct_raw / 100
         sl_pct = sl_pct_raw / 100
-        mtf_label = "GEMINI" if _gemini_tp_used else ("MTF" if chart_sr["method"] == "chart_mtf" else "1H")
+        mtf_label = "GEMINI" if _gemini_tp_used else ("FLOW-WALL" if _flow_wall_tp_used else ("MTF" if chart_sr["method"] == "chart_mtf" else "1H"))
         print(f"  [TP/SL] CHART-BASED [{mtf_label}]: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
 
         # V3.2.12: In extreme fear, cap ALL TP at competition fallback (0.5%) — both LONG and SHORT.
@@ -4004,7 +4072,8 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
         # V3.2.15: XRP-specific TP cap — historical fills show XRP moves 0.34–0.48%.
         # V3.2.16: Only apply if Gemini didn't give us a structural target (Gemini sees the real chart).
-        if symbol == "cmt_xrpusdt" and tp_pct_raw > 0.70 and not _gemini_tp_used:
+        # V3.2.20: Also skip cap if FLOW wall TP is used (live order book is authoritative).
+        if symbol == "cmt_xrpusdt" and tp_pct_raw > 0.70 and not _gemini_tp_used and not _flow_wall_tp_used:
             print(f"  [TP/SL] XRP TP cap: {tp_pct_raw:.2f}% → 0.70% (historical range, no Gemini override)")
             tp_pct_raw = 0.70
             tp_pct = tp_pct_raw / 100
