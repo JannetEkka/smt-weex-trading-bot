@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.40** — all production code is in `v3/`.
+**Current version: V3.2.41** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -145,24 +145,31 @@ CONFIDENCE_EXTRA_SLOT = 0.90         # V3.2.39: signals >=90% can open 5th slot 
 # Sizing cache: 60s TTL; invalidated immediately after each trade (V3.2.28)
 # Cycle housekeeping (V3.2.25): dust + orphan sweep at START of every signal cycle
 
-# TP/SL bounds (V3.2.24: no TP floor; V3.2.28: bad-TP discard; V3.2.29: walk list; V3.2.36: viable min)
+# TP/SL bounds (V3.2.24: no TP floor; V3.2.28: bad-TP discard; V3.2.29: walk list; V3.2.36: viable min; V3.2.41: per-pair ceiling + MAX_SL + 4H anchor)
 # MIN_TP_PCT removed (V3.2.24) — chart SR is the TP, whatever distance that is
-# MIN_VIABLE_TP_PCT = 0.20% (V3.2.36) — SKIP SR levels < 0.20% from entry (entry IS resistance, discard)
+# MIN_VIABLE_TP_PCT = 0.40% (V3.2.41, was 0.20% in V3.2.36) — SKIP SR levels < 0.40% from entry
 #   NOT a floor (old behavior); SR candidates too close are skipped entirely.
-#   Effective TP range after all guards: [0.20%, 0.50%]
-# COMPETITION_FALLBACK_TP = 0.5% — MAX TP CEILING on ALL trades (applied after chart SR + Gemini targeting)
-#   Only caps down (ceiling); never raises a low TP. If TP is 0.3%, it stays 0.3%.
+#   Forces TP walk to 4H anchor or 48H list where genuine 0.6-2% levels live.
+#   Effective TP range after all guards: [0.40%, per-pair ceiling]
+# PAIR_TP_CEILING (V3.2.41) — per-pair TP max, replaces flat 0.5% COMPETITION_FALLBACK_TP:
+#   BTC=1.5%, ETH=1.5%, SOL=2.0%, XRP=1.0%, BNB=1.0%, LTC=1.0%, ADA=1.0%
+#   Ceiling-only: never raises a low TP. Falls back to COMPETITION_FALLBACK_TP for unlisted pairs.
 #   NOT a fallback for missing SR — if chart SR finds no TP, the trade is DISCARDED (V3.2.29)
-# TP method: max high of last 2 complete 1H candles (LONG); min low (SHORT) [V3.2.33]
-#   V3.2.20 fallback: if 2H anchor is at/below entry, scan 48H resistance list [V3.2.31: 12H→48H]
-#   V3.2.36: also scan 48H if 2H anchor gives < MIN_VIABLE_TP_PCT (entry at resistance)
-#   V3.2.31: haircut removed — raw resistance IS the TP (0.5% cap handles sizing)
+# TP method: 2H anchor → 4H anchor (V3.2.41) → 48H walk
+#   Step 1: max high of last 2 complete 1H candles (LONG); min low (SHORT) [V3.2.33]
+#   Step 2 (V3.2.41): 4H anchor — max high of last 2 complete 4H candles (limit=9, candles[1:3])
+#     If >= MIN_VIABLE_TP_PCT from entry → use as TP (method="chart_4h")
+#   Step 3: if 2H+4H anchors fail, scan 48H resistance list [V3.2.31: 12H→48H]
+#   V3.2.31: haircut removed — raw resistance IS the TP (ceiling handles sizing)
 #   Walk full resistance list (ascending LONG / descending SHORT) until one clears MIN_VIABLE_TP_PCT
 #     → if ALL candidates fail: tp_not_found → trade DISCARDED (no fallback %)
 # Final guard (V3.2.28): if TP still wrong-side of entry → discard trade entirely
 # TP caps are ceiling-only; only apply when tp_pct > cap threshold (never raise a low TP)
 # SL method: lowest wick in last 12H (1H grid) + last 3 4H candles
-# MIN_SL_PCT = 1.0%  (floor only — no ceiling, SL sits at real structure)
+# MIN_SL_PCT = 1.0%  (floor — SL must be at least 1% from entry)
+# MAX_SL_PCT = 1.5%  (V3.2.41 CEILING — discard trade if chart structure requires SL > 1.5%)
+#   4H anchors can produce wide SLs; 1.5% = 30% margin loss at 20x (survivable)
+#   Hard liquidation at 20x requires ~4.5% adverse move; 1.5% is well clear
 
 # Chop filter (V3.2.18: NO PENALTIES — logging only)
 # detect_sideways_market(): ADX(14) + Bollinger Bands(40) on 5m candles
@@ -311,10 +318,20 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.40. Next change should be V3.2.41.
+Current: V3.2.41. Next change should be V3.2.42.
 
 **Recent version history:**
-- V3.2.40: (**CURRENT**) Close order ID wiring for AI log uploads. New `get_recent_close_order_id(symbol)` function (line 4583) queries WEEX filled orders endpoint (`/capi/v2/order/orders?symbol=X&status=2`) for the most recent close order (type 3=close long, 4=close short), enabling AI logs to include `orderId` for TP/SL auto-executions by WEEX. `[AI-LOG]` diagnostic tags added inside the function for lookup visibility. `PIPELINE_VERSION = "SMT-v3.2.40-CloseOrderId-AiLogFix"`. Runner partial close operations (`execute_runner_partial_close`) now capture `close_order_id` in `output_data`. Graceful failure — AI log upload succeeds even when orderId lookup fails (returns None). Daemon banner not yet bumped (still reads V3.2.39 at line 3257).
+- V3.2.41: (**CURRENT**) Larger gains strategy — per-pair TP ceilings, 4H anchor, SL ceiling, 4-5H planning horizon.
+  `PAIR_TP_CEILING` dict replaces flat 0.5% `COMPETITION_FALLBACK_TP`: BTC/ETH→1.5%, SOL→2.0%, XRP/BNB/LTC/ADA→1.0%.
+  `PAIR_MAX_POSITION_PCT["SOL"] = 0.30` caps SOL at 30% of sizing_base (high beta risk control).
+  `MAX_SL_PCT = 1.5%` ceiling added to `find_chart_based_tp_sl()` — discards trades where 4H structure requires SL > 1.5%.
+  `MIN_VIABLE_TP_PCT` raised from 0.20% → 0.40% — filters micro-bounce SR levels, forces anchor to 4H/48H structure.
+  4H candle anchor added: `limit=9` in 4H fetch; `_tp_high_4h`/`_tp_low_4h` from `candles_4h[1:3]` tried between 2H anchor and 48H walk.
+  Judge prompt: per-pair epoch strategy guide (VWAP_REVERSION/SUPPORT_SWEEP/MOMENTUM_CROSS/RANGE_BOUNDARY/CATALYST_DRIVE/CORRELATION_LAG), 4-5H planning horizon, SENTIMENT macro section, TP target updated to 4H structural level.
+  SENTIMENT persona prompt: macro news analyst role using Google Search grounding for catalysts/macro_bias/volatility_risk — qualitative only, no price targets. New JSON fields: macro_bias, catalyst, volatility_risk, volatility_event, pair_specific_news passed to Judge as SENTIMENT MACRO REPORT section.
+  Daemon: 1.5s settle delay before `get_recent_close_order_id()` call (better auto-TP/SL order ID capture).
+  `PIPELINE_VERSION = "SMT-v3.2.41-LargerGains-PerPairTP-SLCeiling-4HPlanning"`. Daemon banner updated.
+- V3.2.40: Close order ID wiring for AI log uploads. New `get_recent_close_order_id(symbol)` function (line 4583) queries WEEX filled orders endpoint (`/capi/v2/order/orders?symbol=X&status=2`) for the most recent close order (type 3=close long, 4=close short), enabling AI logs to include `orderId` for TP/SL auto-executions by WEEX. `[AI-LOG]` diagnostic tags added inside the function for lookup visibility. `PIPELINE_VERSION = "SMT-v3.2.40-CloseOrderId-AiLogFix"`. Runner partial close operations (`execute_runner_partial_close`) now capture `close_order_id` in `output_data`. Graceful failure — AI log upload succeeds even when orderId lookup fails (returns None). Daemon banner not yet bumped (still reads V3.2.39 at line 3257).
 - V3.2.39: 90%+ confidence opens 5th slot when all 4 are full. Base 4-slot hard cap unchanged — only signals with confidence >= 90% bypass it. `CONFIDENCE_EXTRA_SLOT = 0.90` constant added. Per-signal check: `can_open_new OR (not low_equity_mode AND confidence >= 0.90)`. `_has_regular_slots` updated to match. Logs `90%+ EXTRA SLOT: X% >= 90%` when extra slot is used. Banner updated.
 - V3.2.38: Restore 4-slot hard cap removed in V3.2.25. `can_open_new = not low_equity_mode and available_slots > 0` — when all 4 slots are filled, ALL new signals skip regardless of confidence. `_has_regular_slots` now checks `available_slots > 0` (was hardcoded True). Banner log updated: "2/4 slots" instead of "2 positions (no slot cap)". Stale "85%+ opens 5th slot" text removed.
 - V3.2.37: ANTI-WAIT removed — trust Gemini Judge completely. Removed persona-consensus override (2+ personas agree at >=70% → force direction) and keyword-fallback override (count bullish/bearish words in Judge's reasoning). Layer 2 (keyword) was worst offender: Gemini's WAIT reasoning often contained direction words causing spurious flips. WAIT = WAIT.

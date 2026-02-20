@@ -1142,8 +1142,12 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
     # TP beyond real resistance; price rejected at SR and TP never filled, bleeding to SL instead.
     # V3.2.36: MIN_VIABLE_TP_PCT added — skip SR levels < 0.20% from entry (entry IS the resistance).
     # This is NOT a TP floor; it's a discard threshold. The walk continues to find the next level.
+    # V3.2.41: MIN_VIABLE_TP_PCT raised from 0.20 → 0.40 — filter micro-moves, push chart anchor
+    # to 4H/48H levels where 1-2% moves live. Trades where all SR < 0.40% from entry are discarded.
     MIN_SL_PCT = 1.0          # SL must be at least 1.0% from entry (20x = 20% margin loss min)
-    MIN_VIABLE_TP_PCT = 0.20  # V3.2.36: skip SR levels closer than 0.20% — entry is at resistance
+    MAX_SL_PCT = 1.5          # V3.2.41: SL ceiling — discard if 4H structure requires SL > 1.5%.
+                              # 1.5% SL = 30% margin loss at 20x (survivable). Liquidation at ~4.5%.
+    MIN_VIABLE_TP_PCT = 0.40  # V3.2.41: skip SR levels < 0.40% (was 0.20 in V3.2.36). Filter micro-moves.
 
     try:
         # === 1H candles — primary source for both TP and SL ===
@@ -1179,19 +1183,28 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
               f"2H_high={tp_high_2h:.4f}, 2H_low={tp_low_2h:.4f}, "
               f"12H_low={sl_low_12h_1h:.4f}, 12H_high={sl_high_12h_1h:.4f}")
 
-        # === 4H candles — SL only: catch any deep wick the 1H grid may miss ===
-        # last 3 × 4H = last 12H; take min/max raw low/high (no swing detection)
+        # === 4H candles — SL + V3.2.41 TP anchor ===
+        # Fetch 9 candles (8 complete 4H = 32H). First 4 used for SL (12H), [1:3] for TP anchor.
         sl_low_12h_4h  = sl_low_12h_1h   # default: 1H value if 4H fetch fails
         sl_high_12h_4h = sl_high_12h_1h
+        _tp_high_4h = 0.0  # V3.2.41: 4H TP anchor for LONG (max high of last 2 complete 4H candles)
+        _tp_low_4h  = 0.0  # V3.2.41: 4H TP anchor for SHORT (min low of last 2 complete 4H candles)
         try:
-            url_4h = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=4h&limit=3"
+            # V3.2.41: limit=9 (was 3) — extra candles enable 4H TP anchor (skip[0]=partial, use [1:3])
+            url_4h = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=4h&limit=9"
             r_4h = requests.get(url_4h, timeout=10)
             candles_4h = r_4h.json()
             if isinstance(candles_4h, list) and len(candles_4h) >= 2:
-                sl_low_12h_4h  = min(float(c[3]) for c in candles_4h)
-                sl_high_12h_4h = max(float(c[2]) for c in candles_4h)
-                print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 4H raw: "
-                      f"low={sl_low_12h_4h:.4f}, high={sl_high_12h_4h:.4f}")
+                sl_low_12h_4h  = min(float(c[3]) for c in candles_4h[:4])  # First 4 = 12H SL
+                sl_high_12h_4h = max(float(c[2]) for c in candles_4h[:4])
+                if len(candles_4h) >= 3:
+                    _4h_highs = [float(c[2]) for c in candles_4h]
+                    _4h_lows  = [float(c[3]) for c in candles_4h]
+                    _tp_high_4h = max(_4h_highs[1:3])  # Last 2 complete 4H highs (skip partial)
+                    _tp_low_4h  = min(_4h_lows[1:3])   # Last 2 complete 4H lows
+                print(f"  [CHART-SR] {symbol.replace('cmt_','').upper()} 4H: "
+                      f"SL_low={sl_low_12h_4h:.4f}, SL_high={sl_high_12h_4h:.4f}, "
+                      f"TP_high={_tp_high_4h:.4f}, TP_low={_tp_low_4h:.4f}")
         except Exception as e4h:
             print(f"  [CHART-SR] 4H fetch failed ({e4h}), SL from 1H only")
 
@@ -1209,27 +1222,43 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 tp_found = True
                 print(f"  [CHART-SR] LONG TP: 2H_high={tp_high_2h:.4f} → {tp_pct:.2f}%")
             else:
-                # V3.2.20: 2H_high at/below entry — scan 48H resistance list
-                # V3.2.29: Walk full list ascending — take first candidate above entry.
-                # V3.2.31: Haircut removed + extended from 12H to 48H pool.
-                # V3.2.36: also walk if 2H_high gives < MIN_VIABLE_TP_PCT (entry at resistance).
-                # Only discard if ALL candidates fail. COMPETITION_FALLBACK_TP is NOT a resistance workaround.
-                _cands = sorted([h for h in highs_1h[1:49] if h > entry_price])
-                for _candidate_res in _cands:
-                    _tp12_pct = (_candidate_res - entry_price) / entry_price * 100
-                    if _tp12_pct >= MIN_VIABLE_TP_PCT:  # V3.2.36: must clear minimum viable distance
-                        result["tp_pct"]   = round(_tp12_pct, 2)
-                        result["tp_price"] = round(_candidate_res, 8)
+                # V3.2.41: Try 4H anchor first (last 2 complete 4H candles), before the 48H walk.
+                # 4H highs naturally sit 1-2% from entry in trending markets, unlocking bigger TPs.
+                if _tp_high_4h > entry_price:
+                    _tp4h_pct = (_tp_high_4h - entry_price) / entry_price * 100
+                    if _tp4h_pct >= MIN_VIABLE_TP_PCT:
+                        result["tp_pct"]   = round(_tp4h_pct, 2)
+                        result["tp_price"] = round(_tp_high_4h, 8)
                         tp_found = True
-                        print(f"  [CHART-SR] LONG TP (48H walk): {_candidate_res:.4f} → {_tp12_pct:.2f}%")
-                        break
+                        print(f"  [CHART-SR] LONG TP (4H anchor): {_tp_high_4h:.4f} → {_tp4h_pct:.2f}%")
+
                 if not tp_found:
-                    print(f"  [CHART-SR] LONG: no resistance >= {MIN_VIABLE_TP_PCT:.2f}% above entry in 48H — tp_not_found (entry at ceiling)")
+                    # V3.2.20: 2H_high at/below entry — scan 48H resistance list
+                    # V3.2.29: Walk full list ascending — take first candidate above entry.
+                    # V3.2.31: Haircut removed + extended from 12H to 48H pool.
+                    # V3.2.36: also walk if 2H_high gives < MIN_VIABLE_TP_PCT (entry at resistance).
+                    # Only discard if ALL candidates fail. COMPETITION_FALLBACK_TP is NOT a resistance workaround.
+                    _cands = sorted([h for h in highs_1h[1:49] if h > entry_price])
+                    for _candidate_res in _cands:
+                        _tp12_pct = (_candidate_res - entry_price) / entry_price * 100
+                        if _tp12_pct >= MIN_VIABLE_TP_PCT:  # V3.2.36+V3.2.41: must clear min viable distance
+                            result["tp_pct"]   = round(_tp12_pct, 2)
+                            result["tp_price"] = round(_candidate_res, 8)
+                            tp_found = True
+                            print(f"  [CHART-SR] LONG TP (48H walk): {_candidate_res:.4f} → {_tp12_pct:.2f}%")
+                            break
+                    if not tp_found:
+                        print(f"  [CHART-SR] LONG: no resistance >= {MIN_VIABLE_TP_PCT:.2f}% above entry in 4H/48H — tp_not_found (entry at ceiling)")
 
             # SL: lowest actual wick in 12H from either timeframe ("take whichever is lowest")
             sl_price = min(sl_low_12h_1h, sl_low_12h_4h) * 0.997
             sl_pct   = (entry_price - sl_price) / entry_price * 100
             sl_pct   = max(sl_pct, MIN_SL_PCT)
+            # V3.2.41: Discard if structure requires SL wider than ceiling (4H anchors can be wide at 20x)
+            if sl_pct > MAX_SL_PCT:
+                print(f"  [CHART-SR] LONG SL too wide: {sl_pct:.2f}% > {MAX_SL_PCT:.1f}% ceiling — discard trade")
+                _sr_cache[cache_key] = result
+                return result  # tp_found=False, sl_found=False → execute_trade discards
             result["sl_pct"]   = round(sl_pct, 2)
             result["sl_price"] = round(entry_price * (1 - sl_pct / 100), 8)
             sl_found = True
@@ -1246,27 +1275,43 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 tp_found = True
                 print(f"  [CHART-SR] SHORT TP: 2H_low={tp_low_2h:.4f} → {tp_pct:.2f}%")
             else:
-                # V3.2.20: 2H_low at/above entry — scan 48H support list
-                # V3.2.29: Walk full list descending — take first candidate below entry.
-                # V3.2.31: Haircut removed + extended from 12H to 48H pool.
-                # V3.2.36: also walk if 2H_low gives < MIN_VIABLE_TP_PCT (entry at support floor).
-                # Only discard if ALL candidates fail. COMPETITION_FALLBACK_TP is NOT a resistance workaround.
-                _cands = sorted([l for l in lows_1h[1:49] if l < entry_price], reverse=True)
-                for _candidate_sup in _cands:
-                    _tp12_pct = (entry_price - _candidate_sup) / entry_price * 100
-                    if _tp12_pct >= MIN_VIABLE_TP_PCT:  # V3.2.36: must clear minimum viable distance
-                        result["tp_pct"]   = round(_tp12_pct, 2)
-                        result["tp_price"] = round(_candidate_sup, 8)
+                # V3.2.41: Try 4H anchor first (last 2 complete 4H candles), before the 48H walk.
+                # 4H lows naturally sit 1-2% from entry in trending markets, unlocking bigger TPs.
+                if _tp_low_4h > 0 and _tp_low_4h < entry_price:
+                    _tp4h_pct = (entry_price - _tp_low_4h) / entry_price * 100
+                    if _tp4h_pct >= MIN_VIABLE_TP_PCT:
+                        result["tp_pct"]   = round(_tp4h_pct, 2)
+                        result["tp_price"] = round(_tp_low_4h, 8)
                         tp_found = True
-                        print(f"  [CHART-SR] SHORT TP (48H walk): {_candidate_sup:.4f} → {_tp12_pct:.2f}%")
-                        break
+                        print(f"  [CHART-SR] SHORT TP (4H anchor): {_tp_low_4h:.4f} → {_tp4h_pct:.2f}%")
+
                 if not tp_found:
-                    print(f"  [CHART-SR] SHORT: no support >= {MIN_VIABLE_TP_PCT:.2f}% below entry in 48H — tp_not_found (entry at floor)")
+                    # V3.2.20: 2H_low at/above entry — scan 48H support list
+                    # V3.2.29: Walk full list descending — take first candidate below entry.
+                    # V3.2.31: Haircut removed + extended from 12H to 48H pool.
+                    # V3.2.36: also walk if 2H_low gives < MIN_VIABLE_TP_PCT (entry at support floor).
+                    # Only discard if ALL candidates fail. COMPETITION_FALLBACK_TP is NOT a resistance workaround.
+                    _cands = sorted([l for l in lows_1h[1:49] if l < entry_price], reverse=True)
+                    for _candidate_sup in _cands:
+                        _tp12_pct = (entry_price - _candidate_sup) / entry_price * 100
+                        if _tp12_pct >= MIN_VIABLE_TP_PCT:  # V3.2.36+V3.2.41: must clear min viable distance
+                            result["tp_pct"]   = round(_tp12_pct, 2)
+                            result["tp_price"] = round(_candidate_sup, 8)
+                            tp_found = True
+                            print(f"  [CHART-SR] SHORT TP (48H walk): {_candidate_sup:.4f} → {_tp12_pct:.2f}%")
+                            break
+                    if not tp_found:
+                        print(f"  [CHART-SR] SHORT: no support >= {MIN_VIABLE_TP_PCT:.2f}% below entry in 4H/48H — tp_not_found (entry at floor)")
 
             # SL: highest actual wick in 12H from either timeframe
             sl_price = max(sl_high_12h_1h, sl_high_12h_4h) * 1.003
             sl_pct   = (sl_price - entry_price) / entry_price * 100
             sl_pct   = max(sl_pct, MIN_SL_PCT)
+            # V3.2.41: Discard if structure requires SL wider than ceiling (4H anchors can be wide at 20x)
+            if sl_pct > MAX_SL_PCT:
+                print(f"  [CHART-SR] SHORT SL too wide: {sl_pct:.2f}% > {MAX_SL_PCT:.1f}% ceiling — discard trade")
+                _sr_cache[cache_key] = result
+                return result  # tp_found=False, sl_found=False → execute_trade discards
             result["sl_pct"]   = round(sl_pct, 2)
             result["sl_price"] = round(entry_price * (1 + sl_pct / 100), 8)
             sl_found = True
@@ -1435,6 +1480,25 @@ COMPETITION_FALLBACK_SL = {
     1: 1.2,   # Tier 1: 1.5% → 1.2%
     2: 1.2,   # Tier 2: 1.5% → 1.2%
     3: 1.5,   # Tier 3: 1.8% → 1.5%
+}
+
+# V3.2.41: Per-pair TP ceiling — replaces flat 0.5% COMPETITION_FALLBACK_TP.
+# Based on 4-5H volatility profile per pair. Ceiling-only: if chart SR < ceiling, use chart SR.
+# These unlock the 48H resistance walk which has genuine 1-2% SR levels.
+PAIR_TP_CEILING = {
+    "BTC": 1.5,   # Tier 1. ~$67K range, VWAP mean-reversion. 4-5H = 1-1.5%.
+    "ETH": 1.5,   # Tier 1. ~$1950 range, support sweep entries. 4-5H = 1-1.5%.
+    "BNB": 1.0,   # Tier 2. Low beta, catalyst-driven. Conservative ceiling.
+    "LTC": 1.0,   # Tier 2. Conservative 1H S/R channel. 4-5H = 0.8-1%.
+    "XRP": 1.0,   # Tier 2. Range $1.41-$1.51. 1.0% avoids missing fill at range top.
+    "SOL": 2.0,   # Tier 3. High beta. MACD momentum. 4-5H = 1.5-2%.
+    "ADA": 1.0,   # Tier 3. BTC-correlated laggard. 4-5H = 0.8-1%.
+}
+
+# V3.2.41: Per-pair max position size. Default: MAX_SINGLE_POSITION_PCT = 0.50.
+# SOL is high-beta with frequent liquidity sweeps — cap at 30% to reduce drawdown risk.
+PAIR_MAX_POSITION_PCT = {
+    "SOL": 0.30,  # High beta, frequent 1-3% wicks. 30% cap protects compound curve.
 }
 
 # V3.1.94: Per-pair overrides removed — flat 1.1% TP cap + chart SL (+0.5% buffer) for all
@@ -1850,7 +1914,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.40-CloseOrderId-AiLogFix"
+PIPELINE_VERSION = "SMT-v3.2.41-LargerGains-PerPairTP-SLCeiling-4HPlanning"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -2509,20 +2573,35 @@ class SentimentPersona:
         from google.genai.types import GenerateContentConfig, GoogleSearch, Tool
         import time as _time
 
-        combined_prompt = f"""Search for "{pair} cryptocurrency price action last 24 hours" and analyze:
+        # V3.2.41: SENTIMENT = macro news analyst (qualitative only). Do NOT ask for price targets
+        # or technical epoch strategies — those are JUDGE's job using live chart data.
+        # SENTIMENT's edge: Gemini Search Grounding for real-time catalysts and macro context.
+        combined_prompt = f"""You are the Macro News Analyst for {pair}/USDT crypto futures trading.
+Use your Google Search capability to research ONLY qualitative, news-driven factors for the NEXT 4-5 HOURS.
 
-You are a SHORT-TERM crypto trader making a 1-4 hour trade decision for {pair}.
+RESEARCH TASK — search for these and report findings:
 
-IGNORE: Long-term "moon" predictions, "institutional adoption", "ETF hopes", price targets for next year.
-FOCUS ON: Last 1-4 hours price action, support/resistance breaks, volume on red vs green candles, liquidation data.
+1. CATALYSTS: Are there any active news events, protocol upgrades, ETF flow data, regulatory decisions,
+   or macro events (Fed speeches, CPI data, job reports, Treasury auctions) that could move {pair} in
+   the next 4-5 hours? Search: "{pair} crypto news today" and "crypto market catalyst today".
 
-Based ONLY on short-term price action and momentum:
-- If price is breaking DOWN through support or volume is spiking on RED candles = BEARISH
-- If price is breaking UP through resistance or volume is spiking on GREEN candles = BULLISH
-- If choppy/sideways with no clear direction = NEUTRAL
+2. MACRO BIAS: Based on the overall crypto market sentiment RIGHT NOW (not technicals):
+   RISK_ON = buy-the-dip mentality, inflows, positive news flow
+   RISK_OFF = flight to safety, sell-rallies mentality, fear/uncertainty
+   NEUTRAL = no clear macro driver
 
-Respond with JSON only:
-{{"sentiment": "BULLISH" or "BEARISH" or "NEUTRAL", "confidence": 0.0-1.0, "key_factor": "short-term reason only", "market_context": "brief summary of what you found"}}"""
+3. VOLATILITY RISK: Any scheduled events in the next 4-5H that could cause a sudden spike?
+   (e.g., Fed minutes, major token unlock, futures expiry, major economic data release)
+   HIGH_RISK = yes, specific event known. NORMAL = no obvious scheduled event.
+
+4. {pair}-SPECIFIC NEWS: Any {pair}-specific news (ecosystem update, partnership, whale alert,
+   exchange listing/delisting, staking changes) that would override the macro trend?
+
+IMPORTANT: Do NOT output price levels, TP targets, SL anchors, or technical strategy names.
+Output ONLY qualitative observations. The trading bot will apply technical analysis separately.
+
+Respond with JSON ONLY (no markdown):
+{{"macro_bias": "RISK_ON" or "RISK_OFF" or "NEUTRAL", "directional_bias": "BULLISH" or "BEARISH" or "NEUTRAL", "confidence": 0.0-1.0, "catalyst": "specific catalyst description or NONE", "volatility_risk": "HIGH_RISK" or "NORMAL", "volatility_event": "event description or NONE", "pair_specific_news": "{pair}-specific detail or NONE", "reasoning": "concise explanation of macro findings (max 150 words)"}}"""
 
         grounding_config = GenerateContentConfig(
             tools=[Tool(google_search=GoogleSearch())],
@@ -2538,14 +2617,34 @@ Respond with JSON only:
                     clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
                     if clean_text:
                         data = json.loads(clean_text)
-                        signal = "LONG" if data["sentiment"] == "BULLISH" else "SHORT" if data["sentiment"] == "BEARISH" else "NEUTRAL"
+                        # V3.2.41: New macro analyst format uses directional_bias; fallback to old sentiment field
+                        _bias = data.get("directional_bias") or data.get("sentiment", "NEUTRAL")
+                        signal = "LONG" if _bias == "BULLISH" else "SHORT" if _bias == "BEARISH" else "NEUTRAL"
+                        _macro_bias = data.get("macro_bias", "NEUTRAL")
+                        _catalyst = data.get("catalyst", "NONE")
+                        _vol_risk = data.get("volatility_risk", "NORMAL")
+                        _vol_event = data.get("volatility_event", "NONE")
+                        _pair_news = data.get("pair_specific_news", "NONE")
+                        _reasoning = data.get("reasoning") or data.get("key_factor") or "Market sentiment analysis"
+                        # Build market_context for Judge — macro overlay with catalyst/risk data
+                        _ctx = f"Macro: {_macro_bias} | Catalyst: {_catalyst} | Vol risk: {_vol_risk}"
+                        if _vol_event and _vol_event != "NONE":
+                            _ctx += f" ({_vol_event})"
+                        if _pair_news and _pair_news != "NONE":
+                            _ctx += f" | {pair} news: {_pair_news}"
                         return {
                             "persona": self.name,
                             "signal": signal,
                             "confidence": data.get("confidence", 0.5),
-                            "reasoning": data.get("key_factor", "Market sentiment analysis"),
-                            "sentiment": data["sentiment"],
-                            "market_context": data.get("market_context", "")[:800],
+                            "reasoning": _reasoning[:200],
+                            "sentiment": _bias,
+                            "market_context": _ctx[:800],
+                            # V3.2.41: Extra macro fields passed to Judge
+                            "macro_bias": _macro_bias,
+                            "catalyst": _catalyst,
+                            "volatility_risk": _vol_risk,
+                            "volatility_event": _vol_event,
+                            "pair_specific_news": _pair_news,
                         }
             except json.JSONDecodeError as je:
                 print(f"  [SENTIMENT] JSON parse error for {pair}: {je}")
@@ -3267,9 +3366,29 @@ class JudgePersona:
                 + "- If they agree: strong directional conviction. If they diverge: note the conflict and weight conservatively.\n"
             )
 
+        # V3.2.41: Extract SENTIMENT macro fields for Judge context (macro analyst output)
+        sentiment_macro_text = ""
+        _sent_v = next((v for v in persona_votes if v.get("persona") == "SENTIMENT"), None)
+        if _sent_v:
+            _s_macro = _sent_v.get("macro_bias", "NEUTRAL")
+            _s_cat   = _sent_v.get("catalyst", "NONE")
+            _s_vol   = _sent_v.get("volatility_risk", "NORMAL")
+            _s_vev   = _sent_v.get("volatility_event", "NONE")
+            _s_pnws  = _sent_v.get("pair_specific_news", "NONE")
+            _s_ctx   = _sent_v.get("market_context", "")
+            _s_lines = [f"  Macro environment: {_s_macro}", f"  Catalyst: {_s_cat}",
+                        f"  Volatility risk: {_s_vol}" + (f" — {_s_vev}" if _s_vev and _s_vev != "NONE" else "")]
+            if _s_pnws and _s_pnws != "NONE":
+                _s_lines.append(f"  {pair}-specific: {_s_pnws}")
+            if _s_ctx:
+                _s_lines.append(f"  Context: {_s_ctx[:300]}")
+            sentiment_macro_text = "\n".join(_s_lines)
+
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
-Your job: analyze all signals and decide the SINGLE BEST action for {pair} right now.
-STRATEGY: High-frequency dip/bounce trades. TP targets are 0.3-0.5% (6-10% ROE at 20x). Volume of good trades beats waiting for perfect ones.
+Your job: analyze all signals and plan the SINGLE BEST action for {pair} over the NEXT 4-5 HOURS.
+STRATEGY: Per-pair medium-move targeting. TP targets are now 0.5-2.0% (pair-specific, based on 4H structure).
+Plan where price is heading in 4-5H, identify the optimal entry NOW, and set TP at the real structural level.
+Do NOT exit at 0.5% if the 4H structure supports 1.0-1.5% — let the trade run to the real target.
 
 === MARKET REGIME ===
 Regime: {regime.get('regime', 'NEUTRAL')}
@@ -3307,6 +3426,14 @@ These are the nearest price levels where large resting orders cluster (>=1.5x av
 - ASK wall = resistance above current price (where sellers are waiting). Relevant for LONG tp_price.
 - BID wall = support below current price (where buyers are waiting). Relevant for SHORT tp_price.
 NOTE: Order book walls are ephemeral and can be pulled. Use them as ONE input for tp_price alongside chart structure, not as the sole basis.
+
+=== SENTIMENT MACRO REPORT (V3.2.41 — qualitative news analysis, NO price targets) ===
+{sentiment_macro_text if sentiment_macro_text else "Sentiment macro data unavailable."}
+IMPORTANT: SENTIMENT used Google Search to find qualitative catalysts only — NO technical levels.
+- RISK_ON macro + strong WHALE/FLOW signal = add confidence to LONG bias
+- RISK_OFF macro + FLOW distribution = add confidence to SHORT bias
+- HIGH_RISK volatility event: require confidence >=85% before trading — scheduled events can cause extreme wicks
+- CATALYST present: can override RANGE setup to CATALYST_DRIVE epoch strategy
 {whale_section}
 === CURRENT POSITIONS ON {pair} ===
 {pair_pos_text}
@@ -3319,7 +3446,35 @@ Days remaining: {days_left}
 PnL: ${pnl:.0f} ({pnl_pct:+.1f}%)
 Available balance: ${balance:.0f}
 
-=== DECISION GUIDELINES (V3.2.17 CHART+MEMORY) ===
+=== PER-PAIR STRATEGY GUIDE (V3.2.41) ===
+Use CHART STRUCTURE + PERSONA DATA + SENTIMENT MACRO to select the EPOCH STRATEGY below.
+Then plan the 4-5H move and set tp_price at the real structural level (NOT 0.5% by default).
+
+Strategies and conditions:
+- VWAP_REVERSION ({pair}=BTC): Price deviated >1% from VWAP/fair value. Target mean reversion.
+  BTC context: $66,985-$68,786 range. If BTC near range extreme + FLOW reversion pressure → LONG at bottom / SHORT at top.
+- SUPPORT_SWEEP ({pair}=ETH): False break below support then reclaim. Target recovery bounce.
+  ETH context: $1,935 key support, $2,000 psychological ceiling. Look for sweep below $1,935 then quick reclaim.
+- MOMENTUM_CROSS ({pair}=SOL,BNB): MACD bullish/bearish cross below/above zero. Target trend momentum.
+  SOL context: High beta $82-$85. $77-$78 demand zone. MACD cross below zero = LONG with 1.5-2% target.
+  BNB context: CATALYST-DRIVEN only. Without Launchpool/Launchpad news, BNB should be WAIT.
+- RANGE_BOUNDARY ({pair}=XRP,LTC): Price at tested range boundary. Target continuation across range.
+  XRP context: $1.41-$1.51 range. Buy at $1.41-$1.43 (200 EMA support), sell at $1.445-$1.48 zone.
+  LTC context: Conservative 1H S/R. $52.50 support → $53.65 target. Slow but reliable.
+- CATALYST_DRIVE ({pair}=any): Active news catalyst. Target momentum continuation.
+  Condition: SENTIMENT reports specific catalyst + FLOW volume spike >200% average → ride the move.
+- CORRELATION_LAG ({pair}=ADA): BTC made strong >0.5% candle. Enter ADA immediately.
+  ADA context: $0.27-$0.28 range. Enter within 30-90s of BTC breakout candle for correlation-lag fill.
+
+EPOCH STRATEGY SELECTION — match hard data to pattern:
+- If FLOW taker-buy ratio >65% + SENTIMENT RISK_ON → VWAP_REVERSION or MOMENTUM_CROSS
+- If WHALE strong + price near recent swing low + FLOW shows accumulation → SUPPORT_SWEEP
+- If TECHNICAL ADX <20 (range) + price at range boundary → RANGE_BOUNDARY
+- If SENTIMENT catalyst + FLOW volume surge → CATALYST_DRIVE
+- If {pair} is ADA/LTC AND BTC just made a strong move → CORRELATION_LAG
+State your chosen epoch strategy in the reasoning field.
+
+=== DECISION GUIDELINES (V3.2.41 CHART+MEMORY+4H-PLANNING) ===
 
 YOUR ONLY JOB: Decide LONG, SHORT, or WAIT based on signal quality. Position limits, TP/SL, and slot management are handled by code -- ignore them entirely.
 
@@ -3335,7 +3490,7 @@ SIGNAL RELIABILITY:
        For other pairs: Cryptoracle community sentiment only.
     2. FLOW (order book taker ratio) -- actual money moving right now.
   SECONDARY (confirmation only, never override WHALE+FLOW):
-    3. SENTIMENT (web search price action) -- context, not a trading signal.
+    3. SENTIMENT (macro news analyst with Google Search) -- qualitative context. See SENTIMENT MACRO REPORT above. RISK_OFF + HIGH_RISK = raise confidence threshold to 85% before trading. Catalyst present = can override RANGE strategy.
     4. TECHNICAL (RSI/SMA/momentum) -- lagging indicator, confirmation only. In fear markets (F&G < 30), SMA signals are especially lagged (price already below SMAs); discount TECHNICAL when it conflicts with FLOW+WHALE.
 
 HOW TO DECIDE:
@@ -3345,13 +3500,14 @@ HOW TO DECIDE:
 - If WHALE and FLOW directly contradict (opposite directions, both >60%): WAIT.
 - If neither co-primary signal exceeds 60%: WAIT. No clear edge.
 
-TP TARGET (V3.2.20 — USE CHART STRUCTURE + FLOW WALLS):
-Look at CHART STRUCTURE and FLOW ORDER BOOK WALLS above. If you decide LONG or SHORT:
-1. Chart structure (4H/Daily levels) = durable historical S/R. Primary reference.
-2. FLOW walls (live order book) = where large orders sit RIGHT NOW. Secondary reference.
-3. If both agree on a level, high confidence in tp_price. If they conflict, prefer chart structure (more durable).
-Return "tp_price" = the actual price level where you expect the move to stall. REALISTIC near-term target, not the 5D high.
-If neither chart nor walls provide a clear target, omit tp_price and code will use its 0.5% fallback.
+TP TARGET (V3.2.41 — 4-5H STRUCTURAL TARGET, NOT 0.5% DEFAULT):
+Look at CHART STRUCTURE (4H/Daily levels) to plan where price will be in 4-5 HOURS.
+1. 4H structural S/R = primary reference (code now fetches 4H anchors separately — use those levels).
+2. Daily S/R = secondary for BTC/ETH/SOL (larger trend).
+3. FLOW walls = real-time confirmation of where resting orders cluster (ephemeral, secondary).
+Return "tp_price" = the 4H structural level you expect price to reach in the next 4-5H. NOT defaulting to 0.5%.
+Per-pair ceilings (applied by code after you return tp_price): BTC/ETH 1.5%, SOL 2.0%, XRP/BNB/LTC/ADA 1.0%.
+If no clear 4H structure visible, omit tp_price — code will use the chart SR walk result (NOT a 0.5% default).
 
 === HISTORICAL PAIR PERFORMANCE (from RL training data) ===
 {rl_performance}
@@ -3370,11 +3526,11 @@ TRADE HISTORY CONTEXT:
 {trade_history_summary}
 
 IMPORTANT: Say LONG or SHORT if WHALE + FLOW support it. WAIT is valid when signals are weak or contradictory.
-Frequency of good trades compounds into competition wins — don't over-filter.
+3 days left in competition — larger, well-planned trades beat 0.5% exits. Use the per-pair epoch strategy.
 SHORT ASYMMETRY: In EXTREME FEAR (F&G < 15), require 2+ co-primary signals confirming SHORT before taking it (bounce risk is real). Otherwise treat LONG and SHORT equally — both directions are valid entries.
 
 Respond with JSON ONLY (no markdown, no backticks):
-{{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences explaining your decision", "tp_price": null or a number (structural price target from chart — omit or null if unsure)}}"""
+{{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences: state epoch strategy selected, why WHALE+FLOW support it, and what 4-5H target you see", "tp_price": null or a number (4H structural level you expect price to reach — NOT defaulting to 0.5%)}}"""
 
         try:
             _rate_limit_gemini()
@@ -3964,6 +4120,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     signal = decision["decision"]
     tier = pair_info.get("tier", 2)
     tier_config = get_tier_config(tier)
+    pair = symbol.replace("cmt_", "").split("usdt")[0].upper()  # "cmt_btcusdt" → "BTC"
     
     if signal not in ("LONG", "SHORT"):
         return {"executed": False, "reason": "No trade signal"}
@@ -3979,7 +4136,11 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
     position_usdt = decision.get("recommended_position_usdt", sizing_base * 0.07)
     position_usdt = max(position_usdt, balance * MIN_SINGLE_POSITION_PCT)   # Floor stays on balance
-    position_usdt = min(position_usdt, sizing_base * MAX_SINGLE_POSITION_PCT)  # Cap scales with equity
+    # V3.2.41: Per-pair position cap — SOL capped at 30% (high beta/frequent wicks), others at 50%
+    _pair_max_pct = PAIR_MAX_POSITION_PCT.get(pair, MAX_SINGLE_POSITION_PCT)
+    position_usdt = min(position_usdt, sizing_base * _pair_max_pct)
+    if _pair_max_pct < MAX_SINGLE_POSITION_PCT:
+        print(f"  [SIZING] Per-pair cap: {pair} max {_pair_max_pct:.0%} of sizing_base (high-beta risk control)")
 
     # V3.2.25: No per-slot cap — sizing_base is already available free margin; MIN/MAX_SINGLE_POSITION_PCT bound it.
 
@@ -4079,12 +4240,12 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         mtf_label = "GEMINI" if _gemini_tp_used else ("MTF" if chart_sr["method"] == "chart_mtf" else "1H")
         print(f"  [TP/SL] CHART-BASED [{mtf_label}]: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
 
-        # V3.2.29: Universal competition TP cap — 0.5% MAX ceiling on ALL trades.
-        # Applied after chart SR + Gemini targeting. Only caps down (ceiling), never raises a low TP.
-        # Replaces the old extreme-fear-only cap (V3.2.12) and XRP cap (V3.2.15).
-        _tp_cap = COMPETITION_FALLBACK_TP.get(tier, 0.5)
+        # V3.2.41: Per-pair TP ceiling — replaces flat 0.5% COMPETITION_FALLBACK_TP.
+        # BTC/ETH: 1.5%, SOL: 2.0%, XRP/BNB/LTC/ADA: 1.0%. Ceiling-only (never raises a low TP).
+        # Falls back to tier-based 0.5% for pairs not in PAIR_TP_CEILING (defensive).
+        _tp_cap = PAIR_TP_CEILING.get(pair, COMPETITION_FALLBACK_TP.get(tier, 0.5))
         if tp_pct_raw > _tp_cap:
-            print(f"  [TP/SL] Competition TP cap: {tp_pct_raw:.2f}% → {_tp_cap:.2f}%")
+            print(f"  [TP/SL] Per-pair TP ceiling ({pair}): {tp_pct_raw:.2f}% → {_tp_cap:.2f}%")
             tp_pct_raw = _tp_cap
             tp_pct = tp_pct_raw / 100
             tp_price = current_price * (1 + tp_pct) if signal == "LONG" else current_price * (1 - tp_pct)
