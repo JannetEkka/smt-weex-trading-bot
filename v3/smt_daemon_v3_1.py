@@ -3675,7 +3675,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.60 - Dip-bounce TP ceilings + breakeven SL fix. V3.2.59: Gemini event detection. V3.2.58: altcoin tiebreak")
+    logger.info("SMT Daemon V3.2.60 - Dip-bounce TPs + R:R guard removed + ATR respects SL ceiling. V3.2.59: Gemini event detection")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3752,7 +3752,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.60: Dip-bounce TP ceilings — PAIR_TP_CEILING lowered to 0.60-0.80%% (was 1.0-2.0%%). Old ceilings unreachable in hold windows, causing BE-SL → fee bleed. Breakeven SL fix: exit classified as BREAKEVEN_SL (not TAKE_PROFIT) when gross PnL < fees. Cooldown 0.5x applied (was 0x as tp_hit).")
+    logger.info("  V3.2.60: Dip-bounce TP ceilings (0.60-0.80%%), R:R guard removed (high win-rate strategy), ATR-safety respects MAX_SL_PCT ceiling (was overriding to 1.84%%), breakeven SL classified correctly.")
     logger.info("  V3.2.59: Gemini event detection — detect_macro_events() uses Gemini Search to scan upcoming macro/crypto events (30min cache). Dynamic blackout for HIGH-impact events within 15min. Replaces hardcoded _macro_events dict in Judge prompt. Also: ADX<20 WAIT removed, 2-slot mode, TP fee-floor guard.")
     logger.info("  V3.2.58: Altcoin execution priority — sort key now (confidence desc, tier desc) so T3>T2>T1 at equal confidence. Prevents T1 BTC/ETH crowding out altcoins when same 85%% threshold hit in same cycle.")
     logger.info("  V3.2.57: BlitzMode final 72h — MIN_CONFIDENCE 80%%→85%%; velocity_exit (40min/0.15%% peak, zero cooldown); GLOBAL_TRADE_COOLDOWN 900→600s; sizing floor $1000→$500; Judge BLITZ MODE prompt")
