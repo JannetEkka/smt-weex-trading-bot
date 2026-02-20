@@ -1807,7 +1807,7 @@ def get_max_positions_for_equity(equity: float) -> int:
     return MAX_TOTAL_POSITIONS
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
-MIN_CONFIDENCE_TO_TRADE = 0.80  # V3.1.77b: 85%->80%. With 3 slots, fill with best signals only.
+MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.2.57: 85% floor (was 80%). In 1-slot mode, 80-84% trades at 20% sizing block the slot from better signals. 85%+ = all trades at 35-50% sizing minimum.
 CHOP_FALLBACK_CONFIDENCE = 0.80  # V3.1.85: Raised to 80%. No sub-80% trades, period.
 
 # V3.1.92: Equity-based sizing with liquidation safety floors
@@ -1850,7 +1850,7 @@ def get_sizing_base(balance: float) -> float:
         # V3.2.26: Floor at $1000 — always size off at least $1000 base → $250 margin min → $5k notional at 20x
         sizing_base = available if available > 0 else balance
         sizing_base = min(sizing_base, balance * 2.5)   # Cap runaway (e.g. huge UPnL inflating available)
-        sizing_base = max(sizing_base, 1000.0)          # Floor: $1000 minimum sizing base
+        # V3.2.57: $1000 floor removed — margin guard (available < $1000 → return 0) already prevents undersized trades
 
         print(f"  [SIZING] Equity: ${equity:.0f} | Available: ${available:.0f} | Balance: ${balance:.0f} | Sizing base: ${sizing_base:.0f}")
 
@@ -4540,7 +4540,9 @@ COOLDOWN_MULTIPLIERS = {
     "force_stop": 1.0,  # V3.2.46: was 0.0 — 60min+ after force stop
     "early_exit": 0.5,  # V3.2.46: was 0.0 — 30-60min after early exit (mild)
     "max_hold": 0.0,
-    "profit_lock": 0.0,
+    "profit_lock": 0.0,  # kept for TradeTracker compatibility
+    "peak_fade": 0.0,
+    "velocity_exit": 0.0,
     "tp_hit": 0.0,
     "regime_exit": 0.0,
     "default": 0.0,
@@ -4653,6 +4655,9 @@ class TradeTracker:
             elif "max_hold" in reason:
                 cd_mult = COOLDOWN_MULTIPLIERS["max_hold"]
                 cd_type = "TIMEOUT"
+            elif "velocity_exit" in reason:
+                cd_mult = COOLDOWN_MULTIPLIERS["velocity_exit"]
+                cd_type = "VELOCITY_EXIT"
             elif "profit_lock" in reason or "peak_fade" in reason:
                 cd_mult = COOLDOWN_MULTIPLIERS["profit_lock"]
                 cd_type = "PROFIT_LOCK"

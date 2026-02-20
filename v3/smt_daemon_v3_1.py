@@ -415,7 +415,7 @@ analyzer = MultiPersonaAnalyzer()
 
 # V3.1.65: GLOBAL TRADE COOLDOWN - prevent fee bleed from rapid trading
 _last_trade_opened_at = 0  # unix timestamp
-GLOBAL_TRADE_COOLDOWN = 900  # V3.1.66c: 15 minutes (was 30min, too slow for competition)
+GLOBAL_TRADE_COOLDOWN = 600  # V3.2.57: 10 min (was 900/15min — final stretch velocity, adds ~5-6 windows in 72h)
 TAKER_FEE_RATE = 0.0008       # V3.2.50: 0.08%/side taker fee (WEEX standard). At 20x → 1.6% margin/side, 3.2% round-trip
 
 # V3.1.93: Last signal cycle summary for PM context
@@ -1617,6 +1617,8 @@ BREAKEVEN_TRIGGER_PCT = 0.4  # Move SL to entry when trade reaches +0.4%
 # exit_reason "peak_fade" → COOLDOWN_MULTIPLIERS["profit_lock"] = 0.0 → zero cooldown.
 PEAK_FADE_MIN_PEAK   = {1: 0.30, 2: 0.45, 3: 0.45}  # Min peak% per tier to activate fade
 PEAK_FADE_TRIGGER_PCT = {1: 0.15, 2: 0.25, 3: 0.25}  # Drop threshold per tier (current <= peak - trigger)
+VELOCITY_EXIT_MINUTES = 40      # V3.2.57: Kill trade if peak never reached 0.15% in first 40 min (dead thesis)
+VELOCITY_MIN_PEAK_PCT = 0.15    # V3.2.57: "No movement" threshold — peak < 0.15% = trade never started
 
 def _move_sl_to_breakeven(symbol: str, side: str, entry_price: float, tp_price: float, size: float) -> bool:
     """V3.2.46: Cancel existing SL and replace with breakeven SL at entry price.
@@ -1943,6 +1945,13 @@ def monitor_positions():
                     if peak_pnl_pct >= _pf_min and pnl_pct <= peak_pnl_pct - _pf_trig:
                         should_exit = True
                         exit_reason = f"peak_fade_T{tier} ({peak_pnl_pct:.2f}%→{pnl_pct:.2f}%, fade={peak_pnl_pct - pnl_pct:.2f}%, thr={_pf_min:.2f}/{_pf_trig:.2f})"
+                    # V3.2.57: VELOCITY EXIT — if peak never reached 0.15% in first 40 min, thesis is dead
+                    # Distinct from early_exit (needs -1% loss) and peak_fade (needs a peak then reversal).
+                    elif peak_pnl_pct < VELOCITY_MIN_PEAK_PCT:
+                        _age_min = hours_open * 60  # hours_open already computed above
+                        if _age_min >= VELOCITY_EXIT_MINUTES:
+                            should_exit = True
+                            exit_reason = f"velocity_exit ({_age_min:.0f}m open, peak={peak_pnl_pct:.2f}% never reached {VELOCITY_MIN_PEAK_PCT:.2f}%)"
 
                 if should_exit:
                     symbol_clean = symbol.replace("cmt_", "").upper()
