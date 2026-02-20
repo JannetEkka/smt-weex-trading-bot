@@ -4724,47 +4724,21 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         print(f"  [TP/SL] {_reason}")
         return {"executed": False, "reason": _reason}
 
-    # V3.1.84: ATR safety net - if chart SL is tighter than 0.5x ATR, widen it
-    # Prevents noise stop-outs on volatile pairs even with chart-based SL
-    # V3.2.60: ATR-safety MUST NOT widen past MAX_SL_PCT (1.5%). Otherwise it blows R:R
-    # and the TP ceiling can never pass. ATR-safety is a floor, MAX_SL_PCT is the ceiling.
-    try:
-        _atr_check = get_pair_atr(symbol)
-        _atr_pct_check = _atr_check.get("atr_pct", 0)
-        if _atr_pct_check > 0:
-            _min_atr_sl = round(_atr_pct_check * 0.8, 2)  # At least 0.8x ATR
-            _max_sl_cap = MAX_SL_PCT * 100  # 1.5% — hard ceiling
-            _min_atr_sl = min(_min_atr_sl, _max_sl_cap)  # V3.2.60: never exceed ceiling
-            if sl_pct_raw < _min_atr_sl:
-                print(f"  [ATR-SAFETY] SL {sl_pct_raw:.2f}% < 0.8x ATR ({_atr_pct_check * 0.8:.2f}%), widening to {_min_atr_sl:.2f}% (capped at {_max_sl_cap:.1f}%)")
-                sl_pct_raw = _min_atr_sl
-                sl_pct = sl_pct_raw / 100
-                if signal == "LONG":
-                    sl_price = current_price * (1 - sl_pct)
-                else:
-                    sl_price = current_price * (1 + sl_pct)
-    except Exception:
-        pass
+    # V3.2.65: HALVE the SL — tighter stops for dip-bounce strategy.
+    # Chart SR gives structural SL (already capped at MAX_SL_PCT=1.5%). Halving it:
+    #   1.5% → 0.75%, 1.0% → 0.5%. Tighter risk, better R:R with 0.5% TP ceiling.
+    _sl_before_halve = sl_pct_raw
+    sl_pct_raw = round(sl_pct_raw / 2, 2)
+    sl_pct = sl_pct_raw / 100
+    if signal == "LONG":
+        sl_price = current_price * (1 - sl_pct)
+    else:
+        sl_price = current_price * (1 + sl_pct)
+    print(f"  [SL-HALVE] SL {_sl_before_halve:.2f}% → {sl_pct_raw:.2f}% (halved)")
 
-    # V3.1.94: Per-pair overrides removed — flat 1.1% TP + chart SL (+0.5%) for all
-
-    # V3.2.59: TP FEE-FLOOR GUARD — ensure TP clears round-trip taker fees.
-    # At 0.08%/side (TAKER_FEE_RATE=0.0008), round-trip = 0.16% price movement.
-    # Any TP below this is GUARANTEED net-negative. Add 0.04% buffer = 0.20% floor.
-    _FEE_FLOOR_TP_PCT = 0.20  # 0.16% fees + 0.04% buffer = minimum viable TP
-    if tp_pct_raw < _FEE_FLOOR_TP_PCT:
-        _reason = f"TP {tp_pct_raw:.2f}% below fee floor ({_FEE_FLOOR_TP_PCT:.2f}%) — trade is net-negative after 0.16% round-trip fees"
-        print(f"  [FEE-FLOOR] {_reason}")
-        return {"executed": False, "reason": _reason}
-
-    # V3.2.61: R:R guard RE-ADDED. 0.4:1 R:R requires 79%+ win rate after fees — too demanding.
-    # Minimum 0.5:1 ensures break-even at ~65% win rate, achievable with proper dip entries.
-    MIN_RR_RATIO = 0.5
+    # V3.2.65: No fee floor or R:R guard — let all trades through with TP ≤ 0.5% ceiling.
+    # The 0.5% TP ceiling + halved SL is the strategy. No additional blocking gates.
     _rr_ratio = tp_pct_raw / sl_pct_raw if sl_pct_raw > 0 else 0
-    if _rr_ratio < MIN_RR_RATIO:
-        _reason = f"R:R {_rr_ratio:.2f}:1 below minimum {MIN_RR_RATIO}:1 (TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}%)"
-        print(f"  [R:R GUARD] {_reason}")
-        return {"executed": False, "reason": _reason}
     print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | R:R {_rr_ratio:.1f}:1 | Method: {chart_sr['method']}")
 
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
