@@ -1366,7 +1366,12 @@ def check_trading_signals():
                         if signal == "LONG": long_count += 1
                         elif signal == "SHORT": short_count += 1
                         trades_executed += 1
-                        
+
+                        # V3.2.47: Decrement available_slots after each successful trade
+                        # BUG FIX: Without this, the loop executes ALL collected opportunities
+                        # even when slots are full (available_slots was never decremented)
+                        available_slots -= 1
+
                         # Update available balance for next trade
                         balance = get_balance()
                         
@@ -1377,7 +1382,14 @@ def check_trading_signals():
                     logger.error(f"Error executing {pair}: {e}")
                 
                 time.sleep(3)  # V3.1.68: 3s delay between trades (Gemini rate limit)
-            
+
+                # V3.2.47: Stop executing if all slots are filled
+                if available_slots <= 0:
+                    remaining = len(trade_opportunities) - (trade_opportunities.index(opportunity) + 1)
+                    if remaining > 0:
+                        logger.info(f"  SLOTS FULL after {trades_executed} trade(s) — skipping {remaining} remaining opportunit{'y' if remaining==1 else 'ies'}")
+                    break
+
             if trades_executed > 0:
                 logger.info(f"")
                 logger.info(f"Executed {trades_executed} trades this cycle")
@@ -3333,7 +3345,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.46 - Cross Margin Defense: 1-Slot, Breakeven SL, Circuit Breaker")
+    logger.info("SMT Daemon V3.2.47 - Fix: Slot recheck after each trade execution (was opening 2+ trades with 1-slot cap)")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")

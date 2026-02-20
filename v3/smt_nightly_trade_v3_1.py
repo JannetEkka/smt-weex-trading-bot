@@ -1917,7 +1917,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.46-CrossMarginDefense-1Slot-BreakevenSL-CircuitBreaker"
+PIPELINE_VERSION = "SMT-v3.2.47-SlotRecheckFix-PreventMultiOpen"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
