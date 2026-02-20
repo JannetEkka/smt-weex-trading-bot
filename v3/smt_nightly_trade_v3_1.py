@@ -2030,7 +2030,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.63-ChartCtxGranularityFix-4HFallback"
+PIPELINE_VERSION = "SMT-v3.2.64-ShortsReEnabled-BidirectionalJudge"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3739,10 +3739,10 @@ class JudgePersona:
         _pair_hold = _hold_windows.get(pair, "2H")
         _pair_tp_cap = f"{PAIR_TP_CEILING.get(pair, 1.0):.1f}%"  # V3.2.61: read from actual config
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
-LONGS ONLY — shorts are disabled.
+BOTH DIRECTIONS ENABLED — you may return LONG, SHORT, or WAIT.
 Your job: analyze all signals and decide the SINGLE BEST action for {pair} over the NEXT {_pair_hold} (hard limit — daemon kills the trade at this time).
 TP CEILING for {pair}: {_pair_tp_cap} (code enforces this — never target higher). Chart SR is primary; ceiling is a hard max.
-Plan where price is heading WITHIN {_pair_hold}, identify the optimal LONG entry NOW, and set TP at the real structural level up to {_pair_tp_cap}.
+Plan where price is heading WITHIN {_pair_hold}, identify the optimal entry NOW (LONG or SHORT), and set TP at the real structural level up to {_pair_tp_cap}.
 CONFIDENCE FLOOR: Your output confidence MUST be >= 0.85 to trade. Below 85% = WAIT. 85-89% = standard sizing. 90%+ = maximum sizing.
 
 === MARKET REGIME ===
@@ -3823,15 +3823,19 @@ Then plan the move WITHIN YOUR TIER'S HOLD WINDOW (see HOLD TIME LIMITS) and set
 
 === BLITZ MODE — FINAL 72H REMAINING ===
 EXECUTE NOW. <3 days left in competition. VELOCITY > PATIENCE. Every cycle without a trade is wasted capital.
-LONGS ONLY — shorts are disabled. Focus on dip-bounce LONG entries.
+BOTH DIRECTIONS: LONG and SHORT are both valid. Pick the direction with strongest persona consensus.
+SHORT SETUPS: FLOW extreme selling + TECHNICAL SHORT (RSI overbought, price at top of range) = valid SHORT entry. Shorts target support levels.
+LONG SETUPS: FLOW strong buying + dip-bounce at support = valid LONG entry. Longs target resistance levels.
 
 PRIORITY ORDER: MOMENTUM_CROSS > CATALYST_DRIVE > CORRELATION_LAG > SUPPORT_SWEEP > RANGE_BOUNDARY > VWAP_REVERSION
 BETA BIAS: Prefer Tier 3 (SOL, ADA) for momentum — bigger moves in shorter time. BTC/ETH are fine at 85%+ if 3+ personas agree.
 LOW ADX (V3.2.59): ADX < 20 = range-bound — dip-bounce works well here IF 2+ personas agree at 55%+ confidence each.
   If all personas are below 50% confidence, WAIT regardless of ADX.
   RANGE_BOUNDARY and VWAP_REVERSION strategies work in low-ADX — use if FLOW confirms wall.
-EXTREME FEAR DIP (V3.2.60): F&G < 15 can be a dip-bounce setup, but ONLY when FLOW confirms with strong buying (>= 70% LONG).
-  FLOW at 50-60% in extreme fear = noise, NOT confirmation. Require real accumulation before calling it a dip setup.
+EXTREME FEAR (V3.2.62): F&G < 15 — market is panicking. Two valid plays:
+  1. DIP-BOUNCE LONG: FLOW confirms strong buying (>= 70% LONG) = smart money accumulation. Enter long.
+  2. CONTINUATION SHORT: FLOW confirms extreme selling (>= 70% SHORT) + TECHNICAL SHORT = panic hasn't bottomed. Enter short.
+  FLOW at 50-60% in extreme fear = noise in EITHER direction. Require strong FLOW confirmation.
   Do NOT use F&G alone to boost confidence above what the persona votes justify.
 LIVE PRICES: Use CHART DATA provided in context for all price levels. Ignore any hardcoded example prices below.
 
@@ -3929,30 +3933,31 @@ If no clear structure reachable within hold window, omit tp_price — code will 
 USE THIS AS CONTEXT ONLY — not a veto. Poor historical win rate = note it in reasoning, but trust the majority of personas.
 If a pair has >15% win rate, it has proven itself — trust stronger signals on it.
 
-FEAR & GREED (V3.2.60 — DIP-BOUNCE LONG-ONLY):
-CRITICAL: F&G is CONTEXT, not a persona. It does NOT count as a vote. Do NOT boost confidence just because F&G is low.
-- F&G < 15 (EXTREME FEAR): Dip-bounce opportunities exist BUT only if FLOW confirms with STRONG buying (taker buy ratio > 1.3 AND/OR bid depth > 1.5x).
-  FLOW at 50-60% in extreme fear is NOT "smart money accumulation" — it's noise. Require FLOW >= 70% to call it a dip setup.
-  If FLOW is weak/neutral, extreme fear means MORE downside risk, not less. WAIT.
-- F&G < 30 (FEAR): Favor LONG if FLOW + at least one other persona agree. Do not override weak signals with "fear = buy."
-- F&G 30-70 (NEUTRAL): Use WHALE+FLOW+TECHNICAL signals normally.
-- F&G > 70 (GREED): Be cautious — only LONG if 3+ personas strongly agree (risk of correction).
-- F&G > 85 (EXTREME GREED): WAIT preferred — tops are dangerous for LONGs. Only trade if FLOW+WHALE confirm continued momentum.
+FEAR & GREED (V3.2.62 — BIDIRECTIONAL):
+CRITICAL: F&G is CONTEXT, not a persona. It does NOT count as a vote. Do NOT boost confidence just because F&G is low/high.
+- F&G < 15 (EXTREME FEAR): Two valid plays — dip-bounce LONG (if FLOW >= 70% LONG) OR continuation SHORT (if FLOW >= 70% SHORT + TECHNICAL SHORT).
+  FLOW at 50-60% in extreme fear = noise. Require FLOW >= 70% in EITHER direction for a valid trade.
+  If FLOW is weak/neutral, WAIT — extreme fear with no flow confirmation = dangerous in both directions.
+- F&G < 30 (FEAR): Favor direction with strongest FLOW + persona agreement. Do not override weak signals with "fear = buy."
+- F&G 30-70 (NEUTRAL): Use WHALE+FLOW+TECHNICAL signals normally. Best direction = strongest consensus.
+- F&G > 70 (GREED): Be cautious with LONGs (risk of correction). SHORT setups become attractive if FLOW confirms selling.
+- F&G > 85 (EXTREME GREED): Favor SHORT if FLOW+TECHNICAL confirm distribution. Only LONG if FLOW+WHALE confirm continued momentum.
 
 TRADE HISTORY CONTEXT:
 {trade_history_summary}
 
-DECISION RULES (V3.2.60 — FINAL):
-1. LONGS ONLY — never return SHORT (shorts are disabled).
-2. Count ALL 4 personas. 3+ agree LONG at 60%+ each = TRADE. Fewer = higher bar to reach 85%.
+DECISION RULES (V3.2.62 — BIDIRECTIONAL):
+1. BOTH DIRECTIONS ALLOWED — return LONG, SHORT, or WAIT based on strongest persona consensus.
+2. Count ALL 4 personas. 3+ agree on SAME direction at 60%+ each = TRADE. Fewer = higher bar to reach 85%.
 3. Confidence MUST be >= 0.85 to trade. Below 85% = WAIT. 85-89% = standard. 90%+ = maximum sizing.
 4. 90% confidence REQUIRES 3+ personas at 65%+ each. Never 90% with 2 weak agreements + F&G.
 5. If ANY strong persona (>70%) opposes the trade direction, cap confidence at 85%.
-6. F&G is context, NOT a persona vote. Do not boost confidence because F&G is low.
-7. If signals conflict (no clear majority), WAIT — do not force a trade.
+6. F&G is context, NOT a persona vote. Do not boost confidence because F&G is low/high.
+7. If signals conflict (no clear majority in either direction), WAIT — do not force a trade.
+8. SHORT signals are just as valid as LONG — if FLOW shows extreme selling and TECHNICAL confirms, SHORT is the correct call.
 
 Respond with JSON ONLY (no markdown, no backticks):
-{{"decision": "LONG" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences: state how many personas agree, which strategy fits, and what target you see within {_pair_hold}", "tp_price": null or a number (structural level reachable within {_pair_hold}, capped at {_pair_tp_cap})}}"""
+{{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences: state how many personas agree, which direction, which strategy fits, and what target you see within {_pair_hold}", "tp_price": null or a number (structural level reachable within {_pair_hold}, capped at {_pair_tp_cap})}}"""
 
         try:
             import time as _jtime2
