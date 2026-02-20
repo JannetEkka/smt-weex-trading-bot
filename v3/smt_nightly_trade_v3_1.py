@@ -2944,22 +2944,31 @@ class FlowPersona:
                 if depth["bid_strength"] > 1.3:
                     signals.append(("LONG", 0.3, "Bid depth confirms"))
             else:
-                # Normal range - use both taker and depth
-                if taker_ratio > 1.2:
-                    signals.append(("LONG", 0.5, f"Taker buy pressure: {taker_ratio:.2f}"))
-                elif taker_ratio < 0.8:
-                    signals.append(("SHORT", 0.5, f"Taker sell pressure: {taker_ratio:.2f}"))
-                
-                # V3.1.89: Graduated depth signals — extreme imbalance (3x+) gets stronger score
+                # V3.2.59: PROPORTIONAL taker confidence (was flat 0.50 for 1.2-2.0 range).
+                # Taker ratio = buy_volume / sell_volume. 1.55 = 55% more buying = meaningful signal.
+                # Linear interpolation within ranges for granularity.
+                if taker_ratio > 1.1:
+                    # 1.1-2.0 → 0.45-0.70 proportional
+                    _taker_conf = min(0.70, 0.45 + (taker_ratio - 1.1) * 0.278)
+                    signals.append(("LONG", round(_taker_conf, 2), f"Taker buy pressure: {taker_ratio:.2f}"))
+                elif taker_ratio < 0.9:
+                    # 0.9-0.5 → 0.45-0.70 proportional (inverted)
+                    _taker_conf = min(0.70, 0.45 + (0.9 - taker_ratio) * 0.625)
+                    signals.append(("SHORT", round(_taker_conf, 2), f"Taker sell pressure: {taker_ratio:.2f}"))
+
+                # V3.2.59: Proportional depth signals (was flat 0.40 for 1.3-3.0 range).
+                # Bid/ask depth ratio = resting limit order imbalance. 2.0+ = heavy accumulation.
                 if depth["bid_strength"] > 3.0:
-                    signals.append(("LONG", 0.6, f"EXTREME bid depth: {depth['bid_strength']:.2f}x"))
+                    signals.append(("LONG", 0.60, f"EXTREME bid depth: {depth['bid_strength']:.2f}x"))
                 elif depth["bid_strength"] > 1.3:
-                    signals.append(("LONG", 0.4, "Strong bid depth"))
+                    _depth_conf = min(0.55, 0.35 + (depth["bid_strength"] - 1.3) * 0.118)
+                    signals.append(("LONG", round(_depth_conf, 2), f"Strong bid depth ({depth['bid_strength']:.1f}x)"))
 
                 if depth["ask_strength"] > 3.0:
-                    signals.append(("SHORT", 0.6, f"EXTREME ask depth: {depth['ask_strength']:.2f}x"))
+                    signals.append(("SHORT", 0.60, f"EXTREME ask depth: {depth['ask_strength']:.2f}x"))
                 elif depth["ask_strength"] > 1.3:
-                    signals.append(("SHORT", 0.4, "Strong ask depth"))
+                    _depth_conf = min(0.55, 0.35 + (depth["ask_strength"] - 1.3) * 0.118)
+                    signals.append(("SHORT", round(_depth_conf, 2), f"Strong ask depth ({depth['ask_strength']:.1f}x)"))
             
             # Funding rate (always include)
             if funding > 0.0005:
