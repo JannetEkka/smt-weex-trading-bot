@@ -1987,6 +1987,15 @@ def get_tier_config_for_pair(pair_name: str) -> Dict:
     return get_tier_config(tier)
 
 
+# V3.2.59: Slot count policy — 2 slots (90%+ confidence unlocks 2nd slot in daemon).
+MAX_TOTAL_POSITIONS = 2
+def get_max_positions_for_equity(equity: float) -> int:
+    """Return max concurrent positions. Fixed at 2 for cross-margin strategy."""
+    if equity < 1500:
+        return 1  # Low equity = single slot safety
+    return MAX_TOTAL_POSITIONS
+
+
 # ============================================================
 # WEEX API HELPERS
 # ============================================================

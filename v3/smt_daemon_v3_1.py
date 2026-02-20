@@ -1105,9 +1105,13 @@ def check_trading_signals():
                             )
                     else:
                         if can_open_new:
-                            # V3.2.46: 1-slot hard cap — no extra slot bypass (cross margin safety)
                             can_trade_this = True
                             trade_type = "new"
+                        elif confidence >= CONFIDENCE_EXTRA_SLOT and not low_equity_mode:
+                            # V3.2.59: 90%+ confidence opens 2nd slot
+                            can_trade_this = True
+                            trade_type = "new"
+                            logger.info(f"    -> 90%+ EXTRA SLOT: {confidence:.0%} >= {CONFIDENCE_EXTRA_SLOT:.0%}, bypassing slot cap")
 
                 elif signal == "SHORT":
                     # V3.2.18: Shorts allowed for ALL pairs (was LTC only since V3.2.13)
@@ -1146,12 +1150,16 @@ def check_trading_signals():
                             )
                     else:
                         if can_open_new:
-                            # V3.2.46: 1-slot hard cap — no extra slot bypass (cross margin safety)
                             can_trade_this = True
                             trade_type = "new"
+                        elif confidence >= CONFIDENCE_EXTRA_SLOT and not low_equity_mode:
+                            # V3.2.59: 90%+ confidence opens 2nd slot
+                            can_trade_this = True
+                            trade_type = "new"
+                            logger.info(f"    -> 90%+ EXTRA SLOT: {confidence:.0%} >= {CONFIDENCE_EXTRA_SLOT:.0%}, bypassing slot cap")
 
                 # V3.1.93: Track best non-executed signal for PM context
-                if signal in ("LONG", "SHORT") and confidence >= 0.80 and not can_trade_this:
+                if signal in ("LONG", "SHORT") and confidence >= 0.85 and not can_trade_this:
                     if _best_unexecuted is None or confidence > _best_unexecuted.get("confidence", 0):
                         _best_unexecuted = {"pair": pair, "direction": signal, "confidence": confidence}
 
@@ -1307,26 +1315,9 @@ def check_trading_signals():
             for opportunity in trade_opportunities:
                 confidence = opportunity["decision"]["confidence"]
 
-                # V3.1.80: CHOP FALLBACK GATE
-                # Pairs with 75-79% confidence are "fallback_only" — they can only trade
-                # if a chop filter blocked a higher-confidence pair, freeing a slot.
-                # V3.1.82: Slot swap trades bypass fallback gate (they create their own slot)
-                # V3.1.82 FIX: Also bypass when regular slots are available (0 positions = don't skip!)
-                is_fallback = opportunity["decision"].get("fallback_only", False)
-                _has_regular_slots = available_slots > 0 or confidence >= CONFIDENCE_EXTRA_SLOT  # V3.2.39: 90%+ gets extra slot
-                if is_fallback and opportunity.get("trade_type") != "slot_swap" and not _has_regular_slots:
-                    if chop_blocked_count > 0:
-                        logger.info(f"  CHOP FALLBACK: {opportunity['pair']} ({confidence:.0%}) promoted - chop freed {chop_blocked_count} slot(s)")
-                        chop_blocked_count -= 1  # Consume one freed slot
-                        upload_ai_log_to_weex(
-                            stage=f"Chop Fallback: {opportunity['pair']} promoted",
-                            input_data={"pair": opportunity['pair'], "confidence": confidence, "chop_slots_available": chop_blocked_count + 1},
-                            output_data={"action": "FALLBACK_PROMOTED", "confidence": confidence},
-                            explanation=f"Chop filter blocked a higher-confidence but choppy pair. {opportunity['pair']} at {confidence:.0%} confidence is trending and promoted to fill the freed slot."
-                        )
-                    else:
-                        logger.info(f"  FALLBACK SKIP: {opportunity['pair']} ({confidence:.0%}) - no chop slots available, needs {0.80:.0%}+")
-                        continue
+                # V3.2.59: FALLBACK GATE REMOVED — 85% is the absolute floor.
+                # Old fallback_only path (80-84%) is dead code since MIN_CONFIDENCE_TO_TRADE=0.85.
+                # All trades reaching this point are 85%+. No chop fallback needed.
 
                 # V3.2.25: No slot-bypass needed — all 80%+ signals execute; resolve_opposite_sides() at cycle end cleans up
                 trade_type_check = opportunity.get("trade_type", "none")
@@ -1431,7 +1422,7 @@ def check_trading_signals():
                     session_name = "ASIA"
                 else:
                     session_name = "ACTIVE"
-                session_min_conf = 0.80  # HARD FLOOR - no exceptions
+                session_min_conf = 0.85  # V3.2.59: Matches MIN_CONFIDENCE_TO_TRADE (was 0.80)
                 
                 # V3.1.85: CONTRARIAN BOOST REMOVED - 80% hard floor applies always.
                 # Even in extreme fear/greed, only trade with 80%+ confidence.
