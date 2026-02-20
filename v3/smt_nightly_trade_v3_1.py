@@ -1383,172 +1383,197 @@ def get_chart_context(symbol: str, tier: int = 1) -> str:
         else:
             return f"${p:.6f}"
 
+    context_parts = []
+    d_current = None  # Will be set from 1D candles or intraday candles
+
+    # === PART 1: 1D + 4H structure (S/R levels, trend) ===
     try:
-        # === 1D candles: 6 candles → skip [0] (current partial), use [1:6] = 5 complete days ===
+        # 1D candles: 6 → skip [0] (current partial), use [1:6] = 5 complete days
         url_1d = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1Dutc&limit=6"
         r_1d = requests.get(url_1d, timeout=10)
         candles_1d = r_1d.json()
 
-        # === 4H candles: 9 candles → skip [0] (current partial), use [1:9] = 8 complete = 32h ===
+        # 4H candles: 9 → skip [0] (current partial), use [1:9] = 8 complete = 32h
         url_4h = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=4h&limit=9"
         r_4h = requests.get(url_4h, timeout=10)
         candles_4h = r_4h.json()
 
-        if not isinstance(candles_1d, list) or len(candles_1d) < 4:
-            return f"{pair_label}: Daily candle data insufficient"
-        if not isinstance(candles_4h, list) or len(candles_4h) < 5:
-            return f"{pair_label}: 4H candle data insufficient"
+        _1d_ok = isinstance(candles_1d, list) and len(candles_1d) >= 4
+        _4h_ok = isinstance(candles_4h, list) and len(candles_4h) >= 5
 
-        # 1D: extract OHLC from complete candles [1:6]
-        d_opens  = [float(c[1]) for c in candles_1d[1:6]]
-        d_highs  = [float(c[2]) for c in candles_1d[1:6]]
-        d_lows   = [float(c[3]) for c in candles_1d[1:6]]
-        d_closes = [float(c[4]) for c in candles_1d[1:6]]
+        if not _1d_ok:
+            _1d_detail = f"type={type(candles_1d).__name__}, len={len(candles_1d) if isinstance(candles_1d, list) else 'N/A'}"
+            if isinstance(candles_1d, dict):
+                _1d_detail += f", resp={str(candles_1d)[:200]}"
+            print(f"  [CHART-CTX] {pair_label}: 1D candles FAILED ({_1d_detail})")
+        if not _4h_ok:
+            _4h_detail = f"type={type(candles_4h).__name__}, len={len(candles_4h) if isinstance(candles_4h, list) else 'N/A'}"
+            if isinstance(candles_4h, dict):
+                _4h_detail += f", resp={str(candles_4h)[:200]}"
+            print(f"  [CHART-CTX] {pair_label}: 4H candles FAILED ({_4h_detail})")
 
-        d_high_5d = max(d_highs)
-        d_low_5d  = min(d_lows)
-        d_current = float(candles_1d[0][4])  # Current candle close = latest price
+        if _1d_ok and _4h_ok:
+            d_opens  = [float(c[1]) for c in candles_1d[1:6]]
+            d_highs  = [float(c[2]) for c in candles_1d[1:6]]
+            d_lows   = [float(c[3]) for c in candles_1d[1:6]]
+            d_closes = [float(c[4]) for c in candles_1d[1:6]]
 
-        # 5D trend: compare current vs 5 days ago close
-        d_oldest_close = d_closes[-1]  # Oldest complete day
-        d_change_5d = ((d_current - d_oldest_close) / d_oldest_close) * 100
+            d_high_5d = max(d_highs)
+            d_low_5d  = min(d_lows)
+            d_current = float(candles_1d[0][4])
 
-        # Daily resistance: top 2 highs (sorted desc)
-        d_res_sorted = sorted(d_highs, reverse=True)
-        d_resistances = d_res_sorted[:2]
+            d_oldest_close = d_closes[-1]
+            d_change_5d = ((d_current - d_oldest_close) / d_oldest_close) * 100
 
-        # Daily support: bottom 2 lows (sorted asc)
-        d_sup_sorted = sorted(d_lows)
-        d_supports = d_sup_sorted[:2]
+            d_res_sorted = sorted(d_highs, reverse=True)
+            d_resistances = d_res_sorted[:2]
+            d_sup_sorted = sorted(d_lows)
+            d_supports = d_sup_sorted[:2]
 
-        # 4H: extract from complete candles [1:9]
-        h4_highs  = [float(c[2]) for c in candles_4h[1:9]]
-        h4_lows   = [float(c[3]) for c in candles_4h[1:9]]
-        h4_closes = [float(c[4]) for c in candles_4h[1:9]]
+            h4_highs  = [float(c[2]) for c in candles_4h[1:9]]
+            h4_lows   = [float(c[3]) for c in candles_4h[1:9]]
+            h4_closes = [float(c[4]) for c in candles_4h[1:9]]
 
-        # 4H resistance: top 2 highs
-        h4_res_sorted = sorted(h4_highs, reverse=True)
-        h4_resistances = h4_res_sorted[:2]
+            h4_res_sorted = sorted(h4_highs, reverse=True)
+            h4_resistances = h4_res_sorted[:2]
+            h4_sup_sorted = sorted(h4_lows)
+            h4_supports = h4_sup_sorted[:2]
 
-        # 4H support: bottom 2 lows
-        h4_sup_sorted = sorted(h4_lows)
-        h4_supports = h4_sup_sorted[:2]
+            h4_oldest_close = h4_closes[-1]
+            h4_change = ((d_current - h4_oldest_close) / h4_oldest_close) * 100
 
-        # 32h trend
-        h4_oldest_close = h4_closes[-1]
-        h4_change = ((d_current - h4_oldest_close) / h4_oldest_close) * 100
-
-        # Determine trend label
-        if d_change_5d > 3:
-            trend_5d = "Strong Uptrend"
-        elif d_change_5d > 1:
-            trend_5d = "Mild Uptrend"
-        elif d_change_5d < -3:
-            trend_5d = "Strong Downtrend"
-        elif d_change_5d < -1:
-            trend_5d = "Mild Downtrend"
-        else:
-            trend_5d = "Consolidating"
-
-        context = (
-            f"{pair_label} CHART CONTEXT:\n"
-            f"  5D: High={_fmt(d_high_5d)} Low={_fmt(d_low_5d)} Current={_fmt(d_current)} ({d_change_5d:+.1f}%) Trend: {trend_5d}\n"
-            f"  32H: {h4_change:+.1f}% from 32h ago\n"
-            f"  Daily Resistance: {_fmt(d_resistances[0])}"
-            + (f", {_fmt(d_resistances[1])}" if len(d_resistances) > 1 and d_resistances[1] != d_resistances[0] else "")
-            + f" | 4H Resistance: {_fmt(h4_resistances[0])}"
-            + (f", {_fmt(h4_resistances[1])}" if len(h4_resistances) > 1 and h4_resistances[1] != h4_resistances[0] else "")
-            + f"\n"
-            f"  Daily Support: {_fmt(d_supports[0])}"
-            + (f", {_fmt(d_supports[1])}" if len(d_supports) > 1 and d_supports[1] != d_supports[0] else "")
-            + f" | 4H Support: {_fmt(h4_supports[0])}"
-            + (f", {_fmt(h4_supports[1])}" if len(h4_supports) > 1 and h4_supports[1] != h4_supports[0] else "")
-        )
-
-        # === V3.2.61: 12H INTRADAY PRICE ACTION — tier-specific granularity ===
-        # T1=1h (12 candles), T2=30m (24 candles), T3=15m (48 candles)
-        # Gives Judge actual OHLC data to assess entry timing (peak vs dip vs chop).
-        _TIER_CANDLE_CONFIG = {1: ("1h", 13), 2: ("30m", 25), 3: ("15m", 49)}
-        _gran, _limit = _TIER_CANDLE_CONFIG.get(tier, ("1h", 13))
-        try:
-            _url_intra = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity={_gran}&limit={_limit}"
-            _r_intra = requests.get(_url_intra, timeout=10)
-            _candles_intra = _r_intra.json()
-
-            if isinstance(_candles_intra, list) and len(_candles_intra) >= 4:
-                # Skip [0] (current partial), use [1:] = complete candles, newest first
-                _complete = _candles_intra[1:]
-                # Reverse to chronological order (oldest → newest)
-                _complete = list(reversed(_complete))
-
-                _intra_lines = [f"\n=== 12H PRICE ACTION ({_gran} candles, {len(_complete)} bars) ==="]
-                _intra_lines.append(f"{'Time(UTC)':<10} {'Open':>10} {'High':>10} {'Low':>10} {'Close':>10} {'Chg%':>7}")
-
-                _all_highs = []
-                _all_lows = []
-                _all_closes = []
-
-                for _c in _complete:
-                    _ts = int(_c[0]) // 1000 if int(_c[0]) > 1e12 else int(_c[0])
-                    _t_str = datetime.datetime.utcfromtimestamp(_ts).strftime("%H:%M")
-                    _o = float(_c[1])
-                    _h = float(_c[2])
-                    _l = float(_c[3])
-                    _cl = float(_c[4])
-                    _chg = ((_cl - _o) / _o) * 100 if _o > 0 else 0
-                    _all_highs.append(_h)
-                    _all_lows.append(_l)
-                    _all_closes.append(_cl)
-                    _intra_lines.append(f"{_t_str:<10} {_fmt(_o):>10} {_fmt(_h):>10} {_fmt(_l):>10} {_fmt(_cl):>10} {_chg:>+6.2f}%")
-
-                # Trend summary: computed from candle data
-                _range_high = max(_all_highs)
-                _range_low = min(_all_lows)
-                _range_pct = ((_range_high - _range_low) / _range_low) * 100 if _range_low > 0 else 0
-                _pos_in_range = ((d_current - _range_low) / (_range_high - _range_low)) * 100 if (_range_high - _range_low) > 0 else 50
-
-                # First-half vs second-half average close to detect direction
-                _half = len(_all_closes) // 2
-                _first_half_avg = sum(_all_closes[:_half]) / _half if _half > 0 else d_current
-                _second_half_avg = sum(_all_closes[_half:]) / (len(_all_closes) - _half) if (len(_all_closes) - _half) > 0 else d_current
-                _trend_chg = ((_second_half_avg - _first_half_avg) / _first_half_avg) * 100 if _first_half_avg > 0 else 0
-
-                # Recent 3-candle momentum vs earlier
-                _recent_3_avg = sum(_all_closes[-3:]) / 3 if len(_all_closes) >= 3 else d_current
-                _earlier_3_avg = sum(_all_closes[:3]) / 3 if len(_all_closes) >= 3 else d_current
-                _recent_move = ((_recent_3_avg - _earlier_3_avg) / _earlier_3_avg) * 100 if _earlier_3_avg > 0 else 0
-
-                # Build trend description
-                if _pos_in_range >= 85:
-                    _pos_label = "AT TOP OF RANGE — potential peak entry"
-                elif _pos_in_range >= 65:
-                    _pos_label = "upper half of range"
-                elif _pos_in_range <= 15:
-                    _pos_label = "AT BOTTOM OF RANGE — potential dip entry"
-                elif _pos_in_range <= 35:
-                    _pos_label = "lower half of range"
-                else:
-                    _pos_label = "mid-range"
-
-                _intra_lines.append(f"12H Range: {_fmt(_range_low)} – {_fmt(_range_high)} ({_range_pct:.1f}%) | Current at {_pos_in_range:.0f}% of range ({_pos_label})")
-                _intra_lines.append(f"12H Trend: first-half→second-half {_trend_chg:+.2f}% | Recent 3-bar vs earliest 3-bar: {_recent_move:+.2f}%")
-
-                context += "\n" + "\n".join(_intra_lines)
-                print(f"  [CHART-CTX] {pair_label} 12H ({_gran}): range {_range_pct:.1f}%, pos {_pos_in_range:.0f}%, trend {_trend_chg:+.2f}%")
+            if d_change_5d > 3:
+                trend_5d = "Strong Uptrend"
+            elif d_change_5d > 1:
+                trend_5d = "Mild Uptrend"
+            elif d_change_5d < -3:
+                trend_5d = "Strong Downtrend"
+            elif d_change_5d < -1:
+                trend_5d = "Mild Downtrend"
             else:
-                print(f"  [CHART-CTX] {pair_label}: {_gran} candle data insufficient ({len(_candles_intra) if isinstance(_candles_intra, list) else 0})")
-        except Exception as _intra_err:
-            print(f"  [CHART-CTX] {pair_label}: {_gran} candle fetch error: {_intra_err}")
+                trend_5d = "Consolidating"
 
-        print(f"  [CHART-CTX] {pair_label}: 5D {d_change_5d:+.1f}%, 32H {h4_change:+.1f}%, "
-              f"Res={_fmt(d_resistances[0])}/{_fmt(h4_resistances[0])}, "
-              f"Sup={_fmt(d_supports[0])}/{_fmt(h4_supports[0])}")
+            _struct = (
+                f"{pair_label} CHART CONTEXT:\n"
+                f"  5D: High={_fmt(d_high_5d)} Low={_fmt(d_low_5d)} Current={_fmt(d_current)} ({d_change_5d:+.1f}%) Trend: {trend_5d}\n"
+                f"  32H: {h4_change:+.1f}% from 32h ago\n"
+                f"  Daily Resistance: {_fmt(d_resistances[0])}"
+                + (f", {_fmt(d_resistances[1])}" if len(d_resistances) > 1 and d_resistances[1] != d_resistances[0] else "")
+                + f" | 4H Resistance: {_fmt(h4_resistances[0])}"
+                + (f", {_fmt(h4_resistances[1])}" if len(h4_resistances) > 1 and h4_resistances[1] != h4_resistances[0] else "")
+                + f"\n"
+                f"  Daily Support: {_fmt(d_supports[0])}"
+                + (f", {_fmt(d_supports[1])}" if len(d_supports) > 1 and d_supports[1] != d_supports[0] else "")
+                + f" | 4H Support: {_fmt(h4_supports[0])}"
+                + (f", {_fmt(h4_supports[1])}" if len(h4_supports) > 1 and h4_supports[1] != h4_supports[0] else "")
+            )
+            context_parts.append(_struct)
+            print(f"  [CHART-CTX] {pair_label}: 5D {d_change_5d:+.1f}%, 32H {h4_change:+.1f}%, "
+                  f"Res={_fmt(d_resistances[0])}/{_fmt(h4_resistances[0])}, "
+                  f"Sup={_fmt(d_supports[0])}/{_fmt(h4_supports[0])}")
+    except Exception as _struct_err:
+        print(f"  [CHART-CTX] {pair_label}: 1D/4H structure error: {_struct_err}")
 
+    # === PART 2: 12H INTRADAY PRICE ACTION (V3.2.61) — ALWAYS attempted ===
+    # This is the CRITICAL data: actual candle-by-candle price action so Judge
+    # can see peaks, dips, chop, run-ups. Without this, Judge enters blind.
+    # T1=1h (12 candles), T2=30m (24 candles), T3=15m (48 candles)
+    _TIER_CANDLE_CONFIG = {1: ("1h", 13), 2: ("30m", 25), 3: ("15m", 49)}
+    _gran, _limit = _TIER_CANDLE_CONFIG.get(tier, ("1h", 13))
+    try:
+        _url_intra = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity={_gran}&limit={_limit}"
+        _r_intra = requests.get(_url_intra, timeout=10)
+        _candles_intra = _r_intra.json()
+
+        # V3.2.61 fix: if 30m fails (unsupported?), fall back to 15m
+        if not isinstance(_candles_intra, list) or len(_candles_intra) < 4:
+            if _gran == "30m":
+                print(f"  [CHART-CTX] {pair_label}: 30m not supported, falling back to 15m")
+                _gran = "15m"
+                _limit = 49  # 48 complete candles = 12h
+                _url_intra = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity={_gran}&limit={_limit}"
+                _r_intra = requests.get(_url_intra, timeout=10)
+                _candles_intra = _r_intra.json()
+
+        if isinstance(_candles_intra, list) and len(_candles_intra) >= 4:
+            # Skip [0] (current partial), use [1:] = complete candles (newest first from API)
+            _complete = _candles_intra[1:]
+            # Reverse to chronological order (oldest → newest)
+            _complete = list(reversed(_complete))
+
+            _intra_lines = [f"\n=== 12H PRICE ACTION ({_gran} candles, {len(_complete)} bars) ==="]
+            _intra_lines.append(f"{'Time(UTC)':<10} {'Open':>10} {'High':>10} {'Low':>10} {'Close':>10} {'Chg%':>7}")
+
+            _all_highs = []
+            _all_lows = []
+            _all_closes = []
+
+            for _c in _complete:
+                _ts = int(_c[0]) // 1000 if int(_c[0]) > 1e12 else int(_c[0])
+                _t_str = datetime.utcfromtimestamp(_ts).strftime("%H:%M")
+                _o = float(_c[1])
+                _h = float(_c[2])
+                _l = float(_c[3])
+                _cl = float(_c[4])
+                _chg = ((_cl - _o) / _o) * 100 if _o > 0 else 0
+                _all_highs.append(_h)
+                _all_lows.append(_l)
+                _all_closes.append(_cl)
+                _intra_lines.append(f"{_t_str:<10} {_fmt(_o):>10} {_fmt(_h):>10} {_fmt(_l):>10} {_fmt(_cl):>10} {_chg:>+6.2f}%")
+
+            # Trend summary from intraday candles
+            _range_high = max(_all_highs)
+            _range_low = min(_all_lows)
+            _range_pct = ((_range_high - _range_low) / _range_low) * 100 if _range_low > 0 else 0
+            # Use latest intraday close as current price (more reliable than 1D partial)
+            _intra_current = _all_closes[-1] if _all_closes else d_current
+            if d_current is None:
+                d_current = _intra_current
+            _pos_in_range = ((_intra_current - _range_low) / (_range_high - _range_low)) * 100 if (_range_high - _range_low) > 0 else 50
+
+            # First-half vs second-half average close to detect direction
+            _half = len(_all_closes) // 2
+            _first_half_avg = sum(_all_closes[:_half]) / _half if _half > 0 else _intra_current
+            _second_half_avg = sum(_all_closes[_half:]) / (len(_all_closes) - _half) if (len(_all_closes) - _half) > 0 else _intra_current
+            _trend_chg = ((_second_half_avg - _first_half_avg) / _first_half_avg) * 100 if _first_half_avg > 0 else 0
+
+            # Recent 3-candle momentum vs earlier
+            _recent_3_avg = sum(_all_closes[-3:]) / 3 if len(_all_closes) >= 3 else _intra_current
+            _earlier_3_avg = sum(_all_closes[:3]) / 3 if len(_all_closes) >= 3 else _intra_current
+            _recent_move = ((_recent_3_avg - _earlier_3_avg) / _earlier_3_avg) * 100 if _earlier_3_avg > 0 else 0
+
+            # Build trend description — this is what tells Judge "don't enter at peak"
+            if _pos_in_range >= 85:
+                _pos_label = "AT TOP OF RANGE — potential peak entry"
+            elif _pos_in_range >= 65:
+                _pos_label = "upper half of range"
+            elif _pos_in_range <= 15:
+                _pos_label = "AT BOTTOM OF RANGE — potential dip entry"
+            elif _pos_in_range <= 35:
+                _pos_label = "lower half of range"
+            else:
+                _pos_label = "mid-range"
+
+            _intra_lines.append(f"12H Range: {_fmt(_range_low)} – {_fmt(_range_high)} ({_range_pct:.1f}%) | Current at {_pos_in_range:.0f}% of range ({_pos_label})")
+            _intra_lines.append(f"12H Trend: first-half→second-half {_trend_chg:+.2f}% | Recent 3-bar vs earliest 3-bar: {_recent_move:+.2f}%")
+
+            context_parts.append("\n".join(_intra_lines))
+            print(f"  [CHART-CTX] {pair_label} 12H ({_gran}): {len(_complete)} bars, range {_range_pct:.1f}%, pos {_pos_in_range:.0f}% ({_pos_label}), trend {_trend_chg:+.2f}%")
+        else:
+            _detail = f"type={type(_candles_intra).__name__}, len={len(_candles_intra) if isinstance(_candles_intra, list) else 'N/A'}"
+            if isinstance(_candles_intra, dict):
+                _detail += f", resp={str(_candles_intra)[:200]}"
+            print(f"  [CHART-CTX] {pair_label}: {_gran} candle data insufficient ({_detail})")
+    except Exception as _intra_err:
+        print(f"  [CHART-CTX] {pair_label}: {_gran} candle fetch error: {_intra_err}")
+
+    # Build final context — even if only 12H price action available, that's the critical data
+    if context_parts:
+        context = "\n".join(context_parts)
         _chart_context_cache[symbol] = context
         return context
-
-    except Exception as e:
-        fallback = f"{pair_label}: Chart context unavailable ({e})"
+    else:
+        fallback = f"{pair_label}: Chart context unavailable (all candle fetches failed)"
         print(f"  [CHART-CTX] {fallback}")
         _chart_context_cache[symbol] = fallback
         return fallback
@@ -2005,7 +2030,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.61-PriceAction12H-TPCeilingFix-RRGuard"
+PIPELINE_VERSION = "SMT-v3.2.62-ChartCtxFix-12HPriceAction"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3595,10 +3620,12 @@ class JudgePersona:
                     whale_dual_text = "\n".join(_wparts)
 
         # V3.2.61: Multi-TF chart context + 12H price action for Gemini Judge
+        # Now resilient: 12H price action fetched independently from 1D/4H.
+        # Even if 1D/4H fails, 12H candle data still reaches the Judge.
         chart_context_text = ""
         try:
             chart_ctx = get_chart_context(symbol, tier=tier)
-            if chart_ctx and "unavailable" not in chart_ctx and "insufficient" not in chart_ctx:
+            if chart_ctx and "all candle fetches failed" not in chart_ctx:
                 chart_context_text = chart_ctx
         except Exception as _ctx_err:
             print(f"  [JUDGE] Chart context error: {_ctx_err}")
@@ -3709,9 +3736,8 @@ class JudgePersona:
             macro_event_text = "Event detection unavailable."
 
         _hold_windows = {"BTC": "3H", "ETH": "3H", "BNB": "2H", "LTC": "2H", "XRP": "2H", "SOL": "1.5H", "ADA": "1.5H"}
-        _tp_ceilings = {"BTC": "1.5%", "ETH": "1.5%", "BNB": "1.0%", "LTC": "1.0%", "XRP": "1.0%", "SOL": "2.0%", "ADA": "1.0%"}
         _pair_hold = _hold_windows.get(pair, "2H")
-        _pair_tp_cap = _tp_ceilings.get(pair, "1.0%")
+        _pair_tp_cap = f"{PAIR_TP_CEILING.get(pair, 1.0):.1f}%"  # V3.2.61: read from actual config
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
 LONGS ONLY — shorts are disabled.
 Your job: analyze all signals and decide the SINGLE BEST action for {pair} over the NEXT {_pair_hold} (hard limit — daemon kills the trade at this time).
