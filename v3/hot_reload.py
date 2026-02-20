@@ -8,7 +8,7 @@ def get_settings():
     if time.time() - _last_load < 60 and _cache:
         return _cache
     _last_load = time.time()
-    defaults = {"confidence_threshold": 0.85, "pause_trading": False, "emergency_exit_all": False, "enable_longs": True, "enable_shorts": False, "tp_multiplier": 1.0, "sl_multiplier": 1.0}
+    defaults = {"confidence_threshold": 0.85, "pause_trading": False, "emergency_exit_all": False, "enable_longs": True, "enable_shorts": True, "tp_multiplier": 1.0, "sl_multiplier": 1.0}
     try:
         if os.path.exists(SETTINGS_FILE):
             with open(SETTINGS_FILE) as f:
