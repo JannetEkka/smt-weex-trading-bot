@@ -4869,29 +4869,64 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
 
 
 def get_recent_close_order_id(symbol: str) -> Optional[int]:
-    """V3.2.40: Query WEEX for the most recently filled close order for a symbol.
+    """V3.2.40 / V3.2.48-fix: Query WEEX for the most recently filled close order for a symbol.
     Used to attach a close orderId to the AI log when WEEX auto-executes a TP/SL trigger.
     Returns None on failure — AI log still uploads, just without orderId.
+
+    V3.2.48: Fixed endpoint — was using /capi/v2/order/orders?status=2 which returns HTTP 404.
+    Now uses /capi/v2/order/fills (correct WEEX endpoint for filled trades) as primary,
+    with /capi/v2/order/current as fallback.
     """
     pair = symbol.replace("cmt_", "").upper()
+
+    # PRIMARY: /capi/v2/order/fills — returns fill records with orderId + direction
+    # direction values: "close_long", "close_short", "open_long", "open_short"
     try:
-        endpoint = f"/capi/v2/order/orders?symbol={symbol}&status=2"
+        endpoint = f"/capi/v2/order/fills?symbol={symbol}&limit=20"
         r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=10)
-        if r.status_code != 200:
-            print(f"  [AI-LOG] get_recent_close_order_id {pair}: HTTP {r.status_code}", flush=True)
-            return None
-        resp = r.json()
-        orders = resp if isinstance(resp, list) else (resp.get("data") or [])
-        print(f"  [AI-LOG] get_recent_close_order_id {pair}: {len(orders)} order(s) returned (status=2)", flush=True)
-        # Filter for close order types (3=close long, 4=close short)
-        close_orders = [o for o in orders if str(o.get("type", "")) in ("3", "4")]
-        if close_orders:
-            oid = close_orders[0].get("order_id")
-            print(f"  [AI-LOG] {pair} close orderId found: {oid}", flush=True)
-            return int(oid) if oid and str(oid).isdigit() else None
-        print(f"  [AI-LOG] {pair}: no close-type orders in response — raw[0]={orders[0] if orders else 'empty'}", flush=True)
+        if r.status_code == 200:
+            resp = r.json()
+            fills = resp if isinstance(resp, list) else (resp.get("data") or [])
+            print(f"  [AI-LOG] get_recent_close_order_id {pair}: {len(fills)} fill(s) from /fills", flush=True)
+            # Filter for close fills
+            close_fills = [f for f in fills if str(f.get("direction", "")).startswith("close")]
+            if not close_fills:
+                # Also check 'type' field — some WEEX responses use type 3/4 for close orders
+                close_fills = [f for f in fills if str(f.get("type", "")) in ("3", "4")]
+            if close_fills:
+                oid = close_fills[0].get("orderId") or close_fills[0].get("order_id")
+                print(f"  [AI-LOG] {pair} close orderId found (fills): {oid}", flush=True)
+                return int(oid) if oid and str(oid).isdigit() else None
+            print(f"  [AI-LOG] {pair}: no close fills in /fills response", flush=True)
+        else:
+            print(f"  [AI-LOG] get_recent_close_order_id {pair}: /fills HTTP {r.status_code}", flush=True)
     except Exception as e:
-        print(f"  [AI-LOG] get_recent_close_order_id {pair} error: {e}", flush=True)
+        print(f"  [AI-LOG] get_recent_close_order_id {pair} /fills error: {e}", flush=True)
+
+    # FALLBACK: /capi/v2/order/current — returns all orders, filter client-side for filled closes
+    try:
+        endpoint = f"/capi/v2/order/current?symbol={symbol}&limit=20"
+        r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=10)
+        if r.status_code == 200:
+            resp = r.json()
+            orders = resp if isinstance(resp, list) else (resp.get("data") or [])
+            print(f"  [AI-LOG] get_recent_close_order_id {pair}: {len(orders)} order(s) from /current", flush=True)
+            # Filter for filled close orders (status=filled, type=close_long/close_short or 3/4)
+            close_orders = [
+                o for o in orders
+                if (str(o.get("status", "")) in ("filled", "2") and
+                    (str(o.get("type", "")).startswith("close") or str(o.get("type", "")) in ("3", "4")))
+            ]
+            if close_orders:
+                oid = close_orders[0].get("orderId") or close_orders[0].get("order_id")
+                print(f"  [AI-LOG] {pair} close orderId found (current): {oid}", flush=True)
+                return int(oid) if oid and str(oid).isdigit() else None
+            print(f"  [AI-LOG] {pair}: no filled close orders in /current response", flush=True)
+        else:
+            print(f"  [AI-LOG] get_recent_close_order_id {pair}: /current HTTP {r.status_code}", flush=True)
+    except Exception as e:
+        print(f"  [AI-LOG] get_recent_close_order_id {pair} /current error: {e}", flush=True)
+
     return None
 
 
