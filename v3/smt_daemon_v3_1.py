@@ -3338,8 +3338,9 @@ def run_daemon():
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
     logger.info("  Pairs: BTC, ETH, BNB, LTC, XRP, SOL, ADA (7)")
-    logger.info("  Max slots: 4 flat + 5th for 90%%+ signals | Leverage: 20x flat | Shorts: ALL pairs")
-    logger.info("  When full: signals <90%% skip; signals >=90%% open extra slot")
+    logger.info("  Max slots: 1 (cross-margin defense — full account as buffer) | Leverage: 20x flat | Shorts: ALL pairs")
+    logger.info("  Sizing: 80-84%%=20%%, 85-89%%=35%%, 90%%+=50%% of sizing_base (SOL capped 30%%)")
+    logger.info("  Circuit breaker: 60min+ cooldown after SL/force stop | Breakeven SL at +0.4%%")
     # --- Confidence & entry filters ---
     logger.info("ENTRY FILTERS:")
     logger.info("  MIN_CONFIDENCE: 80%% HARD FLOOR — no exceptions, no discounts, no overrides")
@@ -3364,10 +3365,10 @@ def run_daemon():
     logger.info("  FLOW walls in Judge prompt: ask/bid walls from 200-level order book (context, not hard override)")
     logger.info("  Gemini Judge: sees chart structure (1D+4H) + FLOW walls + chop → returns tp_price")
     # --- Position sizing ---
-    logger.info("POSITION SIZING:")
-    logger.info("  sizing_base = max(min(equity, balance * 2.5), balance)")
-    logger.info("  base_size = sizing_base * 0.25 (conf tiers: 80-84%%=1.0x, 85-89%%=1.25x, 90%%+=1.5x)")
-    logger.info("  per_slot_cap = (sizing_base * 0.85) / max_slots")
+    logger.info("POSITION SIZING (V3.2.46 confidence-scaled):")
+    logger.info("  sizing_base = max(min(available, balance * 2.5), 1000)")
+    logger.info("  80-84%%: sizing_base * 0.20 | 85-89%%: sizing_base * 0.35 | 90%%+: sizing_base * 0.50")
+    logger.info("  SOL cap: 30%% of sizing_base (high beta) | Single slot = full account buffer")
     # --- Opposite swap ---
     logger.info("OPPOSITE SWAP (V3.1.100):")
     logger.info("  Block flip if position < 20min old or >= 30%% toward TP")
