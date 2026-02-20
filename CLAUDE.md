@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.57** — all production code is in `v3/`.
+**Current version: V3.2.58** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -391,7 +391,11 @@ Bump the version number in the daemon startup banner and any new scripts.
 Current: V3.2.57. Next change should be V3.2.58.
 
 **Recent version history:**
-- V3.2.57: (**CURRENT**) BlitzMode final 72h — velocity exit + confidence 85% + cooldown reduction + Judge hold-time awareness.
+- V3.2.58: (**CURRENT**) Altcoin execution priority — sort key changed to `(confidence desc, tier desc)` so T3 > T2 > T1 at equal confidence.
+  Fixes: BTC/ETH crowding out altcoins at same 85% threshold. When multiple pairs hit the same confidence, altcoins now execute first.
+  Example: BTC SHORT 85% + XRP LONG 85% in same cycle → XRP wins the slot (T2 > T1). Higher confidence always wins regardless of tier.
+  `PIPELINE_VERSION = "SMT-v3.2.58-AltcoinPriority-TierTiebreak"`.
+- V3.2.57: BlitzMode final 72h — velocity exit + confidence 85% + cooldown reduction + Judge hold-time awareness. (superseded by V3.2.58)
   `MIN_CONFIDENCE_TO_TRADE` 80%→85%: In 1-slot mode, 80-84% trades at 20% sizing block the slot from better 90%+ signals.
   All trades now 35-50% of sizing_base (85-89%=35%, 90%+=50%). The 20% tier is eliminated.
   `$1000 sizing floor` lowered to $500 — ensures meaningful position size during drawdowns while reducing artificial inflation.
