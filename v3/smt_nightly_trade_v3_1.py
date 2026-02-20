@@ -1352,11 +1352,14 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
 _chart_context_cache = {}
 _chart_context_cache_time = 0
 
-def get_chart_context(symbol: str) -> str:
-    """V3.2.16: Build compact multi-TF chart context string for Gemini Judge.
+def get_chart_context(symbol: str, tier: int = 1) -> str:
+    """V3.2.61: Build multi-TF chart context + 12H price action candles for Gemini Judge.
 
-    Pulls 1D candles (5 complete days) and 4H candles (8 complete = 32h).
-    Returns a text block with trend, S/R levels, and 5D range.
+    Pulls 1D candles (5 complete days), 4H candles (8 complete = 32h),
+    AND tier-specific intraday candles (12H) so the Judge can see actual price action.
+      T1 (BTC/ETH): 1h candles × 12 = 12h
+      T2 (BNB/LTC/XRP): 30m candles × 24 = 12h
+      T3 (SOL/ADA): 15m candles × 48 = 12h
     Cached for 10 minutes (same as signal check interval).
     """
     global _chart_context_cache, _chart_context_cache_time
@@ -1370,6 +1373,15 @@ def get_chart_context(symbol: str) -> str:
         _chart_context_cache_time = now
 
     pair_label = symbol.replace("cmt_", "").replace("usdt", "").upper()
+
+    # Format price with appropriate decimals
+    def _fmt(p):
+        if p >= 1000:
+            return f"${p:,.1f}"
+        elif p >= 1:
+            return f"${p:.4f}"
+        else:
+            return f"${p:.6f}"
 
     try:
         # === 1D candles: 6 candles → skip [0] (current partial), use [1:6] = 5 complete days ===
@@ -1438,15 +1450,6 @@ def get_chart_context(symbol: str) -> str:
         else:
             trend_5d = "Consolidating"
 
-        # Format price with appropriate decimals
-        def _fmt(p):
-            if p >= 1000:
-                return f"${p:,.1f}"
-            elif p >= 1:
-                return f"${p:.4f}"
-            else:
-                return f"${p:.6f}"
-
         context = (
             f"{pair_label} CHART CONTEXT:\n"
             f"  5D: High={_fmt(d_high_5d)} Low={_fmt(d_low_5d)} Current={_fmt(d_current)} ({d_change_5d:+.1f}%) Trend: {trend_5d}\n"
@@ -1461,6 +1464,81 @@ def get_chart_context(symbol: str) -> str:
             + f" | 4H Support: {_fmt(h4_supports[0])}"
             + (f", {_fmt(h4_supports[1])}" if len(h4_supports) > 1 and h4_supports[1] != h4_supports[0] else "")
         )
+
+        # === V3.2.61: 12H INTRADAY PRICE ACTION — tier-specific granularity ===
+        # T1=1h (12 candles), T2=30m (24 candles), T3=15m (48 candles)
+        # Gives Judge actual OHLC data to assess entry timing (peak vs dip vs chop).
+        _TIER_CANDLE_CONFIG = {1: ("1h", 13), 2: ("30m", 25), 3: ("15m", 49)}
+        _gran, _limit = _TIER_CANDLE_CONFIG.get(tier, ("1h", 13))
+        try:
+            _url_intra = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity={_gran}&limit={_limit}"
+            _r_intra = requests.get(_url_intra, timeout=10)
+            _candles_intra = _r_intra.json()
+
+            if isinstance(_candles_intra, list) and len(_candles_intra) >= 4:
+                # Skip [0] (current partial), use [1:] = complete candles, newest first
+                _complete = _candles_intra[1:]
+                # Reverse to chronological order (oldest → newest)
+                _complete = list(reversed(_complete))
+
+                _intra_lines = [f"\n=== 12H PRICE ACTION ({_gran} candles, {len(_complete)} bars) ==="]
+                _intra_lines.append(f"{'Time(UTC)':<10} {'Open':>10} {'High':>10} {'Low':>10} {'Close':>10} {'Chg%':>7}")
+
+                _all_highs = []
+                _all_lows = []
+                _all_closes = []
+
+                for _c in _complete:
+                    _ts = int(_c[0]) // 1000 if int(_c[0]) > 1e12 else int(_c[0])
+                    _t_str = datetime.datetime.utcfromtimestamp(_ts).strftime("%H:%M")
+                    _o = float(_c[1])
+                    _h = float(_c[2])
+                    _l = float(_c[3])
+                    _cl = float(_c[4])
+                    _chg = ((_cl - _o) / _o) * 100 if _o > 0 else 0
+                    _all_highs.append(_h)
+                    _all_lows.append(_l)
+                    _all_closes.append(_cl)
+                    _intra_lines.append(f"{_t_str:<10} {_fmt(_o):>10} {_fmt(_h):>10} {_fmt(_l):>10} {_fmt(_cl):>10} {_chg:>+6.2f}%")
+
+                # Trend summary: computed from candle data
+                _range_high = max(_all_highs)
+                _range_low = min(_all_lows)
+                _range_pct = ((_range_high - _range_low) / _range_low) * 100 if _range_low > 0 else 0
+                _pos_in_range = ((d_current - _range_low) / (_range_high - _range_low)) * 100 if (_range_high - _range_low) > 0 else 50
+
+                # First-half vs second-half average close to detect direction
+                _half = len(_all_closes) // 2
+                _first_half_avg = sum(_all_closes[:_half]) / _half if _half > 0 else d_current
+                _second_half_avg = sum(_all_closes[_half:]) / (len(_all_closes) - _half) if (len(_all_closes) - _half) > 0 else d_current
+                _trend_chg = ((_second_half_avg - _first_half_avg) / _first_half_avg) * 100 if _first_half_avg > 0 else 0
+
+                # Recent 3-candle momentum vs earlier
+                _recent_3_avg = sum(_all_closes[-3:]) / 3 if len(_all_closes) >= 3 else d_current
+                _earlier_3_avg = sum(_all_closes[:3]) / 3 if len(_all_closes) >= 3 else d_current
+                _recent_move = ((_recent_3_avg - _earlier_3_avg) / _earlier_3_avg) * 100 if _earlier_3_avg > 0 else 0
+
+                # Build trend description
+                if _pos_in_range >= 85:
+                    _pos_label = "AT TOP OF RANGE — potential peak entry"
+                elif _pos_in_range >= 65:
+                    _pos_label = "upper half of range"
+                elif _pos_in_range <= 15:
+                    _pos_label = "AT BOTTOM OF RANGE — potential dip entry"
+                elif _pos_in_range <= 35:
+                    _pos_label = "lower half of range"
+                else:
+                    _pos_label = "mid-range"
+
+                _intra_lines.append(f"12H Range: {_fmt(_range_low)} – {_fmt(_range_high)} ({_range_pct:.1f}%) | Current at {_pos_in_range:.0f}% of range ({_pos_label})")
+                _intra_lines.append(f"12H Trend: first-half→second-half {_trend_chg:+.2f}% | Recent 3-bar vs earliest 3-bar: {_recent_move:+.2f}%")
+
+                context += "\n" + "\n".join(_intra_lines)
+                print(f"  [CHART-CTX] {pair_label} 12H ({_gran}): range {_range_pct:.1f}%, pos {_pos_in_range:.0f}%, trend {_trend_chg:+.2f}%")
+            else:
+                print(f"  [CHART-CTX] {pair_label}: {_gran} candle data insufficient ({len(_candles_intra) if isinstance(_candles_intra, list) else 0})")
+        except Exception as _intra_err:
+            print(f"  [CHART-CTX] {pair_label}: {_gran} candle fetch error: {_intra_err}")
 
         print(f"  [CHART-CTX] {pair_label}: 5D {d_change_5d:+.1f}%, 32H {h4_change:+.1f}%, "
               f"Res={_fmt(d_resistances[0])}/{_fmt(h4_resistances[0])}, "
@@ -1927,7 +2005,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.61-TPCeilingFix-RRGuard"
+PIPELINE_VERSION = "SMT-v3.2.61-PriceAction12H-TPCeilingFix-RRGuard"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3516,10 +3594,10 @@ class JudgePersona:
                 if _wparts:
                     whale_dual_text = "\n".join(_wparts)
 
-        # V3.2.16: Multi-TF chart context for Gemini Judge — 1D + 4H structural levels
+        # V3.2.61: Multi-TF chart context + 12H price action for Gemini Judge
         chart_context_text = ""
         try:
-            chart_ctx = get_chart_context(symbol)
+            chart_ctx = get_chart_context(symbol, tier=tier)
             if chart_ctx and "unavailable" not in chart_ctx and "insufficient" not in chart_ctx:
                 chart_context_text = chart_ctx
         except Exception as _ctx_err:
@@ -3651,8 +3729,14 @@ Funding rate (BTC): {regime.get('btc_funding', 0):.6f}
 === PERSONA VOTES FOR {pair} (Tier {tier}: {tier_config['name']}) ===
 {personas_text}
 
-=== CHART STRUCTURE (1D + 4H) ===
+=== CHART STRUCTURE + 12H PRICE ACTION ===
 {chart_context_text if chart_context_text else "Chart data unavailable — use persona votes only."}
+CRITICAL — USE THE 12H PRICE ACTION TABLE ABOVE TO ASSESS ENTRY TIMING:
+- If current price is at 85%+ of the 12H range = potential PEAK. Do NOT enter LONG unless FLOW shows extreme buying AND price is actively breaking higher.
+- If current price is at 15% or below of the 12H range = potential DIP. LONG entries here are the strategy's sweet spot.
+- If the 12H range is very tight (<0.5%) = CHOP/CONSOLIDATION. Prefer WAIT unless a clear breakout is forming.
+- Look at the candle-by-candle progression: if price just ran up 2%+ in the last few hours, the move may be exhausted.
+- The Chg% column on each candle shows the candle's open-to-close change — a string of positive candles followed by a small negative = potential reversal.
 
 === SIGNAL CYCLE HISTORY (V3.2.17) ===
 {signal_history_text if signal_history_text else "No recent signal history (first cycle or all signals expired)."}
