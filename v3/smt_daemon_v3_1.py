@@ -2972,8 +2972,12 @@ def sync_tracker_with_weex():
                 _hold_h = (_now_sync - _opened_dt).total_seconds() / 3600
             except:
                 pass
-            _max_h = _tv.get("max_hold_hours", "?")
             _tier = _tv.get("tier", "?")
+            # V3.2.49: Always read max_hold from LIVE TIER_CONFIG, not stale trade state
+            try:
+                _max_h = TIER_CONFIG[int(_tier)]["max_hold_hours"]
+            except:
+                _max_h = _tv.get("max_hold_hours", "?")
             _synced = "synced" if _tv.get("synced") else "original"
             logger.info(f"  [{_tk}] T{_tier} {_tv.get('side','?')} opened={_opened_str[:19]} hold={_hold_h:.1f}h/{_max_h}h ({_synced})")
 
@@ -3429,7 +3433,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.49 - Final stretch hold times: T1=6h/2h, T2=4h/1.5h, T3=3h/1h (was 24/12/8h)")
+    logger.info("SMT Daemon V3.2.49 - Final stretch: T1=3h/1h, T2=2h/45m, T3=1.5h/30m (was 24/12/8h) — max at-bats")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3506,7 +3510,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.49: Final stretch hold times — T1: 24h→6h, T2: 12h→4h, T3: 8h→3h; early exit: T1: 6h→2h, T2: 4h→1.5h, T3: 3h→1h (72h left, single-slot, cut dead trades fast)")
+    logger.info("  V3.2.49: Final stretch — T1: 3h/1h, T2: 2h/45m, T3: 1.5h/30m (was 24/12/8h); sync display reads live TIER_CONFIG not stale trade state")
     logger.info("  V3.2.48: Macro blackout (PCE 13:15-14:00 UTC), weekend mode (BTC/ETH/SOL only), Emperor's Birthday thin-liq, funding hold-cost in Judge, ZRO unlock context")
     logger.info("  V3.2.45: Regex JSON parser for SENTIMENT+JUDGE (re.search(r'\\{.*\\}', re.DOTALL) — immune to grounding citation injection [1][2]); dynamic date in SENTIMENT search; no-citation prompt directive")
     logger.info("  V3.2.44: Full Gemini response visibility — removed [:200] on SENTIMENT reasoning, [:600] on JUDGE reasoning print, [:200] on Judge prompt persona summary; market_context no longer capped")
