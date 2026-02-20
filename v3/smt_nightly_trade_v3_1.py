@@ -1140,17 +1140,12 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         "levels": {"resistances": [], "supports": [], "htf_resistances": [], "htf_supports": []}
     }
 
-    # V3.2.24: MIN_TP_PCT removed — chart SR is the ground truth. Flooring to 0.3% was placing
-    # TP beyond real resistance; price rejected at SR and TP never filled, bleeding to SL instead.
-    # V3.2.36: MIN_VIABLE_TP_PCT added — skip SR levels < 0.20% from entry (entry IS the resistance).
-    # This is NOT a TP floor; it's a discard threshold. The walk continues to find the next level.
-    # V3.2.65: MIN_VIABLE_TP_PCT lowered to 0.15% — with 0.3% TP ceiling, we want chart SR to find
-    # the nearest level (even close ones). The ceiling does the capping; MIN_VIABLE just filters
-    # levels so close to entry they're noise (spread/tick noise). 0.15% = $100 on BTC, real level.
+    # V3.2.65: NO minimum TP floor. Chart SR is the TP, whatever distance it is.
+    # MAX ceiling is 0.5% (PAIR_TP_CEILING). There is no minimum — take the nearest SR level.
     MIN_SL_PCT = 1.0          # SL must be at least 1.0% from entry (20x = 20% margin loss min)
     MAX_SL_PCT = 1.5          # V3.2.41: SL ceiling — discard if 4H structure requires SL > 1.5%.
                               # 1.5% SL = 30% margin loss at 20x (survivable). Liquidation at ~4.5%.
-    MIN_VIABLE_TP_PCT = 0.15  # V3.2.65: lowered from 0.40 — 0.3% ceiling handles sizing; this just filters noise.
+    MIN_VIABLE_TP_PCT = 0.0   # V3.2.65: DISABLED — no minimum TP. 0.5% ceiling is the only gate.
 
     try:
         # === 1H candles — primary source for both TP and SL ===
@@ -1592,19 +1587,19 @@ COMPETITION_FALLBACK_SL = {
     3: 1.5,   # Tier 3: 1.8% → 1.5%
 }
 
-# V3.2.65: Per-pair TP ceiling — HARD 0.3% CAP for dip-bounce strategy.
+# V3.2.65: Per-pair TP ceiling — HARD 0.5% MAX for dip-bounce strategy.
 # Old 0.8-1.5% ceilings were unreachable in hold windows → breakeven SL fires → fees eat the trade.
-# 0.3% TP × 20x = 6% margin gain. Round-trip fees = 3.2% margin. Net ~2.8% per trade.
-# High win rate + fast rotation (10-min cycles) makes this profitable. Bank the bounce, re-enter.
+# 0.5% TP × 20x = 10% margin gain. Round-trip fees = 3.2% margin. Net ~6.8% per trade.
+# NO minimum TP — chart SR is the TP at whatever distance. 0.5% ceiling is the ONLY cap.
 # Ceiling-only: if chart SR < ceiling, use chart SR. Never raises a low TP.
 PAIR_TP_CEILING = {
-    "BTC": 0.3,    # Tier 1. Grab dip-bounce, exit fast.
-    "ETH": 0.3,    # Tier 1. Same philosophy.
-    "BNB": 0.3,    # Tier 2. Bank it.
-    "LTC": 0.3,    # Tier 2. Bank it.
-    "XRP": 0.3,    # Tier 2. Bank it.
-    "SOL": 0.3,    # Tier 3. High beta but still cap — re-enter if trend continues.
-    "ADA": 0.3,    # Tier 3. Bank it.
+    "BTC": 0.5,    # Tier 1. 0.5% max, bank the bounce.
+    "ETH": 0.5,    # Tier 1. Same.
+    "BNB": 0.5,    # Tier 2. Same.
+    "LTC": 0.5,    # Tier 2. Same.
+    "XRP": 0.5,    # Tier 2. Same.
+    "SOL": 0.5,    # Tier 3. Same.
+    "ADA": 0.5,    # Tier 3. Same.
 }
 
 # V3.2.41: Per-pair max position size. Default: MAX_SINGLE_POSITION_PCT = 0.50.
@@ -4672,7 +4667,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     if _gemini_tp and _gemini_tp > 0 and current_price > 0 and not chart_sr.get("tp_not_found"):
         if signal == "LONG" and _gemini_tp > current_price:
             _g_tp_pct = ((_gemini_tp - current_price) / current_price) * 100
-            if 0.15 <= _g_tp_pct <= 5.0:  # V3.2.65: lowered floor 0.3→0.15 to match MIN_VIABLE_TP_PCT
+            if 0 < _g_tp_pct <= 5.0:  # V3.2.65: no minimum floor — ceiling handles capping
                 print(f"  [TP/SL] GEMINI TP OVERRIDE (LONG): ${_gemini_tp:.4f} = {_g_tp_pct:.2f}% from ${current_price:.4f}")
                 chart_sr["tp_pct"] = round(_g_tp_pct, 2)
                 chart_sr["tp_price"] = _gemini_tp
@@ -4681,7 +4676,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
                 _gemini_tp_used = True
         elif signal == "SHORT" and _gemini_tp < current_price:
             _g_tp_pct = ((current_price - _gemini_tp) / current_price) * 100
-            if 0.15 <= _g_tp_pct <= 5.0:  # V3.2.65: lowered floor 0.3→0.15 to match MIN_VIABLE_TP_PCT
+            if 0 < _g_tp_pct <= 5.0:  # V3.2.65: no minimum floor — ceiling handles capping
                 print(f"  [TP/SL] GEMINI TP OVERRIDE (SHORT): ${_gemini_tp:.4f} = {_g_tp_pct:.2f}% from ${current_price:.4f}")
                 chart_sr["tp_pct"] = round(_g_tp_pct, 2)
                 chart_sr["tp_price"] = _gemini_tp
@@ -4729,47 +4724,21 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         print(f"  [TP/SL] {_reason}")
         return {"executed": False, "reason": _reason}
 
-    # V3.1.84: ATR safety net - if chart SL is tighter than 0.5x ATR, widen it
-    # Prevents noise stop-outs on volatile pairs even with chart-based SL
-    # V3.2.60: ATR-safety MUST NOT widen past MAX_SL_PCT (1.5%). Otherwise it blows R:R
-    # and the TP ceiling can never pass. ATR-safety is a floor, MAX_SL_PCT is the ceiling.
-    try:
-        _atr_check = get_pair_atr(symbol)
-        _atr_pct_check = _atr_check.get("atr_pct", 0)
-        if _atr_pct_check > 0:
-            _min_atr_sl = round(_atr_pct_check * 0.8, 2)  # At least 0.8x ATR
-            _max_sl_cap = MAX_SL_PCT * 100  # 1.5% — hard ceiling
-            _min_atr_sl = min(_min_atr_sl, _max_sl_cap)  # V3.2.60: never exceed ceiling
-            if sl_pct_raw < _min_atr_sl:
-                print(f"  [ATR-SAFETY] SL {sl_pct_raw:.2f}% < 0.8x ATR ({_atr_pct_check * 0.8:.2f}%), widening to {_min_atr_sl:.2f}% (capped at {_max_sl_cap:.1f}%)")
-                sl_pct_raw = _min_atr_sl
-                sl_pct = sl_pct_raw / 100
-                if signal == "LONG":
-                    sl_price = current_price * (1 - sl_pct)
-                else:
-                    sl_price = current_price * (1 + sl_pct)
-    except Exception:
-        pass
+    # V3.2.65: HALVE the SL — tighter stops for dip-bounce strategy.
+    # Chart SR gives structural SL (already capped at MAX_SL_PCT=1.5%). Halving it:
+    #   1.5% → 0.75%, 1.0% → 0.5%. Tighter risk, better R:R with 0.5% TP ceiling.
+    _sl_before_halve = sl_pct_raw
+    sl_pct_raw = round(sl_pct_raw / 2, 2)
+    sl_pct = sl_pct_raw / 100
+    if signal == "LONG":
+        sl_price = current_price * (1 - sl_pct)
+    else:
+        sl_price = current_price * (1 + sl_pct)
+    print(f"  [SL-HALVE] SL {_sl_before_halve:.2f}% → {sl_pct_raw:.2f}% (halved)")
 
-    # V3.1.94: Per-pair overrides removed — flat 1.1% TP + chart SL (+0.5%) for all
-
-    # V3.2.59: TP FEE-FLOOR GUARD — ensure TP clears round-trip taker fees.
-    # At 0.08%/side (TAKER_FEE_RATE=0.0008), round-trip = 0.16% price movement.
-    # Any TP below this is GUARANTEED net-negative. Add 0.04% buffer = 0.20% floor.
-    _FEE_FLOOR_TP_PCT = 0.20  # 0.16% fees + 0.04% buffer = minimum viable TP
-    if tp_pct_raw < _FEE_FLOOR_TP_PCT:
-        _reason = f"TP {tp_pct_raw:.2f}% below fee floor ({_FEE_FLOOR_TP_PCT:.2f}%) — trade is net-negative after 0.16% round-trip fees"
-        print(f"  [FEE-FLOOR] {_reason}")
-        return {"executed": False, "reason": _reason}
-
-    # V3.2.61: R:R guard RE-ADDED. 0.4:1 R:R requires 79%+ win rate after fees — too demanding.
-    # Minimum 0.5:1 ensures break-even at ~65% win rate, achievable with proper dip entries.
-    MIN_RR_RATIO = 0.5
+    # V3.2.65: No fee floor or R:R guard — let all trades through with TP ≤ 0.5% ceiling.
+    # The 0.5% TP ceiling + halved SL is the strategy. No additional blocking gates.
     _rr_ratio = tp_pct_raw / sl_pct_raw if sl_pct_raw > 0 else 0
-    if _rr_ratio < MIN_RR_RATIO:
-        _reason = f"R:R {_rr_ratio:.2f}:1 below minimum {MIN_RR_RATIO}:1 (TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}%)"
-        print(f"  [R:R GUARD] {_reason}")
-        return {"executed": False, "reason": _reason}
     print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | R:R {_rr_ratio:.1f}:1 | Method: {chart_sr['method']}")
 
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
