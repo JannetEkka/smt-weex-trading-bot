@@ -1922,7 +1922,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.55-PlanOrderRetry"
+PIPELINE_VERSION = "SMT-v3.2.56-BlackoutClose-FundingFix"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3415,17 +3415,28 @@ class JudgePersona:
                 _pair_funding = float(_fr_data[0].get("fundingRate", 0))
             if _pair_funding != 0.0:
                 # At 20x leverage, funding is charged on notional = margin × 20.
-                # Cost per 8H settlement: funding_rate × 20 × 100 = margin % drag.
-                # Example: 0.01% funding × 20x = 0.20% margin drag per settlement.
+                # Cost per 8H settlement: funding_rate × 20 × 100 = margin % per settlement.
                 _margin_drag_pct = abs(_pair_funding) * 20 * 100
                 _drag_direction = "LONG pays SHORT" if _pair_funding > 0 else "SHORT pays LONG"
+                # V3.2.56: Direction-aware funding label — determine paying vs receiving side
+                # based on persona vote consensus, so Judge gets accurate framing.
+                _long_conf  = sum(v.get("confidence", 0) for v in persona_votes if v.get("signal") == "LONG")
+                _short_conf = sum(v.get("confidence", 0) for v in persona_votes if v.get("signal") == "SHORT")
+                _prelim_dir = "LONG" if _long_conf >= _short_conf else "SHORT"
+                _we_pay = (_pair_funding > 0 and _prelim_dir == "LONG") or (_pair_funding < 0 and _prelim_dir == "SHORT")
+                _effect_label = "margin drag (YOU PAY)" if _we_pay else "funding bonus (YOU RECEIVE)"
+                _funding_rule = (
+                    f"RULE: You are on the PAYING side. If TP < {_margin_drag_pct:.2f}%, trade is NET NEGATIVE after fees. Favor WAIT."
+                    if _we_pay else
+                    f"RULE: You are on the RECEIVING side. Funding adds +{_margin_drag_pct:.2f}% to profit. Favorable for {_prelim_dir} position."
+                )
                 funding_hold_cost_text = (
                     f"  {pair} funding rate: {_pair_funding:+.6f} ({_drag_direction})\n"
-                    f"  At 20x leverage: {_margin_drag_pct:.2f}% margin drag per 8H settlement\n"
+                    f"  At 20x leverage: {_margin_drag_pct:.2f}% per 8H settlement — {_effect_label} for {_prelim_dir} position\n"
                     f"  If holding 4-5H, next funding settlement likely occurs during hold window.\n"
-                    f"  RULE: If TP target < {_margin_drag_pct:.2f}% AND you are on the paying side, the trade is NET NEGATIVE after fees. Favor WAIT or the receiving side."
+                    f"  {_funding_rule}"
                 )
-                print(f"  [JUDGE] {pair} funding hold-cost: {_pair_funding:+.6f} → {_margin_drag_pct:.2f}% margin drag at 20x ({_drag_direction})")
+                print(f"  [JUDGE] {pair} funding: {_pair_funding:+.6f} → {_margin_drag_pct:.2f}% {_effect_label} for {_prelim_dir}")
         except Exception as _fr_err:
             print(f"  [JUDGE] Funding rate fetch error for {pair}: {_fr_err}")
 
