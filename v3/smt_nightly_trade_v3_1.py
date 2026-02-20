@@ -1914,7 +1914,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.41-LargerGains-PerPairTP-SLCeiling-4HPlanning"
+PIPELINE_VERSION = "SMT-v3.2.42-JudgeProgress-SyncOrderId"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3533,15 +3533,19 @@ Respond with JSON ONLY (no markdown, no backticks):
 {{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences: state epoch strategy selected, why WHALE+FLOW support it, and what 4-5H target you see", "tp_price": null or a number (4H structural level you expect price to reach — NOT defaulting to 0.5%)}}"""
 
         try:
+            import time as _jtime2
+            print(f"  [JUDGE] Calling Gemini (rate-limit + up to 90s)...", flush=True)
             _rate_limit_gemini()
-            
+
             from google.genai.types import GenerateContentConfig
-            
+
             config = GenerateContentConfig(
                 temperature=0.1,
             )
-            
+
+            _t0 = _jtime2.time()
             response = _gemini_full_call("gemini-2.5-flash", prompt, config, timeout=90)
+            print(f"  [JUDGE] Gemini responded in {_jtime2.time()-_t0:.1f}s", flush=True)
 
             # V3.1.75: Retry once on empty Judge response
             if not response or not hasattr(response, 'text') or not response.text:
@@ -5024,7 +5028,7 @@ def save_local_log(log_data: Dict, timestamp: str):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("SMT V3.1.77 - Multi-Persona Trading")
+    print("SMT V3.2.42 - Multi-Persona Trading")
     print("=" * 60)
     
     print("\nTier Configuration:")

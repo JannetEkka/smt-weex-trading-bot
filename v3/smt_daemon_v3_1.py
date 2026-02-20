@@ -2612,7 +2612,12 @@ def quick_cleanup_check():
                     if trade.get("opened_at"):
                         opened_at = datetime.fromisoformat(trade["opened_at"].replace("Z", "+00:00"))
                         hours_open = (datetime.now(timezone.utc) - opened_at).total_seconds() / 3600
-                    
+
+                    # V3.2.42: Query close order ID — same as monitor_positions path
+                    time.sleep(1.5)
+                    _sync_close_oid = get_recent_close_order_id(symbol)
+                    logger.info(f"  [AI-LOG] Sync {exit_type} orderId for {symbol_clean}: {_sync_close_oid or 'not found (graceful)'}")
+
                     upload_ai_log_to_weex(
                         stage=f"{exit_type}: {side} {symbol_clean}",
                         input_data={
@@ -2628,7 +2633,8 @@ def quick_cleanup_check():
                             "pnl_usd": round(pnl_usd, 2),
                             "pnl_pct": round(pnl_pct, 2) if pnl_pct else 0,
                         },
-                        explanation=f"Position closed via {exit_type}. {side} {symbol_clean} held {hours_open:.1f}h. PnL: ${pnl_usd:.2f}."
+                        explanation=f"Position closed via {exit_type}. {side} {symbol_clean} held {hours_open:.1f}h. PnL: ${pnl_usd:.2f}.",
+                        order_id=int(_sync_close_oid) if _sync_close_oid and str(_sync_close_oid).isdigit() else None
                     )
                 except Exception as e:
                     logger.debug(f"AI log error for quick cleanup close: {e}")
@@ -3257,7 +3263,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.41 - Larger Gains: Per-Pair TP, 4H Anchor, 4-5H Planning")
+    logger.info("SMT Daemon V3.2.42 - Larger Gains: Per-Pair TP, 4H Anchor, 4-5H Planning")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3326,6 +3332,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.42: Judge progress prints ([JUDGE] Calling Gemini / responded in Xs); sync_tracker AI log now sends order_id via get_recent_close_order_id()")
     logger.info("  V3.2.38: 4-slot hard cap restored (can_open_new checks available_slots > 0)")
     logger.info("  V3.2.37: ANTI-WAIT removed — Gemini Judge WAIT = WAIT; no persona-consensus or keyword override")
     logger.info("  V3.2.36: MIN_VIABLE_TP_PCT=0.20%% — skip SR levels < 0.20%% from entry; entry at resistance = tp_not_found = discard")
