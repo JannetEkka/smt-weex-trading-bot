@@ -1255,11 +1255,12 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
             sl_price = min(sl_low_12h_1h, sl_low_12h_4h) * 0.997
             sl_pct   = (entry_price - sl_price) / entry_price * 100
             sl_pct   = max(sl_pct, MIN_SL_PCT)
-            # V3.2.41: Discard if structure requires SL wider than ceiling (4H anchors can be wide at 20x)
+            # V3.2.46: Cap SL at MAX_SL_PCT instead of discarding (was discard in V3.2.41).
+            # Allows Gemini tp_price override to work when chart structure is wide.
+            # 1.5% SL = 30% margin loss at 20x (survivable per research).
             if sl_pct > MAX_SL_PCT:
-                print(f"  [CHART-SR] LONG SL too wide: {sl_pct:.2f}% > {MAX_SL_PCT:.1f}% ceiling — discard trade")
-                _sr_cache[cache_key] = result
-                return result  # tp_found=False, sl_found=False → execute_trade discards
+                print(f"  [CHART-SR] LONG SL: {sl_pct:.2f}% > {MAX_SL_PCT:.1f}% ceiling — capping at {MAX_SL_PCT:.1f}%")
+                sl_pct = MAX_SL_PCT
             result["sl_pct"]   = round(sl_pct, 2)
             result["sl_price"] = round(entry_price * (1 - sl_pct / 100), 8)
             sl_found = True
@@ -1308,11 +1309,12 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
             sl_price = max(sl_high_12h_1h, sl_high_12h_4h) * 1.003
             sl_pct   = (sl_price - entry_price) / entry_price * 100
             sl_pct   = max(sl_pct, MIN_SL_PCT)
-            # V3.2.41: Discard if structure requires SL wider than ceiling (4H anchors can be wide at 20x)
+            # V3.2.46: Cap SL at MAX_SL_PCT instead of discarding (was discard in V3.2.41).
+            # Allows Gemini tp_price override to work when chart structure is wide.
+            # 1.5% SL = 30% margin loss at 20x (survivable per research).
             if sl_pct > MAX_SL_PCT:
-                print(f"  [CHART-SR] SHORT SL too wide: {sl_pct:.2f}% > {MAX_SL_PCT:.1f}% ceiling — discard trade")
-                _sr_cache[cache_key] = result
-                return result  # tp_found=False, sl_found=False → execute_trade discards
+                print(f"  [CHART-SR] SHORT SL: {sl_pct:.2f}% > {MAX_SL_PCT:.1f}% ceiling — capping at {MAX_SL_PCT:.1f}%")
+                sl_pct = MAX_SL_PCT
             result["sl_pct"]   = round(sl_pct, 2)
             result["sl_price"] = round(entry_price * (1 + sl_pct / 100), 8)
             sl_found = True
