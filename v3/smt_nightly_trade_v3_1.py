@@ -1895,10 +1895,14 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
 
 # V3.1.78: FLAT 20x LEVERAGE, competition only cares about final PnL
 # Tier TP/SL unchanged, R:R floor removed (was broken - tier cap overrode it)
+# V3.2.49: FINAL STRETCH — tightened hold times for last 72h of competition
+# Old: T1=24h/6h, T2=12h/4h, T3=8h/3h → New: T1=6h/2h, T2=4h/1.5h, T3=3h/1h
+# Single-slot mode means a stale position blocks ALL capital rotation.
+# If a dip-bounce hasn't played out in 6h (T1) the thesis is dead — cut and re-scan.
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.01, "time_limit": 1440, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 24, "early_exit_hours": 6, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.035, "trailing_stop": 0.012, "time_limit": 720, "tp_pct": 3.5, "sl_pct": 1.5, "max_hold_hours": 12, "early_exit_hours": 4, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.03, "trailing_stop": 0.015, "time_limit": 480, "tp_pct": 3.0, "sl_pct": 1.8, "max_hold_hours": 8, "early_exit_hours": 3, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.01, "time_limit": 360, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 6, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.035, "trailing_stop": 0.012, "time_limit": 240, "tp_pct": 3.5, "sl_pct": 1.5, "max_hold_hours": 4, "early_exit_hours": 1.5, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.03, "trailing_stop": 0.015, "time_limit": 180, "tp_pct": 3.0, "sl_pct": 1.8, "max_hold_hours": 3, "early_exit_hours": 1, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
 }
 # V3.1.78: Tier reassignment based on actual ATR/volatility analysis
 # BTC T1→T2 (2.28% actual SL, +52% stretch - behaves mid-cap)
@@ -1917,7 +1921,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.48-MacroBlackout-WeekendMode-FundingHoldCost"
+PIPELINE_VERSION = "SMT-v3.2.49-FinalStretch-TightenedHoldTimes-6h4h3h"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
