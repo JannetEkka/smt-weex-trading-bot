@@ -249,7 +249,7 @@ try:
         # Position management
         check_position_status, cancel_all_orders_for_symbol,
         close_position_manually, execute_runner_partial_close,
-        get_recent_close_order_id,
+        get_recent_close_order_id, _fetch_plan_order_ids,
         TradeTracker,
         
         # Competition
@@ -3222,6 +3222,32 @@ def sync_tracker_with_weex():
                 _max_h = _tv.get("max_hold_hours", "?")
             _synced = "synced" if _tv.get("synced") else "original"
             logger.info(f"  [{_tk}] T{_tier} {_tv.get('side','?')} opened={_opened_str[:19]} hold={_hold_h:.1f}h/{_max_h}h ({_synced})")
+
+        # V3.2.64: Backfill plan order IDs for positions that have None (e.g. opened with broken endpoint).
+        # Missing order IDs in AI logs caused competition suspension — ALWAYS fetch if missing.
+        _backfill_count = 0
+        for _tk, _tv in tracker.active_trades.items():
+            _has_tp_id = _tv.get("tp_plan_order_id") is not None
+            _has_sl_id = _tv.get("sl_plan_order_id") is not None
+            if _has_tp_id and _has_sl_id:
+                continue  # Already have both IDs
+            _tp = _tv.get("tp_price")
+            _sl = _tv.get("sl_price")
+            _sym = _tk.split(":")[0] if ":" in _tk else _tk
+            if not _tp or not _sl or not _sym:
+                continue
+            try:
+                _plan_ids = _fetch_plan_order_ids(_sym, float(_tp), float(_sl))
+                if _plan_ids.get("tp_plan_order_id") or _plan_ids.get("sl_plan_order_id"):
+                    _tv["tp_plan_order_id"] = _plan_ids.get("tp_plan_order_id")
+                    _tv["sl_plan_order_id"] = _plan_ids.get("sl_plan_order_id")
+                    _backfill_count += 1
+                    logger.info(f"  [BACKFILL] {_sym.replace('cmt_','').upper()}: tp_plan_id={_plan_ids.get('tp_plan_order_id')}, sl_plan_id={_plan_ids.get('sl_plan_order_id')}")
+            except Exception as _bf_e:
+                logger.warning(f"  [BACKFILL] Failed for {_sym}: {_bf_e}")
+        if _backfill_count > 0:
+            tracker.save_state()
+            logger.info(f"  [BACKFILL] Updated plan order IDs for {_backfill_count} position(s)")
 
         # V3.1.82: Clean stale cooldowns for symbols with no open positions
         # The pnl_pct key bug (fixed now) gave wins false cooldowns. Clear cooldowns

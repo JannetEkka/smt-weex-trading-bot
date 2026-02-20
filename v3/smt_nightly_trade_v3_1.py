@@ -1144,12 +1144,13 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
     # TP beyond real resistance; price rejected at SR and TP never filled, bleeding to SL instead.
     # V3.2.36: MIN_VIABLE_TP_PCT added — skip SR levels < 0.20% from entry (entry IS the resistance).
     # This is NOT a TP floor; it's a discard threshold. The walk continues to find the next level.
-    # V3.2.41: MIN_VIABLE_TP_PCT raised from 0.20 → 0.40 — filter micro-moves, push chart anchor
-    # to 4H/48H levels where 1-2% moves live. Trades where all SR < 0.40% from entry are discarded.
+    # V3.2.65: MIN_VIABLE_TP_PCT lowered to 0.15% — with 0.3% TP ceiling, we want chart SR to find
+    # the nearest level (even close ones). The ceiling does the capping; MIN_VIABLE just filters
+    # levels so close to entry they're noise (spread/tick noise). 0.15% = $100 on BTC, real level.
     MIN_SL_PCT = 1.0          # SL must be at least 1.0% from entry (20x = 20% margin loss min)
     MAX_SL_PCT = 1.5          # V3.2.41: SL ceiling — discard if 4H structure requires SL > 1.5%.
                               # 1.5% SL = 30% margin loss at 20x (survivable). Liquidation at ~4.5%.
-    MIN_VIABLE_TP_PCT = 0.40  # V3.2.41: skip SR levels < 0.40% (was 0.20 in V3.2.36). Filter micro-moves.
+    MIN_VIABLE_TP_PCT = 0.15  # V3.2.65: lowered from 0.40 — 0.3% ceiling handles sizing; this just filters noise.
 
     try:
         # === 1H candles — primary source for both TP and SL ===
@@ -1591,18 +1592,19 @@ COMPETITION_FALLBACK_SL = {
     3: 1.5,   # Tier 3: 1.8% → 1.5%
 }
 
-# V3.2.60: Per-pair TP ceiling — dip-bounce realistic. Old 1.0-2.0% ceilings were unreachable
-# in hold windows (T1=3H, T2=2H, T3=1.5H), causing breakeven SL to fire → fees eat the trade.
-# ~0.5% TP philosophy: bank the dip-bounce fast, re-enter next 10-min cycle if trend continues.
+# V3.2.65: Per-pair TP ceiling — HARD 0.3% CAP for dip-bounce strategy.
+# Old 0.8-1.5% ceilings were unreachable in hold windows → breakeven SL fires → fees eat the trade.
+# 0.3% TP × 20x = 6% margin gain. Round-trip fees = 3.2% margin. Net ~2.8% per trade.
+# High win rate + fast rotation (10-min cycles) makes this profitable. Bank the bounce, re-enter.
 # Ceiling-only: if chart SR < ceiling, use chart SR. Never raises a low TP.
 PAIR_TP_CEILING = {
-    "BTC": 1.0,    # Tier 1. 3H hold. R:R 0.67:1 vs 1.5% SL. Realistic 1-3h target.
-    "ETH": 1.0,    # Tier 1. 3H hold. Same as BTC.
-    "BNB": 0.80,   # Tier 2. 2H hold. R:R 0.53:1. Lower beta.
-    "LTC": 0.80,   # Tier 2. 2H hold. Conservative.
-    "XRP": 0.80,   # Tier 2. 2H hold. Range-bound.
-    "SOL": 1.5,    # Tier 3. High beta, room to run. R:R 1.0:1.
-    "ADA": 0.80,   # Tier 3. BTC-correlated.
+    "BTC": 0.3,    # Tier 1. Grab dip-bounce, exit fast.
+    "ETH": 0.3,    # Tier 1. Same philosophy.
+    "BNB": 0.3,    # Tier 2. Bank it.
+    "LTC": 0.3,    # Tier 2. Bank it.
+    "XRP": 0.3,    # Tier 2. Bank it.
+    "SOL": 0.3,    # Tier 3. High beta but still cap — re-enter if trend continues.
+    "ADA": 0.3,    # Tier 3. Bank it.
 }
 
 # V3.2.41: Per-pair max position size. Default: MAX_SINGLE_POSITION_PCT = 0.50.
@@ -4670,7 +4672,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     if _gemini_tp and _gemini_tp > 0 and current_price > 0 and not chart_sr.get("tp_not_found"):
         if signal == "LONG" and _gemini_tp > current_price:
             _g_tp_pct = ((_gemini_tp - current_price) / current_price) * 100
-            if 0.3 <= _g_tp_pct <= 5.0:  # Sanity: 0.3% to 5.0%
+            if 0.15 <= _g_tp_pct <= 5.0:  # V3.2.65: lowered floor 0.3→0.15 to match MIN_VIABLE_TP_PCT
                 print(f"  [TP/SL] GEMINI TP OVERRIDE (LONG): ${_gemini_tp:.4f} = {_g_tp_pct:.2f}% from ${current_price:.4f}")
                 chart_sr["tp_pct"] = round(_g_tp_pct, 2)
                 chart_sr["tp_price"] = _gemini_tp
@@ -4679,7 +4681,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
                 _gemini_tp_used = True
         elif signal == "SHORT" and _gemini_tp < current_price:
             _g_tp_pct = ((current_price - _gemini_tp) / current_price) * 100
-            if 0.3 <= _g_tp_pct <= 5.0:
+            if 0.15 <= _g_tp_pct <= 5.0:  # V3.2.65: lowered floor 0.3→0.15 to match MIN_VIABLE_TP_PCT
                 print(f"  [TP/SL] GEMINI TP OVERRIDE (SHORT): ${_gemini_tp:.4f} = {_g_tp_pct:.2f}% from ${current_price:.4f}")
                 chart_sr["tp_pct"] = round(_g_tp_pct, 2)
                 chart_sr["tp_price"] = _gemini_tp
