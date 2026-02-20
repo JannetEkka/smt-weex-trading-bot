@@ -6,13 +6,13 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.39** — all production code is in `v3/`.
+**Current version: V3.2.40** — all production code is in `v3/`.
 
 ## Architecture
 
 ```
 v3/                              # PRIMARY production folder
-├── smt_daemon_v3_1.py          # 24/7 daemon loop (~3398 lines)
+├── smt_daemon_v3_1.py          # 24/7 daemon loop (~3421 lines)
 │   - check_trading_signals()    → Signal check cycle (every 10min)   [line 532]
 │   - monitor_positions()        → Position monitor cycle (every 2min) [line 1411]
 │   - regime_aware_exit_check()  → Regime-based exit logic             [line 3037]
@@ -27,10 +27,11 @@ v3/                              # PRIMARY production folder
 │   - get_market_regime_for_exit() → Market regime detection           [line 2961] DISABLED V3.2.17
 │   - fill_rl_outcomes_inline()  → RL training data fill               [line 61]
 │
-├── smt_nightly_trade_v3_1.py   # Core trading logic (~4853 lines)
+├── smt_nightly_trade_v3_1.py   # Core trading logic (~4880 lines)
 │   - MultiPersonaAnalyzer       → 5-persona ensemble                  [line 3682]
 │   - place_order()              → WEEX order placement                [line 3843]
-│   - close_position_manually()  → Close + cancel orphan triggers      [line 4662]
+│   - close_position_manually()  → Close + cancel orphan triggers      [line 4689]
+│   - get_recent_close_order_id() → Query WEEX for last filled close orderId [line 4583]
 │   - cancel_all_orders_for_symbol() → Kill all orders (regular + plan)[line 4538]
 │   - upload_ai_log_to_weex()    → Competition logging (REQUIRED)      [line 3891]
 │   - get_open_positions()       → WEEX positions API                  [line 2002]
@@ -310,10 +311,11 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.39. Next change should be V3.2.40.
+Current: V3.2.40. Next change should be V3.2.41.
 
 **Recent version history:**
-- V3.2.39: (**CURRENT**) 90%+ confidence opens 5th slot when all 4 are full. Base 4-slot hard cap unchanged — only signals with confidence >= 90% bypass it. `CONFIDENCE_EXTRA_SLOT = 0.90` constant added. Per-signal check: `can_open_new OR (not low_equity_mode AND confidence >= 0.90)`. `_has_regular_slots` updated to match. Logs `90%+ EXTRA SLOT: X% >= 90%` when extra slot is used. Banner updated.
+- V3.2.40: (**CURRENT**) Close order ID wiring for AI log uploads. New `get_recent_close_order_id(symbol)` function (line 4583) queries WEEX filled orders endpoint (`/capi/v2/order/orders?symbol=X&status=2`) for the most recent close order (type 3=close long, 4=close short), enabling AI logs to include `orderId` for TP/SL auto-executions by WEEX. `[AI-LOG]` diagnostic tags added inside the function for lookup visibility. `PIPELINE_VERSION = "SMT-v3.2.40-CloseOrderId-AiLogFix"`. Runner partial close operations (`execute_runner_partial_close`) now capture `close_order_id` in `output_data`. Graceful failure — AI log upload succeeds even when orderId lookup fails (returns None). Daemon banner not yet bumped (still reads V3.2.39 at line 3257).
+- V3.2.39: 90%+ confidence opens 5th slot when all 4 are full. Base 4-slot hard cap unchanged — only signals with confidence >= 90% bypass it. `CONFIDENCE_EXTRA_SLOT = 0.90` constant added. Per-signal check: `can_open_new OR (not low_equity_mode AND confidence >= 0.90)`. `_has_regular_slots` updated to match. Logs `90%+ EXTRA SLOT: X% >= 90%` when extra slot is used. Banner updated.
 - V3.2.38: Restore 4-slot hard cap removed in V3.2.25. `can_open_new = not low_equity_mode and available_slots > 0` — when all 4 slots are filled, ALL new signals skip regardless of confidence. `_has_regular_slots` now checks `available_slots > 0` (was hardcoded True). Banner log updated: "2/4 slots" instead of "2 positions (no slot cap)". Stale "85%+ opens 5th slot" text removed.
 - V3.2.37: ANTI-WAIT removed — trust Gemini Judge completely. Removed persona-consensus override (2+ personas agree at >=70% → force direction) and keyword-fallback override (count bullish/bearish words in Judge's reasoning). Layer 2 (keyword) was worst offender: Gemini's WAIT reasoning often contained direction words causing spurious flips. WAIT = WAIT.
 - V3.2.36: `MIN_VIABLE_TP_PCT = 0.20` added to `find_chart_based_tp_sl()` — skip SR levels < 0.20% from entry (entry IS the resistance, no bounce room). Effective TP range: [0.20%, 0.50%]. NOT a floor (old V3.2.23) — candidates are skipped, not raised. Also fixed UnboundLocalErrors from V3.2.35 (`trades_executed` init moved before if/else; removed inner `import traceback` shadowing module-level import).
