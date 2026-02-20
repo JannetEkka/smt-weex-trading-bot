@@ -1922,7 +1922,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.49-FinalStretch-TightenedHoldTimes-6h4h3h"
+PIPELINE_VERSION = "SMT-v3.2.50-CorrectFeeRate-PlanOrderIdAtOpen"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4449,11 +4449,13 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     if symbol == "cmt_dogeusdt":
         _fix_plan_orders(symbol, signal, size, tp_price, sl_price)
 
-    # V3.2.30: Verify WEEX actually stored the expected TP/SL trigger prices.
-    # Catches price drift between what we sent and what WEEX registered.
+    # V3.2.50: Fetch plan order IDs at open — stored in trade state for deterministic AI log
+    # upload at close (replaces fragile get_recent_close_order_id() guesswork).
+    # Also verifies trigger prices (V3.2.30 mismatch detection preserved).
     # (DOGE fix already ran above, so this verifies the final settled state for all pairs.)
+    _plan_ids = {}
     if not TEST_MODE:
-        _verify_plan_orders(symbol, tp_price, sl_price)
+        _plan_ids = _fetch_plan_order_ids(symbol, tp_price, sl_price)
 
     # Upload AI log
     upload_ai_log_to_weex(
@@ -4493,6 +4495,8 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         "tier": tier,
         "tier_name": tier_config["name"],
         "max_hold_hours": tier_config["max_hold_hours"],
+        "tp_plan_order_id": _plan_ids.get("tp_plan_order_id"),   # V3.2.50: stored at open
+        "sl_plan_order_id": _plan_ids.get("sl_plan_order_id"),   # V3.2.50: stored at open
     }
 
 
@@ -4501,9 +4505,9 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 # ============================================================
 
 # V3.1.73: Fee-aware cooldowns - calibrated to fee structure
-# Round-trip taker fee ~0.12% on notional (0.06% per side)
-# At 20x leverage = ~2.4% ROE round-trip cost
-# Cooldown must ensure enough time for market to move 3x+ fees (0.36%+)
+# Round-trip taker fee ~0.16% on notional (0.08% per side, V3.2.50 corrected from 0.06%)
+# At 20x leverage = ~3.2% margin round-trip cost
+# Cooldown must ensure enough time for market to move 3x+ fees (0.48%+)
 # After losses: longer cooldown (trend reversal, need clarity)
 # After wins/profit lock: no cooldown (trend confirmed, re-entry OK)
 # After timeout: short cooldown (direction unknown)
@@ -4607,6 +4611,8 @@ class TradeTracker:
             "confidence": trade_data.get("confidence", 0.0),
             "whale_confidence": trade_data.get("whale_confidence", 0.0),
             "whale_direction": trade_data.get("whale_direction", "NEUTRAL"),
+            "tp_plan_order_id": trade_data.get("tp_plan_order_id"),   # V3.2.50: fetched at open
+            "sl_plan_order_id": trade_data.get("sl_plan_order_id"),   # V3.2.50: fetched at open
         }
         self.save_state()
     
@@ -4969,49 +4975,60 @@ def _fix_plan_orders(symbol: str, signal: str, size: float, tp_price: float, sl_
         print(f"  [PLAN-FIX] Warning: plan re-placement failed for {symbol}: {e}")
 
 
-def _verify_plan_orders(symbol: str, expected_tp: float, expected_sl: float) -> None:
-    """V3.2.30: Query WEEX plan orders after placement to confirm actual TP/SL trigger prices.
-    Surfaces discrepancies between what we sent and what WEEX stored.
-    Expected: 2 plan orders (one TP, one SL). Mismatches logged with *** MISMATCH ***.
-    LONG: TP = max(triggers), SL = min(triggers). SHORT: reversed.
+def _fetch_plan_order_ids(symbol: str, expected_tp: float, expected_sl: float) -> dict:
+    """V3.2.50: Query WEEX plan orders after placement. Returns tp_plan_order_id and
+    sl_plan_order_id fetched at trade-open time — eliminates the need to guess the close
+    order ID later via get_recent_close_order_id().
+    Also verifies trigger prices match what we sent (preserves V3.2.30 mismatch detection).
+    LONG: higher trigger = TP, lower = SL. SHORT: reversed.
+    Returns {"tp_plan_order_id": X, "sl_plan_order_id": Y} — both None on failure.
     """
+    result = {"tp_plan_order_id": None, "sl_plan_order_id": None}
     try:
         time.sleep(1.5)  # Let WEEX finish registering preset plan orders
         endpoint = f"/capi/v2/order/plan_orders?symbol={symbol}"
         r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=10)
         if r.status_code != 200:
             print(f"  [WEEX-CONFIRM] plan_orders HTTP {r.status_code} for {symbol}")
-            return
-        orders = r.json() if isinstance(r.json(), list) else []
+            return result
+        resp = r.json()
+        orders = resp if isinstance(resp, list) else (resp.get("data") or [])
         pair = symbol.replace("cmt_", "").upper()
         if not orders:
             print(f"  [WEEX-CONFIRM] {pair}: no plan orders on WEEX (preset may still be processing)")
-            return
-        # Extract trigger prices — field name may vary; try both conventions
-        triggers = []
+            return result
+        # Extract (trigger_price, order_id) — field names vary; try both conventions
+        entries = []
         for o in orders:
             t = o.get("trigger_price") or o.get("triggerPrice")
-            if t:
+            oid = o.get("order_id") or o.get("orderId")
+            if t and oid:
                 try:
-                    triggers.append(float(t))
+                    entries.append((float(t), oid))
                 except (ValueError, TypeError):
                     pass
-        if not triggers:
-            # Field name unknown — log raw so we can identify the correct key
-            print(f"  [WEEX-CONFIRM] {pair}: {len(orders)} plan order(s) but no trigger_price field — raw[0]={orders[0]}")
-            return
-        # LONG: expected_tp > expected_sl → TP is the higher trigger, SL is the lower
+        if not entries:
+            print(f"  [WEEX-CONFIRM] {pair}: {len(orders)} plan order(s) but no trigger_price/order_id fields — raw[0]={orders[0]}")
+            return result
+        # LONG: higher trigger = TP, lower = SL. SHORT: reversed.
         is_long = expected_tp > expected_sl
-        weex_tp = max(triggers) if is_long else min(triggers)
-        weex_sl = min(triggers) if is_long else max(triggers)
-        tp_delta = (weex_tp - expected_tp) / expected_tp * 100
-        sl_delta = (weex_sl - expected_sl) / expected_sl * 100
+        entries_sorted = sorted(entries, key=lambda x: x[0])
+        if is_long:
+            sl_entry, tp_entry = entries_sorted[0], entries_sorted[-1]
+        else:
+            tp_entry, sl_entry = entries_sorted[0], entries_sorted[-1]
+        result["tp_plan_order_id"] = tp_entry[1]
+        result["sl_plan_order_id"] = sl_entry[1]
+        # Price verification (V3.2.30 mismatch detection preserved)
+        tp_delta = (tp_entry[0] - expected_tp) / expected_tp * 100
+        sl_delta = (sl_entry[0] - expected_sl) / expected_sl * 100
         tp_ok = abs(tp_delta) < 0.1  # 0.1% tolerance for tick-size rounding
         sl_ok = abs(sl_delta) < 0.1
-        print(f"  [WEEX-CONFIRM] {pair} TP: sent=${expected_tp:.4f} | WEEX=${weex_tp:.4f} ({tp_delta:+.3f}%) {'OK' if tp_ok else '*** MISMATCH ***'}")
-        print(f"  [WEEX-CONFIRM] {pair} SL: sent=${expected_sl:.4f} | WEEX=${weex_sl:.4f} ({sl_delta:+.3f}%) {'OK' if sl_ok else '*** MISMATCH ***'}")
+        print(f"  [WEEX-CONFIRM] {pair} TP: sent=${expected_tp:.4f} | WEEX=${tp_entry[0]:.4f} ({tp_delta:+.3f}%) {'OK' if tp_ok else '*** MISMATCH ***'} | plan_id={tp_entry[1]}")
+        print(f"  [WEEX-CONFIRM] {pair} SL: sent=${expected_sl:.4f} | WEEX=${sl_entry[0]:.4f} ({sl_delta:+.3f}%) {'OK' if sl_ok else '*** MISMATCH ***'} | plan_id={sl_entry[1]}")
     except Exception as e:
-        print(f"  [WEEX-CONFIRM] Warning: verification failed for {symbol}: {e}")
+        print(f"  [WEEX-CONFIRM] Warning: plan order ID fetch failed for {symbol}: {e}")
+    return result
 
 
 def close_position_manually(symbol: str, side: str, size: float) -> Dict:
