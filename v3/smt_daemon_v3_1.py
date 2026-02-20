@@ -949,6 +949,17 @@ def check_trading_signals():
                     _cycle_signals += 1
                     _cycle_above_80 += 1
 
+                # V3.2.59: SHORTS DISABLED — LONGs only.
+                # Shorts underperform in current market regime (extreme fear = bounce territory).
+                # TP/SL logic is symmetric but dip-bounce strategy fundamentally favors LONGs.
+                # Re-enable post-competition if market regime shifts to greed/euphoria.
+                if signal == "SHORT":
+                    logger.info(f"    -> SHORT disabled (LONG-only mode)")
+                    signal = "WAIT"
+                    confidence = 0
+                    decision["decision"] = "WAIT"
+                    decision["confidence"] = 0
+
                 # V3.1.97: REMOVED BTC fear shield, consecutive loss block.
                 # Ensemble already sees F&G + regime. 80% floor + chop filter are the only gates.
 
@@ -1104,8 +1115,9 @@ def check_trading_signals():
                                 explanation=f"AI decided to maintain SHORT position. Existing SHORT confidence ({existing_conf:.0%}) > new LONG signal ({confidence:.0%}). No directional change warranted."
                             )
                     else:
-                        if can_open_new:
-                            # V3.2.46: 1-slot hard cap — no extra slot bypass (cross margin safety)
+                        # V3.2.59: Always collect 85%+ signals — slot check deferred to execution
+                        # time where positions are re-queried (catches TP/SL during analysis window).
+                        if can_open_new or confidence >= MIN_CONFIDENCE_TO_TRADE:
                             can_trade_this = True
                             trade_type = "new"
 
@@ -1145,13 +1157,13 @@ def check_trading_signals():
                                 explanation=f"AI decided to maintain LONG position. Existing LONG confidence ({existing_conf:.0%}) > new SHORT signal ({confidence:.0%}). No directional change warranted."
                             )
                     else:
-                        if can_open_new:
-                            # V3.2.46: 1-slot hard cap — no extra slot bypass (cross margin safety)
+                        # V3.2.59: Always collect 85%+ signals — slot check deferred to execution
+                        if can_open_new or confidence >= MIN_CONFIDENCE_TO_TRADE:
                             can_trade_this = True
                             trade_type = "new"
 
                 # V3.1.93: Track best non-executed signal for PM context
-                if signal in ("LONG", "SHORT") and confidence >= 0.80 and not can_trade_this:
+                if signal in ("LONG", "SHORT") and confidence >= 0.85 and not can_trade_this:
                     if _best_unexecuted is None or confidence > _best_unexecuted.get("confidence", 0):
                         _best_unexecuted = {"pair": pair, "direction": signal, "confidence": confidence}
 
@@ -1287,15 +1299,34 @@ def check_trading_signals():
             # V3.2.58: Sort by confidence desc, then tier desc (altcoin tiebreak — T3 > T2 > T1 at equal confidence)
             trade_opportunities.sort(key=lambda x: (x["decision"]["confidence"], x["pair_info"].get("tier", 1)), reverse=True)
 
-            current_positions = len(open_positions)
-            # V3.2.25: No cascade truncation — all 80%+ qualified signals execute
-            logger.info(f"  Executing {len(trade_opportunities)} opportunit{'y' if len(trade_opportunities)==1 else 'ies'} ({current_positions} positions currently open)")
+            # V3.2.59: Re-query positions BEFORE execution — catches TP/SL that fired during
+            # the ~7 min analysis window. Without this, slots show as occupied when positions
+            # already closed on WEEX, blocking new trades (ADA 85% blocked by closed SOL/XRP bug).
+            _fresh_positions = get_open_positions()
+            _fresh_count = len(_fresh_positions)
+            if _fresh_count != len(open_positions):
+                logger.info(f"  [SLOT REFRESH] Positions changed during analysis: {len(open_positions)} → {_fresh_count}")
+                open_positions = _fresh_positions
+                weex_position_count = _fresh_count
+                available_slots = effective_max_positions - weex_position_count
+                can_open_new = not low_equity_mode and available_slots > 0
+                # Rebuild position_map for execution
+                position_map = {}
+                for pos in open_positions:
+                    _sym = pos.get("symbol")
+                    _side = pos.get("side", "").upper()
+                    if _sym not in position_map:
+                        position_map[_sym] = {}
+                    position_map[_sym][_side] = pos
+
+            current_positions = _fresh_count
+            logger.info(f"  Executing {len(trade_opportunities)} opportunit{'y' if len(trade_opportunities)==1 else 'ies'} ({current_positions} positions currently open, {available_slots} slots free)")
 
             trades_executed_count_ref = 0  # kept for slot_swap compat below
-            
+
             # V3.1.41: Count directional exposure BEFORE executing
-            long_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "LONG")
-            short_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "SHORT")
+            long_count = sum(1 for p in _fresh_positions if p.get("side","").upper() == "LONG")
+            short_count = sum(1 for p in _fresh_positions if p.get("side","").upper() == "SHORT")
             MAX_SAME_DIRECTION = 5  # V3.1.55: was 99, caused all-LONG pileup  # V3.1.42: Recovery - match Gemini Judge rule 9
             # V3.1.43: Allow 7 LONGs during Capitulation (F&G < 15)
             if trade_opportunities:
@@ -1307,26 +1338,9 @@ def check_trading_signals():
             for opportunity in trade_opportunities:
                 confidence = opportunity["decision"]["confidence"]
 
-                # V3.1.80: CHOP FALLBACK GATE
-                # Pairs with 75-79% confidence are "fallback_only" — they can only trade
-                # if a chop filter blocked a higher-confidence pair, freeing a slot.
-                # V3.1.82: Slot swap trades bypass fallback gate (they create their own slot)
-                # V3.1.82 FIX: Also bypass when regular slots are available (0 positions = don't skip!)
-                is_fallback = opportunity["decision"].get("fallback_only", False)
-                _has_regular_slots = available_slots > 0 or confidence >= CONFIDENCE_EXTRA_SLOT  # V3.2.39: 90%+ gets extra slot
-                if is_fallback and opportunity.get("trade_type") != "slot_swap" and not _has_regular_slots:
-                    if chop_blocked_count > 0:
-                        logger.info(f"  CHOP FALLBACK: {opportunity['pair']} ({confidence:.0%}) promoted - chop freed {chop_blocked_count} slot(s)")
-                        chop_blocked_count -= 1  # Consume one freed slot
-                        upload_ai_log_to_weex(
-                            stage=f"Chop Fallback: {opportunity['pair']} promoted",
-                            input_data={"pair": opportunity['pair'], "confidence": confidence, "chop_slots_available": chop_blocked_count + 1},
-                            output_data={"action": "FALLBACK_PROMOTED", "confidence": confidence},
-                            explanation=f"Chop filter blocked a higher-confidence but choppy pair. {opportunity['pair']} at {confidence:.0%} confidence is trending and promoted to fill the freed slot."
-                        )
-                    else:
-                        logger.info(f"  FALLBACK SKIP: {opportunity['pair']} ({confidence:.0%}) - no chop slots available, needs {0.80:.0%}+")
-                        continue
+                # V3.2.59: FALLBACK GATE REMOVED — 85% is the absolute floor.
+                # Old fallback_only path (80-84%) is dead code since MIN_CONFIDENCE_TO_TRADE=0.85.
+                # All trades reaching this point are 85%+. No chop fallback needed.
 
                 # V3.2.25: No slot-bypass needed — all 80%+ signals execute; resolve_opposite_sides() at cycle end cleans up
                 trade_type_check = opportunity.get("trade_type", "none")
@@ -1431,7 +1445,7 @@ def check_trading_signals():
                     session_name = "ASIA"
                 else:
                     session_name = "ACTIVE"
-                session_min_conf = 0.80  # HARD FLOOR - no exceptions
+                session_min_conf = 0.85  # V3.2.59: Matches MIN_CONFIDENCE_TO_TRADE (was 0.80)
                 
                 # V3.1.85: CONTRARIAN BOOST REMOVED - 80% hard floor applies always.
                 # Even in extreme fear/greed, only trade with 80%+ confidence.
@@ -1467,7 +1481,17 @@ def check_trading_signals():
                 pair = opportunity["pair"]
                 signal = opportunity["decision"]["decision"]
                 confidence = opportunity["decision"]["confidence"]
-                
+
+                # V3.2.59: Execution-time slot check for new trades.
+                # Signals are collected during analysis regardless of can_open_new,
+                # but slot availability is enforced HERE with fresh position data.
+                if trade_type == "new" and available_slots <= 0:
+                    if confidence >= CONFIDENCE_EXTRA_SLOT and not low_equity_mode:
+                        logger.info(f"  90%+ EXTRA SLOT: {pair} {signal} {confidence:.0%} — bypassing slot cap")
+                    else:
+                        logger.info(f"  SLOT BLOCKED: {pair} {signal} {confidence:.0%} — {available_slots} slots, need 90%+ for extra")
+                        continue
+
                 logger.info(f"")
                 type_label = "[FLIP] " if trade_type == "flip" else ""
                 logger.info(f"EXECUTING {type_label}{pair} {signal} (T{tier}) - {confidence:.0%}")
