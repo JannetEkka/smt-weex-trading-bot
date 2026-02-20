@@ -4094,7 +4094,7 @@ def upload_ai_log_to_weex(stage: str, input_data: Dict, output_data: Dict,
         msg = result.get("msg", "")
         
         if code == "00000":
-            pass  # Success - silent (was flooding logs with [AI LOG OK] every call)
+            print(f"  [AI-LOG] OK: {stage}", flush=True)
         else:
             # FAILURE - log detailed error
             print(f"  [AI LOG FAIL] {stage}", flush=True)
