@@ -257,10 +257,13 @@ try:
         
         # Multi-persona
         MultiPersonaAnalyzer,
-        
+
         # Trading
         execute_trade,
-        
+
+        # V3.2.59: Dynamic event detection
+        detect_macro_events, _check_dynamic_blackout,
+
         # Logging
         save_local_log,
     )
@@ -619,6 +622,26 @@ def check_trading_signals():
                         f"Bot will re-enter after the blackout window closes and the first clean candle settles."
         )
         return
+
+    # V3.2.59: DYNAMIC BLACKOUT — Gemini-detected HIGH-impact events within 15 min.
+    # This catches events NOT in the hardcoded MACRO_BLACKOUT_WINDOWS list.
+    # detect_macro_events() is cached (30min TTL) — costs 1 Gemini call per 3 cycles.
+    try:
+        _detected_events = detect_macro_events()
+        _dyn_blacked, _dyn_label = _check_dynamic_blackout(_detected_events.get("events", []))
+        if _dyn_blacked:
+            logger.warning(f"[DYNAMIC BLACKOUT] {_dyn_label} — Gemini detected imminent HIGH-impact event. Skipping signal cycle.")
+            upload_ai_log_to_weex(
+                stage=f"Dynamic Blackout: {_dyn_label}",
+                input_data={"event": _dyn_label, "utc_time": datetime.now(timezone.utc).isoformat(),
+                            "detected_events": [e.get("name") for e in _detected_events.get("events", [])]},
+                output_data={"action": "DYNAMIC_BLACKOUT_SKIP", "reason": "Gemini-detected imminent macro event"},
+                explanation=f"Signal cycle skipped: {_dyn_label}. Gemini Search detected HIGH-impact event "
+                            f"within 15 minutes. Bot will resume after event + 30min settlement window."
+            )
+            return
+    except Exception as _dyn_err:
+        logger.warning(f"[DYNAMIC BLACKOUT] Event detection error: {_dyn_err} — continuing without dynamic blackout")
 
     try:
         # V3.1.19: Get proper account info with equity from API
@@ -3587,12 +3610,12 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.58 - Altcoin tiebreak: T3>T2>T1 at equal confidence. V3.2.57: BlitzMode, velocity_exit, conf 85%%, cooldown 600s, floor $500")
+    logger.info("SMT Daemon V3.2.59 - Gemini event detection + dynamic blackout. V3.2.58: altcoin tiebreak. V3.2.57: BlitzMode, velocity_exit, conf 85%%")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
     logger.info("  Pairs: BTC, ETH, BNB, LTC, XRP, SOL, ADA (7)")
-    logger.info("  Max slots: 1 (cross-margin defense — full account as buffer) | Leverage: 20x flat | Shorts: ALL pairs")
+    logger.info("  Max slots: 2 (V3.2.59 — diversification without cascade risk) | Leverage: 20x flat | Shorts: ALL pairs")
     logger.info("  Sizing: 80-84%%=20%%, 85-89%%=35%%, 90%%+=50%% of sizing_base (SOL capped 30%%)")
     logger.info("  Circuit breaker: 60min+ cooldown after SL/force stop | Breakeven SL at +0.4%%")
     # --- Confidence & entry filters ---
@@ -3664,6 +3687,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.59: Gemini event detection — detect_macro_events() uses Gemini Search to scan upcoming macro/crypto events (30min cache). Dynamic blackout for HIGH-impact events within 15min. Replaces hardcoded _macro_events dict in Judge prompt. Also: ADX<20 WAIT removed, 2-slot mode, TP fee-floor guard.")
     logger.info("  V3.2.58: Altcoin execution priority — sort key now (confidence desc, tier desc) so T3>T2>T1 at equal confidence. Prevents T1 BTC/ETH crowding out altcoins when same 85%% threshold hit in same cycle.")
     logger.info("  V3.2.57: BlitzMode final 72h — MIN_CONFIDENCE 80%%→85%%; velocity_exit (40min/0.15%% peak, zero cooldown); GLOBAL_TRADE_COOLDOWN 900→600s; sizing floor $1000→$500; Judge BLITZ MODE prompt")
     logger.info("  V3.2.56: Macro blackout exit — monitor_positions() closes unprofitable (pnl<0) positions when blackout window activates; profitable positions ride with SL; AI log sent with order_id. Funding rate direction-aware: Judge now told paying vs receiving side based on persona consensus (fixes bonus-labeled-as-drag for LONG on negative funding)")
