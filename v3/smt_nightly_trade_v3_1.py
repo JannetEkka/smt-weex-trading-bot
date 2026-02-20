@@ -1923,7 +1923,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.57-BlitzMode-VelocityExit-Conf85"
+PIPELINE_VERSION = "SMT-v3.2.58-AltcoinPriority-TierTiebreak"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
