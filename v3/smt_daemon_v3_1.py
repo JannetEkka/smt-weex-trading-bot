@@ -3675,7 +3675,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.61 - TP ceilings raised + R:R guard restored + tp_not_found gate. V3.2.60: ATR ceiling fix, breakeven SL classification")
+    logger.info("SMT Daemon V3.2.62 - Chart context fix: 12H price action now independent of 1D/4H, 30m fallback to 15m, datetime bug fix")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3752,6 +3752,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.62: Chart context FIX — 12H price action fetch now INDEPENDENT of 1D/4H (was silently failing when 1D/4H returned errors). 30m→15m fallback for T2 if WEEX rejects 30m granularity. Fixed datetime.datetime bug (was datetime.utcfromtimestamp). Judge TP ceiling prompt now reads PAIR_TP_CEILING dynamically.")
     logger.info("  V3.2.61: 12H price action candles fed to Judge (T1=1h/12, T2=30m/24, T3=15m/48 — entry timing + range position). TP ceilings raised (BTC/ETH=1.0%%, SOL=1.5%%, others=0.80%%), R:R guard restored (min 0.5:1), Gemini TP override blocked when chart SR returns tp_not_found.")
     logger.info("  V3.2.60: ATR-safety respects MAX_SL_PCT ceiling (was overriding to 1.84%%), breakeven SL classified correctly.")
     logger.info("  V3.2.59: Gemini event detection — detect_macro_events() uses Gemini Search to scan upcoming macro/crypto events (30min cache). Dynamic blackout for HIGH-impact events within 15min. Replaces hardcoded _macro_events dict in Judge prompt. Also: ADX<20 WAIT removed, 2-slot mode, TP fee-floor guard.")
