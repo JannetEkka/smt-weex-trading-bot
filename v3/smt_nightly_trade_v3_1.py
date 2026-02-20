@@ -3717,8 +3717,9 @@ BETA BIAS: Prefer Tier 3 (SOL, ADA) for momentum — bigger moves in shorter tim
 LOW ADX (V3.2.59): ADX < 20 = range-bound — dip-bounce works well here IF 2+ personas agree at 55%+ confidence each.
   If all personas are below 50% confidence, WAIT regardless of ADX.
   RANGE_BOUNDARY and VWAP_REVERSION strategies work in low-ADX — use if FLOW confirms wall.
-EXTREME FEAR DIP (V3.2.59): F&G < 15 + FLOW showing heavy bid accumulation = TEXTBOOK dip setup.
-  This is exactly what the bot was designed for. FLOW bid accumulation + extreme fear = smart money positioning for bounce. Trust it.
+EXTREME FEAR DIP (V3.2.60): F&G < 15 can be a dip-bounce setup, but ONLY when FLOW confirms with strong buying (>= 70% LONG).
+  FLOW at 50-60% in extreme fear = noise, NOT confirmation. Require real accumulation before calling it a dip setup.
+  Do NOT use F&G alone to boost confidence above what the persona votes justify.
 LIVE PRICES: Use CHART DATA provided in context for all price levels. Ignore any hardcoded example prices below.
 
 === HOLD TIME LIMITS (V3.2.57 — HARD DAEMON LIMITS) ===
@@ -3781,16 +3782,18 @@ SIGNAL RELIABILITY (V3.2.59 — ALL PERSONAS MATTER):
     4. TECHNICAL (RSI/SMA/momentum) -- trend confirmation. In fear markets (F&G < 30), discount if it conflicts
        with FLOW, as SMA signals lag. But when TECHNICAL aligns with FLOW + SENTIMENT, it strengthens conviction.
 
-HOW TO DECIDE (V3.2.59 — MAJORITY VOTE + CONTEXT):
-Count how many personas agree on direction. Consider the FULL picture:
-- 3+ personas agree on direction: TRADE IT. Confidence 80-90% based on strength of agreement.
-- 2 personas agree + 1 neutral + F&G extreme (< 15 or > 85) favoring same direction: TRADE IT at 75-85%.
-- FLOW strong (>70%) + SENTIMENT has specific catalyst + same direction: TRADE IT even if WHALE disagrees.
+HOW TO DECIDE (V3.2.60 — MAJORITY VOTE, NO F&G OVERRIDES):
+Count how many personas agree on direction. F&G is CONTEXT, not a vote — never use it to inflate confidence.
+- 3+ personas agree LONG at 60%+ each: 85-90% confidence. This is the strong setup.
+- 3+ personas agree but some weakly (50-60%): 80-85% confidence. Borderline — only trade if no conflicting strong signal.
+- 2 personas agree LONG strongly (70%+ each) + other 2 neutral: 80-85% confidence. Requires FLOW to be one of the two.
+- FLOW strong (>70%) + SENTIMENT has specific catalyst + same direction: 85%+ even if WHALE disagrees.
   WHALE community sentiment lags price action — a catalyst-driven move with FLOW confirmation is more reliable.
-- WHALE strong (>70%) + FLOW agrees: TRADE IT at 85%+. This is the gold standard.
-- ALL 4 personas directly contradict each other (no majority): WAIT.
+- WHALE strong (>70%) + FLOW strong (>70%) + same direction: 85-90%. This is the gold standard.
+- ANY strong persona (>70%) in the OPPOSITE direction of your trade: cap confidence at 85% max.
 - FLOW and WHALE both strong (>70%) in OPPOSITE directions: WAIT (genuine conflict).
 - No persona exceeds 50% confidence: WAIT (no conviction anywhere).
+CONFIDENCE 90%+ REQUIRES: 3+ personas at 65%+ each, all agreeing. Never give 90% with only 2 weak agreements.
 
 VOLATILITY RISK (from SENTIMENT):
 - HIGH_RISK means a scheduled event COULD cause volatility. It does NOT mean "don't trade."
@@ -3813,9 +3816,12 @@ If no clear structure reachable within hold window, omit tp_price — code will 
 USE THIS AS CONTEXT ONLY — not a veto. Poor historical win rate = note it in reasoning, but trust the majority of personas.
 If a pair has >15% win rate, it has proven itself — trust stronger signals on it.
 
-FEAR & GREED (V3.2.59 — DIP-BOUNCE LONG-ONLY):
-- F&G < 15 (EXTREME FEAR): DIP TERRITORY — our highest-conviction LONG setup. FLOW bid accumulation + extreme fear = smart money positioning for bounce. Lean into it.
-- F&G < 30 (FEAR): Favor LONG. Dip-bounce opportunities are frequent here.
+FEAR & GREED (V3.2.60 — DIP-BOUNCE LONG-ONLY):
+CRITICAL: F&G is CONTEXT, not a persona. It does NOT count as a vote. Do NOT boost confidence just because F&G is low.
+- F&G < 15 (EXTREME FEAR): Dip-bounce opportunities exist BUT only if FLOW confirms with STRONG buying (taker buy ratio > 1.3 AND/OR bid depth > 1.5x).
+  FLOW at 50-60% in extreme fear is NOT "smart money accumulation" — it's noise. Require FLOW >= 70% to call it a dip setup.
+  If FLOW is weak/neutral, extreme fear means MORE downside risk, not less. WAIT.
+- F&G < 30 (FEAR): Favor LONG if FLOW + at least one other persona agree. Do not override weak signals with "fear = buy."
 - F&G 30-70 (NEUTRAL): Use WHALE+FLOW+TECHNICAL signals normally.
 - F&G > 70 (GREED): Be cautious — only LONG if 3+ personas strongly agree (risk of correction).
 - F&G > 85 (EXTREME GREED): WAIT preferred — tops are dangerous for LONGs. Only trade if FLOW+WHALE confirm continued momentum.
@@ -3823,12 +3829,14 @@ FEAR & GREED (V3.2.59 — DIP-BOUNCE LONG-ONLY):
 TRADE HISTORY CONTEXT:
 {trade_history_summary}
 
-DECISION RULES (V3.2.59 — FINAL):
+DECISION RULES (V3.2.60 — FINAL):
 1. LONGS ONLY — never return SHORT (shorts are disabled).
-2. Count ALL 4 personas (WHALE, SENTIMENT, FLOW, TECHNICAL). If 3+ agree LONG at 55%+ each, TRADE. 2 strong personas (65%+ each) + extreme fear bias can also justify 85%+ confidence.
-3. Confidence MUST be >= 0.85 to trade. Below 85% = return WAIT. 85-89% = standard sizing. 90%+ = maximum sizing.
-4. If signals genuinely conflict (no majority direction), return WAIT — do not force a trade.
-5. BLITZ MODE: <3 days left. Every cycle without a trade is wasted capital. If the setup is there, TAKE IT.
+2. Count ALL 4 personas. 3+ agree LONG at 60%+ each = TRADE. Fewer = higher bar to reach 85%.
+3. Confidence MUST be >= 0.85 to trade. Below 85% = WAIT. 85-89% = standard. 90%+ = maximum sizing.
+4. 90% confidence REQUIRES 3+ personas at 65%+ each. Never 90% with 2 weak agreements + F&G.
+5. If ANY strong persona (>70%) opposes the trade direction, cap confidence at 85%.
+6. F&G is context, NOT a persona vote. Do not boost confidence because F&G is low.
+7. If signals conflict (no clear majority), WAIT — do not force a trade.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"decision": "LONG" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences: state how many personas agree, which strategy fits, and what target you see within {_pair_hold}", "tp_price": null or a number (structural level reachable within {_pair_hold}, capped at {_pair_tp_cap})}}"""
@@ -4628,10 +4636,15 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         print(f"  [FEE-FLOOR] {_reason}")
         return {"executed": False, "reason": _reason}
 
-    # V3.1.89: Removed R:R gate — the 1.5:1 requirement conflicted with chart-based
-    # TP/SL and ATR safety, blocking high-confidence signals (e.g. 85% SOL SHORT).
-    # Trust the 80% confidence floor + chart S/R levels instead.
+    # V3.2.60: R:R minimum guard — reject trades where risk far exceeds reward.
+    # Old 1.5:1 gate was too strict; 0.5:1 minimum catches TP 0.5% / SL 1.5% = 0.33:1 losers
+    # while allowing normal chart-based TP/SL ratios through.
     _rr_ratio = tp_pct_raw / sl_pct_raw if sl_pct_raw > 0 else 0
+    _MIN_RR_RATIO = 0.50
+    if _rr_ratio < _MIN_RR_RATIO:
+        _reason = f"R:R {_rr_ratio:.2f}:1 below minimum {_MIN_RR_RATIO}:1 (TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}%) — need {sl_pct_raw * _MIN_RR_RATIO:.2f}%+ TP"
+        print(f"  [R:R GUARD] {_reason}")
+        return {"executed": False, "reason": _reason}
     print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | R:R {_rr_ratio:.1f}:1 | Method: {chart_sr['method']}")
 
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.

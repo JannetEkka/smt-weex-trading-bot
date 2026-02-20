@@ -949,11 +949,16 @@ def check_trading_signals():
                     _cycle_signals += 1
                     _cycle_above_80 += 1
 
-                # V3.2.59: SHORTS DISABLED — LONGs only.
+                # V3.2.60: SHORTS DISABLED — LONGs only (hot-reloadable via smt_settings.json).
+                # Set {"enable_shorts": true} in smt_settings.json to re-enable without restart.
                 # Shorts underperform in current market regime (extreme fear = bounce territory).
-                # TP/SL logic is symmetric but dip-bounce strategy fundamentally favors LONGs.
-                # Re-enable post-competition if market regime shifts to greed/euphoria.
-                if signal == "SHORT":
+                _shorts_enabled = True
+                try:
+                    from hot_reload import is_direction_enabled
+                    _shorts_enabled = is_direction_enabled("SHORT")
+                except Exception:
+                    _shorts_enabled = False  # Default to disabled if hot_reload unavailable
+                if signal == "SHORT" and not _shorts_enabled:
                     logger.info(f"    -> SHORT disabled (LONG-only mode)")
                     signal = "WAIT"
                     confidence = 0
