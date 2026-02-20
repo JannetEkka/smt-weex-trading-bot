@@ -417,6 +417,59 @@ TAKER_FEE_RATE = 0.0006       # V3.2.19: 0.06%/side taker fee. At 20x → ~2.4% 
 # V3.1.93: Last signal cycle summary for PM context
 _last_signal_summary = {}
 
+# ============================================================
+# V3.2.48: MACRO BLACKOUT WINDOWS — block new entries during
+# high-impact scheduled macro data releases.
+# Format: (start_utc, end_utc, label)
+# Strict window: bot skips ALL signal cycles within the window.
+# The 14:00 re-entry lets the 30-min post-data candle settle.
+# ============================================================
+MACRO_BLACKOUT_WINDOWS = [
+    ("2026-02-20 13:15", "2026-02-20 14:00", "US Core PCE Price Index"),
+]
+
+def _is_macro_blackout() -> tuple:
+    """V3.2.48: Check if current UTC time falls inside a macro blackout window.
+    Returns (is_blacked_out: bool, label: str)."""
+    now = datetime.now(timezone.utc)
+    for start_str, end_str, label in MACRO_BLACKOUT_WINDOWS:
+        start = datetime.strptime(start_str, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+        end = datetime.strptime(end_str, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+        if start <= now < end:
+            return True, label
+    return False, ""
+
+# ============================================================
+# V3.2.48: WEEKEND + HOLIDAY LIQUIDITY MODE
+# During thin-liquidity periods (Sat/Sun + known bank holidays),
+# restrict trading to deep-book pairs only: BTC, ETH, SOL.
+# Altcoins (BNB, LTC, XRP, ADA) have 20-25% lower weekend volume
+# → wider spreads, more fakeout wicks, worse fills.
+# Emperor's Birthday (Feb 23 Mon) extends thin-book conditions
+# as Japan is a major crypto liquidity provider and CME is closed.
+# ============================================================
+WEEKEND_ALLOWED_PAIRS = {"BTC", "ETH", "SOL"}
+
+# Bank holidays that extend weekend-like thin liquidity into weekdays
+# Format: "YYYY-MM-DD" UTC date. Only the hours < 12 UTC are restricted
+# (Asian + European session thin, US session restores liquidity).
+HOLIDAY_THIN_LIQUIDITY = {
+    "2026-02-23": "Emperor's Birthday (Japan) — CME + TradFi Asia closed",
+}
+
+def _is_weekend_liquidity_mode() -> tuple:
+    """V3.2.48: Check if we're in weekend/holiday thin-liquidity mode.
+    Returns (is_thin: bool, reason: str)."""
+    now = datetime.now(timezone.utc)
+    # Saturday = 5, Sunday = 6
+    if now.weekday() in (5, 6):
+        return True, f"Weekend (UTC {now.strftime('%A')})"
+    # Bank holiday thin hours (before 12 UTC — Asian/European session)
+    date_str = now.strftime("%Y-%m-%d")
+    if date_str in HOLIDAY_THIN_LIQUIDITY and now.hour < 12:
+        return True, HOLIDAY_THIN_LIQUIDITY[date_str]
+    return False, ""
+
 # V3.2.6: Per-pair signal persistence tracking moved into TradeTracker.signal_history
 # (persisted to trade_state JSON so counts survive daemon restarts)
 # Structure: {pair: {"direction": "SHORT", "confidence": 0.88, "count": 2, "entry_time": ISO, "last_seen": ISO}}
@@ -547,7 +600,22 @@ def check_trading_signals():
     
     state.signals_checked += 1
     state.last_signal_check = datetime.now(timezone.utc)
-    
+
+    # V3.2.48: MACRO BLACKOUT — skip entire signal cycle during high-impact data releases.
+    # Strict window: no new entries. Existing positions are monitored normally by position_monitor.
+    _blacked_out, _blackout_label = _is_macro_blackout()
+    if _blacked_out:
+        logger.warning(f"[MACRO BLACKOUT] {_blackout_label} — skipping signal cycle. Re-entry after window closes.")
+        upload_ai_log_to_weex(
+            stage=f"Macro Blackout: {_blackout_label}",
+            input_data={"event": _blackout_label, "utc_time": datetime.now(timezone.utc).isoformat()},
+            output_data={"action": "BLACKOUT_SKIP", "reason": "Scheduled macro data release"},
+            explanation=f"Signal cycle skipped: {_blackout_label} data release imminent. "
+                        f"Initial 10-30 min post-release is dominated by algorithmic slippage and fakeout wicks. "
+                        f"Bot will re-enter after the blackout window closes and the first clean candle settles."
+        )
+        return
+
     try:
         # V3.1.19: Get proper account info with equity from API
         account_info = get_account_equity()
@@ -673,7 +741,12 @@ def check_trading_signals():
         # V3.1.88: Always log F&G in cycle header for observability
         _fg_label = "EXTREME FEAR" if _fg_value < 20 else "FEAR" if _fg_value < 40 else "NEUTRAL" if _fg_value < 60 else "GREED" if _fg_value < 80 else "EXTREME GREED"
         logger.info(f"F&G: {_fg_value} ({_fg_label}) | Positions open: {weex_position_count}/{effective_max_positions} slots")
-        
+
+        # V3.2.48: Weekend/holiday liquidity mode — restrict to deep-book pairs only
+        _thin_liquidity, _thin_reason = _is_weekend_liquidity_mode()
+        if _thin_liquidity:
+            logger.info(f"[WEEKEND MODE] {_thin_reason} — restricting to {', '.join(sorted(WEEKEND_ALLOWED_PAIRS))} only (thin altcoin books)")
+
         # Build map: symbol -> {side: position}
         # This tracks BOTH long and short for each symbol
         position_map = {}
@@ -700,7 +773,18 @@ def check_trading_signals():
             symbol = pair_info["symbol"]
             tier = pair_info.get("tier", 2)
             tier_config = get_tier_config(tier)
-            
+
+            # V3.2.48: Weekend/holiday thin-liquidity filter — skip altcoins with thin books.
+            # Existing positions on filtered pairs are still MONITORED (position_monitor runs normally).
+            # Only NEW signal analysis + entry is skipped for illiquid pairs.
+            if _thin_liquidity and pair not in WEEKEND_ALLOWED_PAIRS:
+                # Still monitor existing positions — don't skip if we already have a position
+                symbol_positions = position_map.get(symbol, {})
+                if not symbol_positions:
+                    logger.info(f"  {pair} (T{tier}): WEEKEND SKIP — thin altcoin book ({_thin_reason})")
+                    continue
+                # If we have an existing position, fall through to analyze (monitor + opposite swap still works)
+
             # Check existing positions on this symbol
             symbol_positions = position_map.get(symbol, {})
             has_long = "LONG" in symbol_positions
@@ -3345,7 +3429,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.47 - Fix: Slot recheck after each trade execution (was opening 2+ trades with 1-slot cap)")
+    logger.info("SMT Daemon V3.2.48 - Macro blackout windows, weekend liquidity mode, funding hold-cost awareness")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3386,6 +3470,13 @@ def run_daemon():
     logger.info("  Block flip if position < 20min old or >= 30%% toward TP")
     logger.info("  Blocked signal queued → auto-executes after old position closes")
     logger.info("  Deferred flip expires after 30min")
+    # --- V3.2.48: Macro defense ---
+    logger.info("MACRO DEFENSE (V3.2.48):")
+    logger.info("  Blackout windows: PCE 2026-02-20 13:15-14:00 UTC (skip entire signal cycle)")
+    logger.info("  Weekend mode: Sat/Sun → BTC,ETH,SOL only (altcoin books too thin)")
+    logger.info("  Holiday mode: Emperor's Birthday 2026-02-23 < 12:00 UTC → same restriction")
+    logger.info("  Funding hold-cost: per-pair funding rate × 20x = margin drag in Judge prompt")
+    logger.info("  Macro events: date-sensitive context (PCE, ZRO unlock, holiday) fed to Judge")
     # --- Timing ---
     logger.info("TIMING:")
     logger.info("  Signal check: 10min | Position monitor: 2min | Orphan sweep: 30s | Health: 60s")
@@ -3415,9 +3506,9 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.48: Macro blackout (PCE 13:15-14:00 UTC), weekend mode (BTC/ETH/SOL only), Emperor's Birthday thin-liq, funding hold-cost in Judge, ZRO unlock context")
     logger.info("  V3.2.45: Regex JSON parser for SENTIMENT+JUDGE (re.search(r'\\{.*\\}', re.DOTALL) — immune to grounding citation injection [1][2]); dynamic date in SENTIMENT search; no-citation prompt directive")
     logger.info("  V3.2.44: Full Gemini response visibility — removed [:200] on SENTIMENT reasoning, [:600] on JUDGE reasoning print, [:200] on Judge prompt persona summary; market_context no longer capped")
-    logger.info("  V3.2.43: [AI-LOG] SENT verbose print on every upload (stage/expl/out/WEEX code); WAIT upload includes per-persona reasoning (SENTIMENT+JUDGE visible in log)")
     logger.info("  V3.2.42: Judge progress prints ([JUDGE] Calling Gemini / responded in Xs); sync_tracker AI log now sends order_id via get_recent_close_order_id()")
     logger.info("  V3.2.38: 4-slot hard cap restored (can_open_new checks available_slots > 0)")
     logger.info("  V3.2.37: ANTI-WAIT removed — Gemini Judge WAIT = WAIT; no persona-consensus or keyword override")

@@ -1917,7 +1917,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.47-SlotRecheckFix-PreventMultiOpen"
+PIPELINE_VERSION = "SMT-v3.2.48-MacroBlackout-WeekendMode-FundingHoldCost"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3396,6 +3396,62 @@ class JudgePersona:
                 _s_lines.append(f"  Context: {_s_ctx[:300]}")
             sentiment_macro_text = "\n".join(_s_lines)
 
+        # V3.2.48: FUNDING RATE HOLD-COST — fetch per-pair funding rate and compute
+        # the exact drag at 20x leverage over the expected 4-5H holding period.
+        # WEEX charges funding every 8 hours — if next settlement is within hold window,
+        # the fee eats into TP. Judge needs this to avoid marginally-profitable trades.
+        funding_hold_cost_text = ""
+        try:
+            _fr_url = f"{WEEX_BASE_URL}/capi/v2/market/currentFundRate?symbol={symbol}"
+            _fr_r = requests.get(_fr_url, timeout=10)
+            _fr_data = _fr_r.json()
+            _pair_funding = 0.0
+            if isinstance(_fr_data, list) and len(_fr_data) > 0:
+                _pair_funding = float(_fr_data[0].get("fundingRate", 0))
+            if _pair_funding != 0.0:
+                # At 20x leverage, funding is charged on notional = margin × 20.
+                # Cost per 8H settlement: funding_rate × 20 × 100 = margin % drag.
+                # Example: 0.01% funding × 20x = 0.20% margin drag per settlement.
+                _margin_drag_pct = abs(_pair_funding) * 20 * 100
+                _drag_direction = "LONG pays SHORT" if _pair_funding > 0 else "SHORT pays LONG"
+                funding_hold_cost_text = (
+                    f"  {pair} funding rate: {_pair_funding:+.6f} ({_drag_direction})\n"
+                    f"  At 20x leverage: {_margin_drag_pct:.2f}% margin drag per 8H settlement\n"
+                    f"  If holding 4-5H, next funding settlement likely occurs during hold window.\n"
+                    f"  RULE: If TP target < {_margin_drag_pct:.2f}% AND you are on the paying side, the trade is NET NEGATIVE after fees. Favor WAIT or the receiving side."
+                )
+                print(f"  [JUDGE] {pair} funding hold-cost: {_pair_funding:+.6f} → {_margin_drag_pct:.2f}% margin drag at 20x ({_drag_direction})")
+        except Exception as _fr_err:
+            print(f"  [JUDGE] Funding rate fetch error for {pair}: {_fr_err}")
+
+        # V3.2.48: MACRO EVENT CONTEXT (Option B — context to Judge, not hardcoded restrictions)
+        # Date-sensitive events that affect liquidity, volatility, or altcoin flows.
+        # Judge uses this as qualitative context alongside FLOW/WHALE data.
+        macro_event_text = ""
+        _today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _macro_events = {
+            "2026-02-20": (
+                "US Core PCE Price Index release at 13:30 UTC. High-impact macro data — "
+                "expect volatility spike and algorithmic rebalancing for 15-30 min post-release. "
+                "Also: LayerZero (ZRO) $46.27M token unlock today — liquidity drain from altcoin markets. "
+                "FLOW data may show temporary volume spikes unrelated to directional conviction. "
+                "Favor BTC/ETH (deep books) over thin altcoins. If FLOW shows unusual volume surge on altcoins, "
+                "it may be unlock-related selling, not organic buying pressure."
+            ),
+            "2026-02-21": (
+                "Post-PCE Friday — markets digesting PCE data from yesterday. "
+                "Weekend liquidity thinning begins after US close (~21:00 UTC). "
+                "Favor early-session trades and faster TPs. Avoid holding into weekend."
+            ),
+            "2026-02-23": (
+                "Emperor's Birthday (Japan) — Japanese banks and CME closed during Asian session. "
+                "Japan is a major crypto liquidity provider. Expect thin order books and fakeout wicks "
+                "until US session opens (~14:00 UTC). Favor BTC/ETH only until liquidity normalizes."
+            ),
+        }
+        if _today_str in _macro_events:
+            macro_event_text = _macro_events[_today_str]
+
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
 Your job: analyze all signals and plan the SINGLE BEST action for {pair} over the NEXT 4-5 HOURS.
 STRATEGY: Per-pair medium-move targeting. TP targets are now 0.5-2.0% (pair-specific, based on 4H structure).
@@ -3446,6 +3502,16 @@ IMPORTANT: SENTIMENT used Google Search to find qualitative catalysts only — N
 - RISK_OFF macro + FLOW distribution = add confidence to SHORT bias
 - HIGH_RISK volatility event: require confidence >=85% before trading — scheduled events can cause extreme wicks
 - CATALYST present: can override RANGE setup to CATALYST_DRIVE epoch strategy
+
+=== FUNDING RATE HOLD-COST (V3.2.48 — position carry cost at 20x leverage) ===
+{funding_hold_cost_text if funding_hold_cost_text else "Funding rate data unavailable or zero (no carry cost)."}
+WEEX charges funding every 8 hours. At 20x leverage, even a small funding rate creates meaningful margin drag.
+- If you are on the PAYING side (LONG when funding positive, SHORT when funding negative), your TP must clear the drag to be profitable.
+- If you are on the RECEIVING side, funding works in your favor — adds to profit beyond TP.
+- If TP target is marginal (e.g., 0.5%) and funding drag is >0.15%, the trade may be NET NEGATIVE after fees+funding. Favor WAIT or switch direction.
+
+=== MACRO EVENT CONTEXT (V3.2.48 — date-sensitive market intelligence) ===
+{macro_event_text if macro_event_text else "No known macro events today."}
 {whale_section}
 === CURRENT POSITIONS ON {pair} ===
 {pair_pos_text}
@@ -4803,29 +4869,64 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
 
 
 def get_recent_close_order_id(symbol: str) -> Optional[int]:
-    """V3.2.40: Query WEEX for the most recently filled close order for a symbol.
+    """V3.2.40 / V3.2.48-fix: Query WEEX for the most recently filled close order for a symbol.
     Used to attach a close orderId to the AI log when WEEX auto-executes a TP/SL trigger.
     Returns None on failure — AI log still uploads, just without orderId.
+
+    V3.2.48: Fixed endpoint — was using /capi/v2/order/orders?status=2 which returns HTTP 404.
+    Now uses /capi/v2/order/fills (correct WEEX endpoint for filled trades) as primary,
+    with /capi/v2/order/current as fallback.
     """
     pair = symbol.replace("cmt_", "").upper()
+
+    # PRIMARY: /capi/v2/order/fills — returns fill records with orderId + direction
+    # direction values: "close_long", "close_short", "open_long", "open_short"
     try:
-        endpoint = f"/capi/v2/order/orders?symbol={symbol}&status=2"
+        endpoint = f"/capi/v2/order/fills?symbol={symbol}&limit=20"
         r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=10)
-        if r.status_code != 200:
-            print(f"  [AI-LOG] get_recent_close_order_id {pair}: HTTP {r.status_code}", flush=True)
-            return None
-        resp = r.json()
-        orders = resp if isinstance(resp, list) else (resp.get("data") or [])
-        print(f"  [AI-LOG] get_recent_close_order_id {pair}: {len(orders)} order(s) returned (status=2)", flush=True)
-        # Filter for close order types (3=close long, 4=close short)
-        close_orders = [o for o in orders if str(o.get("type", "")) in ("3", "4")]
-        if close_orders:
-            oid = close_orders[0].get("order_id")
-            print(f"  [AI-LOG] {pair} close orderId found: {oid}", flush=True)
-            return int(oid) if oid and str(oid).isdigit() else None
-        print(f"  [AI-LOG] {pair}: no close-type orders in response — raw[0]={orders[0] if orders else 'empty'}", flush=True)
+        if r.status_code == 200:
+            resp = r.json()
+            fills = resp if isinstance(resp, list) else (resp.get("data") or [])
+            print(f"  [AI-LOG] get_recent_close_order_id {pair}: {len(fills)} fill(s) from /fills", flush=True)
+            # Filter for close fills
+            close_fills = [f for f in fills if str(f.get("direction", "")).startswith("close")]
+            if not close_fills:
+                # Also check 'type' field — some WEEX responses use type 3/4 for close orders
+                close_fills = [f for f in fills if str(f.get("type", "")) in ("3", "4")]
+            if close_fills:
+                oid = close_fills[0].get("orderId") or close_fills[0].get("order_id")
+                print(f"  [AI-LOG] {pair} close orderId found (fills): {oid}", flush=True)
+                return int(oid) if oid and str(oid).isdigit() else None
+            print(f"  [AI-LOG] {pair}: no close fills in /fills response", flush=True)
+        else:
+            print(f"  [AI-LOG] get_recent_close_order_id {pair}: /fills HTTP {r.status_code}", flush=True)
     except Exception as e:
-        print(f"  [AI-LOG] get_recent_close_order_id {pair} error: {e}", flush=True)
+        print(f"  [AI-LOG] get_recent_close_order_id {pair} /fills error: {e}", flush=True)
+
+    # FALLBACK: /capi/v2/order/current — returns all orders, filter client-side for filled closes
+    try:
+        endpoint = f"/capi/v2/order/current?symbol={symbol}&limit=20"
+        r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=10)
+        if r.status_code == 200:
+            resp = r.json()
+            orders = resp if isinstance(resp, list) else (resp.get("data") or [])
+            print(f"  [AI-LOG] get_recent_close_order_id {pair}: {len(orders)} order(s) from /current", flush=True)
+            # Filter for filled close orders (status=filled, type=close_long/close_short or 3/4)
+            close_orders = [
+                o for o in orders
+                if (str(o.get("status", "")) in ("filled", "2") and
+                    (str(o.get("type", "")).startswith("close") or str(o.get("type", "")) in ("3", "4")))
+            ]
+            if close_orders:
+                oid = close_orders[0].get("orderId") or close_orders[0].get("order_id")
+                print(f"  [AI-LOG] {pair} close orderId found (current): {oid}", flush=True)
+                return int(oid) if oid and str(oid).isdigit() else None
+            print(f"  [AI-LOG] {pair}: no filled close orders in /current response", flush=True)
+        else:
+            print(f"  [AI-LOG] get_recent_close_order_id {pair}: /current HTTP {r.status_code}", flush=True)
+    except Exception as e:
+        print(f"  [AI-LOG] get_recent_close_order_id {pair} /current error: {e}", flush=True)
+
     return None
 
 
