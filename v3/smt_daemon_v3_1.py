@@ -3705,7 +3705,7 @@ def run_daemon():
     logger.info("  SL method: lowest wick in 12H (1H grid) + last 3 4H candles | SL floor: 1.0%%")
     logger.info("  TP method: max high of last 2 complete 1H candles (LONG) / min low (SHORT)")
     logger.info("  FLOW walls in Judge prompt: ask/bid walls from 200-level order book (context, not hard override)")
-    logger.info("  Gemini Judge: sees chart structure (1D+4H) + FLOW walls + chop → returns tp_price")
+    logger.info("  Gemini Judge: sees chart structure (1D+4H) + 12H price action candles (T1=1h, T2=30m, T3=15m) + FLOW walls + chop → returns tp_price")
     # --- Position sizing ---
     logger.info("POSITION SIZING (V3.2.46 confidence-scaled):")
     logger.info("  sizing_base = max(min(available, balance * 2.5), 1000)")
@@ -3734,7 +3734,7 @@ def run_daemon():
     logger.info("  SENTIMENT: 1.0 | Gemini 2.5 Flash w/ Search Grounding")
     logger.info("  FLOW: 1.0 | Taker ratio beats depth | 180-flip = confidence halved")
     logger.info("  TECHNICAL: 1.0 (halved to 0.4 when F&G<30) | RSI(14), SMA 20/50, 5-candle momentum")
-    logger.info("  JUDGE: Gemini aggregator | Receives chart context (1D+4H) for TP targeting")
+    logger.info("  JUDGE: Gemini aggregator | Receives chart structure (1D+4H) + 12H price action candles for entry timing")
     # --- Disabled features ---
     logger.info("DISABLED:")
     logger.info("  Gemini portfolio review (V3.2.17) | Stale auto-close (V3.2.17)")
@@ -3752,7 +3752,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.61: TP ceilings raised (BTC/ETH=1.0%%, SOL=1.5%%, others=0.80%%), R:R guard restored (min 0.5:1), Gemini TP override blocked when chart SR returns tp_not_found (entry at resistance). Banner: confidence=85%%, cooldown=10min.")
+    logger.info("  V3.2.61: 12H price action candles fed to Judge (T1=1h/12, T2=30m/24, T3=15m/48 — entry timing + range position). TP ceilings raised (BTC/ETH=1.0%%, SOL=1.5%%, others=0.80%%), R:R guard restored (min 0.5:1), Gemini TP override blocked when chart SR returns tp_not_found.")
     logger.info("  V3.2.60: ATR-safety respects MAX_SL_PCT ceiling (was overriding to 1.84%%), breakeven SL classified correctly.")
     logger.info("  V3.2.59: Gemini event detection — detect_macro_events() uses Gemini Search to scan upcoming macro/crypto events (30min cache). Dynamic blackout for HIGH-impact events within 15min. Replaces hardcoded _macro_events dict in Judge prompt. Also: ADX<20 WAIT removed, 2-slot mode, TP fee-floor guard.")
     logger.info("  V3.2.58: Altcoin execution priority — sort key now (confidence desc, tier desc) so T3>T2>T1 at equal confidence. Prevents T1 BTC/ETH crowding out altcoins when same 85%% threshold hit in same cycle.")
