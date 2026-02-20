@@ -1136,6 +1136,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         "tp_pct": None, "sl_pct": None,
         "tp_price": None, "sl_price": None,
         "method": "fallback",
+        "tp_not_found": False,  # V3.2.61: explicit flag when chart SR finds zero TP candidates
         "levels": {"resistances": [], "supports": [], "htf_resistances": [], "htf_supports": []}
     }
 
@@ -1250,6 +1251,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                             break
                     if not tp_found:
                         print(f"  [CHART-SR] LONG: no resistance >= {MIN_VIABLE_TP_PCT:.2f}% above entry in 4H/48H — tp_not_found (entry at ceiling)")
+                        result["tp_not_found"] = True
 
             # SL: lowest actual wick in 12H from either timeframe ("take whichever is lowest")
             sl_price = min(sl_low_12h_1h, sl_low_12h_4h) * 0.997
@@ -1304,6 +1306,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                             break
                     if not tp_found:
                         print(f"  [CHART-SR] SHORT: no support >= {MIN_VIABLE_TP_PCT:.2f}% below entry in 4H/48H — tp_not_found (entry at floor)")
+                        result["tp_not_found"] = True
 
             # SL: highest actual wick in 12H from either timeframe
             sl_price = max(sl_high_12h_1h, sl_high_12h_4h) * 1.003
@@ -1490,13 +1493,13 @@ COMPETITION_FALLBACK_SL = {
 # ~0.5% TP philosophy: bank the dip-bounce fast, re-enter next 10-min cycle if trend continues.
 # Ceiling-only: if chart SR < ceiling, use chart SR. Never raises a low TP.
 PAIR_TP_CEILING = {
-    "BTC": 0.70,   # Tier 1. 3H hold. Majors move 0.3-0.8% in 1-2h.
-    "ETH": 0.70,   # Tier 1. 3H hold. Similar to BTC.
-    "BNB": 0.60,   # Tier 2. 2H hold. Lower beta.
-    "LTC": 0.60,   # Tier 2. 2H hold. Conservative.
-    "XRP": 0.60,   # Tier 2. 2H hold. Range-bound.
-    "SOL": 0.80,   # Tier 3. High beta, can move 0.5-1% quickly.
-    "ADA": 0.60,   # Tier 3. BTC-correlated laggard.
+    "BTC": 1.0,    # Tier 1. 3H hold. R:R 0.67:1 vs 1.5% SL. Realistic 1-3h target.
+    "ETH": 1.0,    # Tier 1. 3H hold. Same as BTC.
+    "BNB": 0.80,   # Tier 2. 2H hold. R:R 0.53:1. Lower beta.
+    "LTC": 0.80,   # Tier 2. 2H hold. Conservative.
+    "XRP": 0.80,   # Tier 2. 2H hold. Range-bound.
+    "SOL": 1.5,    # Tier 3. High beta, room to run. R:R 1.0:1.
+    "ADA": 0.80,   # Tier 3. BTC-correlated.
 }
 
 # V3.2.41: Per-pair max position size. Default: MAX_SINGLE_POSITION_PCT = 0.50.
@@ -1924,7 +1927,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.60-DipBounceTPs-BreakevenSLFix"
+PIPELINE_VERSION = "SMT-v3.2.61-TPCeilingFix-RRGuard"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4545,9 +4548,11 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
     # V3.2.16: Gemini structural TP override — uses 1D+4H chart context to identify
     # the REAL nearest resistance/support, bypassing the 2H anchor when Gemini gives a target.
+    # V3.2.61: Do NOT rescue tp_not_found trades. If chart SR found zero candidates above/below
+    # entry (entry at ceiling/floor), the trade should be discarded — Gemini can't fix bad entry level.
     _gemini_tp = decision.get("gemini_tp_price")
     _gemini_tp_used = False
-    if _gemini_tp and _gemini_tp > 0 and current_price > 0:
+    if _gemini_tp and _gemini_tp > 0 and current_price > 0 and not chart_sr.get("tp_not_found"):
         if signal == "LONG" and _gemini_tp > current_price:
             _g_tp_pct = ((_gemini_tp - current_price) / current_price) * 100
             if 0.3 <= _g_tp_pct <= 5.0:  # Sanity: 0.3% to 5.0%
@@ -4640,10 +4645,14 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         print(f"  [FEE-FLOOR] {_reason}")
         return {"executed": False, "reason": _reason}
 
-    # V3.2.60: R:R guard REMOVED. Dip-bounce strategy = high win-rate, NOT high R:R.
-    # 0.6% TP / 1.5% SL = R:R 0.4:1 is BY DESIGN. The 10-min re-entry loop IS the edge.
-    # Log R:R for diagnostics only.
+    # V3.2.61: R:R guard RE-ADDED. 0.4:1 R:R requires 79%+ win rate after fees — too demanding.
+    # Minimum 0.5:1 ensures break-even at ~65% win rate, achievable with proper dip entries.
+    MIN_RR_RATIO = 0.5
     _rr_ratio = tp_pct_raw / sl_pct_raw if sl_pct_raw > 0 else 0
+    if _rr_ratio < MIN_RR_RATIO:
+        _reason = f"R:R {_rr_ratio:.2f}:1 below minimum {MIN_RR_RATIO}:1 (TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}%)"
+        print(f"  [R:R GUARD] {_reason}")
+        return {"executed": False, "reason": _reason}
     print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | R:R {_rr_ratio:.1f}:1 | Method: {chart_sr['method']}")
 
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
