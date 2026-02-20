@@ -3263,7 +3263,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.43 - Larger Gains: Per-Pair TP, 4H Anchor, 4-5H Planning")
+    logger.info("SMT Daemon V3.2.44 - Larger Gains: Per-Pair TP, 4H Anchor, 4-5H Planning")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3332,6 +3332,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.44: Full Gemini response visibility — removed [:200] on SENTIMENT reasoning, [:600] on JUDGE reasoning print, [:200] on Judge prompt persona summary; market_context no longer capped")
     logger.info("  V3.2.43: [AI-LOG] SENT verbose print on every upload (stage/expl/out/WEEX code); WAIT upload includes per-persona reasoning (SENTIMENT+JUDGE visible in log)")
     logger.info("  V3.2.42: Judge progress prints ([JUDGE] Calling Gemini / responded in Xs); sync_tracker AI log now sends order_id via get_recent_close_order_id()")
     logger.info("  V3.2.38: 4-slot hard cap restored (can_open_new checks available_slots > 0)")

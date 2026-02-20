@@ -1914,7 +1914,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.43-AiLogVerbose-WaitReasoning"
+PIPELINE_VERSION = "SMT-v3.2.44-FullGeminiResponseLogs"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -2636,9 +2636,9 @@ Respond with JSON ONLY (no markdown):
                             "persona": self.name,
                             "signal": signal,
                             "confidence": data.get("confidence", 0.5),
-                            "reasoning": _reasoning[:200],
+                            "reasoning": _reasoning,
                             "sentiment": _bias,
-                            "market_context": _ctx[:800],
+                            "market_context": _ctx,
                             # V3.2.41: Extra macro fields passed to Judge
                             "macro_bias": _macro_bias,
                             "catalyst": _catalyst,
@@ -2684,7 +2684,7 @@ Respond with JSON only:
                         "confidence": conf,
                         "reasoning": f"(no-grounding fallback) {data.get('key_factor', 'Model analysis')}",
                         "sentiment": data["sentiment"],
-                        "market_context": data.get("market_context", "")[:800],
+                        "market_context": data.get("market_context", ""),
                     }
         except Exception as e:
             print(f"  [SENTIMENT] Non-grounding fallback also failed for {pair}: {e}")
@@ -3180,11 +3180,11 @@ class JudgePersona:
         tier = get_tier_for_pair(pair)
         regime = get_enhanced_market_regime()
         
-        # Build persona summary with FULL reasoning
+        # Build persona summary with FULL reasoning (no truncation — Judge needs complete context)
         persona_summary = []
         for vote in persona_votes:
             persona_summary.append(
-                f"- {vote['persona']}: {vote['signal']} ({vote['confidence']:.0%}) - {vote.get('reasoning', 'N/A')[:200]}"
+                f"- {vote['persona']}: {vote['signal']} ({vote['confidence']:.0%}) - {vote.get('reasoning', 'N/A')}"
             )
         personas_text = "\n".join(persona_summary)
         
@@ -3587,7 +3587,7 @@ Respond with JSON ONLY (no markdown, no backticks):
             sl_pct = max(1.5, min(7.0, sl_pct))
 
             print(f"  [JUDGE] Gemini: {decision} ({confidence:.0%})")
-            print(f"  [JUDGE] Reasoning: {reasoning[:600]}")
+            print(f"  [JUDGE] Reasoning: {reasoning}")
             
             if decision == "WAIT":
                 return self._wait_decision(f"Gemini Judge: {reasoning}", persona_votes, 
@@ -5041,7 +5041,7 @@ def save_local_log(log_data: Dict, timestamp: str):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("SMT V3.2.43 - Multi-Persona Trading")
+    print("SMT V3.2.44 - Multi-Persona Trading")
     print("=" * 60)
     
     print("\nTier Configuration:")
