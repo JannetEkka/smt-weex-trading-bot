@@ -1389,7 +1389,7 @@ def get_chart_context(symbol: str, tier: int = 1) -> str:
     # === PART 1: 1D + 4H structure (S/R levels, trend) ===
     try:
         # 1D candles: 6 → skip [0] (current partial), use [1:6] = 5 complete days
-        url_1d = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1Dutc&limit=6"
+        url_1d = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=1d&limit=6"
         r_1d = requests.get(url_1d, timeout=10)
         candles_1d = r_1d.json()
 
@@ -1412,24 +1412,8 @@ def get_chart_context(symbol: str, tier: int = 1) -> str:
                 _4h_detail += f", resp={str(candles_4h)[:200]}"
             print(f"  [CHART-CTX] {pair_label}: 4H candles FAILED ({_4h_detail})")
 
-        if _1d_ok and _4h_ok:
-            d_opens  = [float(c[1]) for c in candles_1d[1:6]]
-            d_highs  = [float(c[2]) for c in candles_1d[1:6]]
-            d_lows   = [float(c[3]) for c in candles_1d[1:6]]
-            d_closes = [float(c[4]) for c in candles_1d[1:6]]
-
-            d_high_5d = max(d_highs)
-            d_low_5d  = min(d_lows)
-            d_current = float(candles_1d[0][4])
-
-            d_oldest_close = d_closes[-1]
-            d_change_5d = ((d_current - d_oldest_close) / d_oldest_close) * 100
-
-            d_res_sorted = sorted(d_highs, reverse=True)
-            d_resistances = d_res_sorted[:2]
-            d_sup_sorted = sorted(d_lows)
-            d_supports = d_sup_sorted[:2]
-
+        # V3.2.63: Use 4H data even if 1D fails (was gated on both succeeding)
+        if _4h_ok:
             h4_highs  = [float(c[2]) for c in candles_4h[1:9]]
             h4_lows   = [float(c[3]) for c in candles_4h[1:9]]
             h4_closes = [float(c[4]) for c in candles_4h[1:9]]
@@ -1438,6 +1422,32 @@ def get_chart_context(symbol: str, tier: int = 1) -> str:
             h4_resistances = h4_res_sorted[:2]
             h4_sup_sorted = sorted(h4_lows)
             h4_supports = h4_sup_sorted[:2]
+
+            if _1d_ok:
+                d_opens  = [float(c[1]) for c in candles_1d[1:6]]
+                d_highs  = [float(c[2]) for c in candles_1d[1:6]]
+                d_lows   = [float(c[3]) for c in candles_1d[1:6]]
+                d_closes = [float(c[4]) for c in candles_1d[1:6]]
+
+                d_high_5d = max(d_highs)
+                d_low_5d  = min(d_lows)
+                d_current = float(candles_1d[0][4])
+
+                d_oldest_close = d_closes[-1]
+                d_change_5d = ((d_current - d_oldest_close) / d_oldest_close) * 100
+
+                d_res_sorted = sorted(d_highs, reverse=True)
+                d_resistances = d_res_sorted[:2]
+                d_sup_sorted = sorted(d_lows)
+                d_supports = d_sup_sorted[:2]
+            else:
+                # Fallback: derive from 4H data when 1D unavailable
+                d_current = float(candles_4h[0][4])
+                d_high_5d = max(h4_highs)
+                d_low_5d  = min(h4_lows)
+                d_change_5d = 0.0
+                d_resistances = h4_resistances
+                d_supports = h4_supports
 
             h4_oldest_close = h4_closes[-1]
             h4_change = ((d_current - h4_oldest_close) / h4_oldest_close) * 100
@@ -1510,7 +1520,7 @@ def get_chart_context(symbol: str, tier: int = 1) -> str:
 
             for _c in _complete:
                 _ts = int(_c[0]) // 1000 if int(_c[0]) > 1e12 else int(_c[0])
-                _t_str = datetime.utcfromtimestamp(_ts).strftime("%H:%M")
+                _t_str = datetime.fromtimestamp(_ts, tz=timezone.utc).strftime("%H:%M")
                 _o = float(_c[1])
                 _h = float(_c[2])
                 _l = float(_c[3])
@@ -2030,7 +2040,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.62-ChartCtxFix-12HPriceAction"
+PIPELINE_VERSION = "SMT-v3.2.63-ChartCtxGranularityFix-4HFallback"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
