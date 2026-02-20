@@ -3643,14 +3643,19 @@ Respond with JSON ONLY (no markdown, no backticks):
             if sizing_base <= 0:
                 return self._wait_decision("Margin guard: available margin too low", persona_votes,
                     [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
-            base_size = sizing_base * 0.25
-            if confidence >= 0.90 and flow_whale_aligned:
-                position_usdt = base_size * 1.5  # ULTRA
-                print(f"  [SIZING] ULTRA: 90%+ conf + FLOW/WHALE aligned -> {position_usdt/sizing_base*100:.0f}% of sizing_base")
-            elif confidence > 0.85:
-                position_usdt = base_size * 1.25  # HIGH
+            # V3.2.46: Confidence-scaled sizing for 1-slot cross-margin strategy.
+            # Full account is buffer for one trade — scale margin allocation by conviction.
+            # 80-84%: conservative (20%), 85-89%: standard (35%), 90%+: maximum (50%).
+            # SOL capped at 30% in execute_trade via PAIR_MAX_POSITION_PCT.
+            if confidence >= 0.90:
+                position_usdt = sizing_base * 0.50  # MAX conviction
+                print(f"  [SIZING] MAX (90%+): {confidence:.0%} -> 50% of sizing_base (${position_usdt:.0f})")
+            elif confidence >= 0.85:
+                position_usdt = sizing_base * 0.35  # HIGH conviction
+                print(f"  [SIZING] HIGH (85-89%): {confidence:.0%} -> 35% of sizing_base (${position_usdt:.0f})")
             else:
-                position_usdt = base_size * 1.0  # NORMAL
+                position_usdt = sizing_base * 0.20  # BASE conviction
+                print(f"  [SIZING] BASE (80-84%): {confidence:.0%} -> 20% of sizing_base (${position_usdt:.0f})")
 
             # V3.2.25: No per-slot cap — sizing_base is already the available free margin.
             # MAX_SINGLE_POSITION_PCT (50%) and MIN_SINGLE_POSITION_PCT (20%) are the bounds.
