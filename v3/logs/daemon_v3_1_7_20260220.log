@@ -10951,3 +10951,106 @@ FINAL for BTC: WAIT (0%)
   [TECHNICAL] Analyzing...
   [TECHNICAL] SHORT (40%): Weak momentum: -3.9%
   [JUDGE] Deciding...
+  [CHOP-5M] XRPUSDT: MEDIUM CHOP: ADX=10 (very weak trend); BB=2.7% (tight, T2 thresh=3.2), disp=0.6%
+  [JUDGE] XRP funding: -0.000141 → 0.28% margin drag (YOU PAY) for SHORT
+  [JUDGE] Calling Gemini (rate-limit + up to 90s)...
+2026-02-20 14:32:18 | INFO     | AFC is enabled with max remote calls: 10.
+  [JUDGE] Gemini responded in 19.7s
+  [JUDGE] Gemini: WAIT (0%)
+  [JUDGE] Reasoning: The ADX is 10, which, under BLITZ MODE rules, mandates a WAIT regardless of other signals. Furthermore, neither WHALE (58% SHORT) nor FLOW (30% NEUTRAL) provides a strong directional conviction, and a high-risk macro event (US PCE release at 2:30 PM UTC) requires over 85% confidence to trade, which is not met.
+  [AI-LOG] SENT  stage='Gemini Judge: WAIT'
+  [AI-LOG]       expl: AI Judge decided WAIT: Gemini Judge: The ADX is 10, which, under BLITZ MODE rules, mandates a WAIT regardless of other s
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "judge_version": "gemini-judge", "reason": "Gemini Judge: The ADX is 10, which, under BLITZ MODE rules, mandates a WAIT regardless of other signals. Furthermore
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+  [JUDGE] Final: WAIT (0%)
+2026-02-20 14:32:38 | INFO     |   XRP (T2): WAIT (0%)
+2026-02-20 14:32:38 | INFO     |     -> reason: Gemini Judge: The ADX is 10, which, under BLITZ MODE rules, mandates a WAIT rega
+  [AI-LOG] SENT  stage='Analysis - XRP (Tier 2)'
+  [AI-LOG]       expl: Gemini Judge: The ADX is 10, which, under BLITZ MODE rules, mandates a WAIT regardless of other signals. Furthermore, ne
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "tp_pct": 3.5, "sl_pct": 1.5, "can_trade": false, "trade_type": "none"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+2026-02-20 14:32:41 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: SOL (Tier 3: Small Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (61%): Mild bearish sentiment (0.42); Sentiment momentum bearish (z=-1.37); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] NEUTRAL (60%): The overall crypto market sentiment is mixed, with some short-term positive price movements for SOL and other altcoins, partly attributed to anticipation around the CLARITY Act. However, underlying risk-off sentiment, institutional outflows from Bitcoin and Ethereum ETFs, and macroeconomic headwinds create a neutral macro bias. High volatility is expected in the next 1-3 hours due to the imminent release of crucial US Q4 GDP and Core PCE data, which could significantly impact market direction. Solana-specific news indicates a current rebound and resilient institutional interest, but no immediate overriding catalysts are present.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 28888.10, Asks: 18128.70, Ratio: 1.59
+  [FLOW] Walls - Ask: $82.99 (resistance/LONG-TP), Bid: $82.89 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 314.2000, Sell: 268.5000, Ratio: 1.17
+  [FLOW] Funding rate: -0.000026
+  [FLOW] Taker ratio: 1.17 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (40%): Strong bid depth
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] NEUTRAL (40%): No clear technical signal. RSI: 65.3
+  [JUDGE] Deciding...
+  [CHOP-5M] SOLUSDT: MEDIUM CHOP: ADX=20 (weak trend); BB=3.1% (tight, T3 thresh=3.8), disp=1.1%
+  [JUDGE] SOL funding: -0.000025 → 0.05% margin drag (YOU PAY) for SHORT
+  [JUDGE] Calling Gemini (rate-limit + up to 90s)...
+2026-02-20 14:33:01 | INFO     | AFC is enabled with max remote calls: 10.
+  [JUDGE] Gemini responded in 15.8s
+  [JUDGE] Gemini: WAIT (0%)
+  [JUDGE] Reasoning: Primary signals (WHALE and FLOW) are contradictory, with WHALE leaning SHORT (61%) and FLOW indicating LONG (40%), preventing a clear directional bias. An imminent high-risk macro event (US Q4 GDP and Core PCE release at 2:30 PM UTC) requires a confidence of >=85% to trade, which is not met by the current weak and conflicting signals. Therefore, waiting is the most disciplined action.
+  [AI-LOG] SENT  stage='Gemini Judge: WAIT'
+  [AI-LOG]       expl: AI Judge decided WAIT: Gemini Judge: Primary signals (WHALE and FLOW) are contradictory, with WHALE leaning SHORT (61%) 
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "judge_version": "gemini-judge", "reason": "Gemini Judge: Primary signals (WHALE and FLOW) are contradictory, with WHALE leaning SHORT (61%) and FLOW indicating
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+  [JUDGE] Final: WAIT (0%)
+2026-02-20 14:33:17 | INFO     |   SOL (T3): WAIT (0%)
+2026-02-20 14:33:17 | INFO     |     -> reason: Gemini Judge: Primary signals (WHALE and FLOW) are contradictory, with WHALE lea
+  [AI-LOG] SENT  stage='Analysis - SOL (Tier 3)'
+  [AI-LOG]       expl: Gemini Judge: Primary signals (WHALE and FLOW) are contradictory, with WHALE leaning SHORT (61%) and FLOW indicating LON
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "tp_pct": 3.0, "sl_pct": 1.8, "can_trade": false, "trade_type": "none"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+2026-02-20 14:33:20 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: ADA (Tier 3: Small Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (70%): Strong bearish community sentiment (0.33); Trend: RISING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] NEUTRAL (70%): The broader crypto market is experiencing a cautious and volatile phase, characterized by net ETF outflows and an 'orderly deleveraging.' Key US economic data, including New Home Sales, Revised UoM Consumer Sentiment, and Advance GDP, are due within the next 1-3 hours, presenting a high volatility risk and potentially influencing overall risk sentiment. While Cardano has positive specific developments such as increased institutional allocation by Grayscale, Coinbase adding ADA as collateral, and USDC integration, its price is currently facing resistance, and the recent CME futures launch did not result in a rally, suggesting these positive factors are not strongly overriding the prevailing macro headwinds in the immediate short term.
+  [FLOW] Analyzing...
+  [REGIME] BULLISH (score: 1, conf: 65%)
+  [REGIME] BTC 24h: +0.2% | F&G: 7 | Funding: -0.00006
+  [REGIME] OI Signal: NEUTRAL | Volatility: NORMAL | Alts: +0.0%
+  [REGIME]   > EXTREME FEAR (7): mild contrarian BUY bias
+  [FLOW] Depth - Bids: 9008170.00, Asks: 4952230.00, Ratio: 1.82
+  [FLOW] Walls - Ask: $0.2782 (resistance/LONG-TP), Bid: $0.277 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 33020.0000, Sell: 10090.0000, Ratio: 3.27
+  [FLOW] Funding rate: -0.000075
+  [FLOW] Taker ratio: 3.27 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (85%): EXTREME taker buying: 3.27
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] LONG (50%): Price above SMAs (uptrend)
+  [JUDGE] Deciding...
+  [CHOP-5M] ADAUSDT: MEDIUM CHOP: ADX=8 (very weak trend); BB=3.1% (tight, T3 thresh=3.8), disp=0.5%
+  [JUDGE] ADA funding: -0.000075 → 0.15% funding bonus (YOU RECEIVE) for LONG
+  [JUDGE] Calling Gemini (rate-limit + up to 90s)...
+2026-02-20 14:33:58 | INFO     | AFC is enabled with max remote calls: 10.
+  [JUDGE] Gemini responded in 10.1s
+  [JUDGE] Gemini: WAIT (0%)
+  [JUDGE] Reasoning: The co-primary signals, WHALE (SHORT 70%) and FLOW (LONG 85%), directly contradict each other. Additionally, the ADX is 8, indicating a very weak trend, which triggers the BLITZ MODE rule to WAIT. High volatility risk from upcoming US economic data further supports waiting for clearer market direction.
+  [AI-LOG] SENT  stage='Gemini Judge: WAIT'
+  [AI-LOG]       expl: AI Judge decided WAIT: Gemini Judge: The co-primary signals, WHALE (SHORT 70%) and FLOW (LONG 85%), directly contradict 
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "judge_version": "gemini-judge", "reason": "Gemini Judge: The co-primary signals, WHALE (SHORT 70%) and FLOW (LONG 85%), directly contradict each other. Additio
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+  [JUDGE] Final: WAIT (0%)
+2026-02-20 14:34:09 | INFO     |   ADA (T3): WAIT (0%)
+2026-02-20 14:34:09 | INFO     |     -> reason: Gemini Judge: The co-primary signals, WHALE (SHORT 70%) and FLOW (LONG 85%), dir
+  [AI-LOG] SENT  stage='Analysis - ADA (Tier 3)'
+  [AI-LOG]       expl: Gemini Judge: The co-primary signals, WHALE (SHORT 70%) and FLOW (LONG 85%), directly contradict each other. Additionall
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "tp_pct": 3.0, "sl_pct": 1.8, "can_trade": false, "trade_type": "none"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+2026-02-20 14:34:12 | INFO     | 
+2026-02-20 14:34:12 | INFO     | No trade opportunities
+2026-02-20 14:34:12 | INFO     | --- Cycle summary: 0 signals (0 at 80%+), 7 WAIT, 0 blocked, 0 opportunities ---
+2026-02-20 14:34:12 | INFO     | HEALTH | Up: 0:05:34 | Signals: 1 | Trades: 0/0 | Active: 0
+2026-02-20 14:35:12 | INFO     | HEALTH | Up: 0:06:34 | Signals: 1 | Trades: 0/0 | Active: 0
+2026-02-20 14:36:13 | INFO     | HEALTH | Up: 0:07:34 | Signals: 1 | Trades: 0/0 | Active: 0
+2026-02-20 14:37:13 | INFO     | HEALTH | Up: 0:08:34 | Signals: 1 | Trades: 0/0 | Active: 0
+2026-02-20 14:38:13 | INFO     | HEALTH | Up: 0:09:35 | Signals: 1 | Trades: 0/0 | Active: 0
+2026-02-20 14:39:13 | INFO     | HEALTH | Up: 0:10:35 | Signals: 1 | Trades: 0/0 | Active: 0
+2026-02-20 14:40:14 | INFO     | HEALTH | Up: 0:11:35 | Signals: 1 | Trades: 0/0 | Active: 0
+2026-02-20 14:41:14 | INFO     | HEALTH | Up: 0:12:36 | Signals: 1 | Trades: 0/0 | Active: 0
