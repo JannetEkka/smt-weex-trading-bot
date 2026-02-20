@@ -1140,12 +1140,13 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         "levels": {"resistances": [], "supports": [], "htf_resistances": [], "htf_supports": []}
     }
 
-    # V3.2.65: NO minimum TP floor. Chart SR is the TP, whatever distance it is.
-    # MAX ceiling is 0.5% (PAIR_TP_CEILING). There is no minimum — take the nearest SR level.
+    # V3.2.66: Restore MIN_VIABLE_TP_PCT=0.40 — skip SR levels too close to entry.
+    # V3.2.65 disabled this (set to 0.0) which allowed 0.37% TPs that can't clear fees profitably.
+    # This is NOT a floor — it's a skip threshold. The walk continues to find the next SR level.
     MIN_SL_PCT = 1.0          # SL must be at least 1.0% from entry (20x = 20% margin loss min)
-    MAX_SL_PCT = 1.5          # V3.2.41: SL ceiling — discard if 4H structure requires SL > 1.5%.
+    MAX_SL_PCT = 1.5          # V3.2.41: SL ceiling — cap if 4H structure requires SL > 1.5%.
                               # 1.5% SL = 30% margin loss at 20x (survivable). Liquidation at ~4.5%.
-    MIN_VIABLE_TP_PCT = 0.0   # V3.2.65: DISABLED — no minimum TP. 0.5% ceiling is the only gate.
+    MIN_VIABLE_TP_PCT = 0.40  # V3.2.66: Restored from V3.2.41. Skip SR < 0.40% from entry.
 
     try:
         # === 1H candles — primary source for both TP and SL ===
@@ -1347,6 +1348,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
 # ============================================================
 _chart_context_cache = {}
 _chart_context_cache_time = 0
+_chart_range_position_cache = {}  # V3.2.66: {symbol: pos_in_range (0-100)} — used by range position gate
 
 def get_chart_context(symbol: str, tier: int = 1) -> str:
     """V3.2.61: Build multi-TF chart context + 12H price action candles for Gemini Judge.
@@ -1358,7 +1360,7 @@ def get_chart_context(symbol: str, tier: int = 1) -> str:
       T3 (SOL/ADA): 15m candles × 48 = 12h
     Cached for 10 minutes (same as signal check interval).
     """
-    global _chart_context_cache, _chart_context_cache_time
+    global _chart_context_cache, _chart_context_cache_time, _chart_range_position_cache
 
     now = time.time()
     if now - _chart_context_cache_time < 600 and symbol in _chart_context_cache:
@@ -1366,6 +1368,7 @@ def get_chart_context(symbol: str, tier: int = 1) -> str:
 
     if now - _chart_context_cache_time >= 600:
         _chart_context_cache = {}
+        _chart_range_position_cache = {}  # V3.2.66: clear range cache with chart cache
         _chart_context_cache_time = now
 
     pair_label = symbol.replace("cmt_", "").replace("usdt", "").upper()
@@ -1554,6 +1557,7 @@ def get_chart_context(symbol: str, tier: int = 1) -> str:
             _intra_lines.append(f"12H Trend: first-half→second-half {_trend_chg:+.2f}% | Recent 3-bar vs earliest 3-bar: {_recent_move:+.2f}%")
 
             context_parts.append("\n".join(_intra_lines))
+            _chart_range_position_cache[symbol] = _pos_in_range  # V3.2.66: store for range gate
             print(f"  [CHART-CTX] {pair_label} 12H ({_gran}): {len(_complete)} bars, range {_range_pct:.1f}%, pos {_pos_in_range:.0f}% ({_pos_label}), trend {_trend_chg:+.2f}%")
         else:
             _detail = f"type={type(_candles_intra).__name__}, len={len(_candles_intra) if isinstance(_candles_intra, list) else 'N/A'}"
@@ -1587,19 +1591,18 @@ COMPETITION_FALLBACK_SL = {
     3: 1.5,   # Tier 3: 1.8% → 1.5%
 }
 
-# V3.2.65: Per-pair TP ceiling — HARD 0.5% MAX for dip-bounce strategy.
-# Old 0.8-1.5% ceilings were unreachable in hold windows → breakeven SL fires → fees eat the trade.
-# 0.5% TP × 20x = 10% margin gain. Round-trip fees = 3.2% margin. Net ~6.8% per trade.
-# NO minimum TP — chart SR is the TP at whatever distance. 0.5% ceiling is the ONLY cap.
+# V3.2.66: Restore per-pair TP ceilings from V3.2.60 (pre-V3.2.65).
+# V3.2.65 flattened all to 0.5% which produced sub-fee TPs (0.37% BTC).
+# These ceilings are realistic for hold windows (T1=3H, T2=2H, T3=1.5H).
 # Ceiling-only: if chart SR < ceiling, use chart SR. Never raises a low TP.
 PAIR_TP_CEILING = {
-    "BTC": 0.5,    # Tier 1. 0.5% max, bank the bounce.
-    "ETH": 0.5,    # Tier 1. Same.
-    "BNB": 0.5,    # Tier 2. Same.
-    "LTC": 0.5,    # Tier 2. Same.
-    "XRP": 0.5,    # Tier 2. Same.
-    "SOL": 0.5,    # Tier 3. Same.
-    "ADA": 0.5,    # Tier 3. Same.
+    "BTC": 1.0,    # Tier 1. 3H hold. R:R 0.67:1 vs 1.5% SL.
+    "ETH": 1.0,    # Tier 1. 3H hold. Same as BTC.
+    "BNB": 0.80,   # Tier 2. 2H hold. Lower beta.
+    "LTC": 0.80,   # Tier 2. 2H hold. Conservative.
+    "XRP": 0.80,   # Tier 2. 2H hold. Range-bound.
+    "SOL": 1.5,    # Tier 3. High beta, room to run.
+    "ADA": 0.80,   # Tier 3. BTC-correlated.
 }
 
 # V3.2.41: Per-pair max position size. Default: MAX_SINGLE_POSITION_PCT = 0.50.
@@ -2027,7 +2030,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.64-ShortsReEnabled-BidirectionalJudge"
+PIPELINE_VERSION = "SMT-v3.2.66-RevertV65-RangeGate-GeminiTPFix"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4658,31 +4661,54 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
     chart_sr = find_chart_based_tp_sl(symbol, signal, current_price)
 
+    # V3.2.66: Range position gate — block LONGs at top of 12H range, SHORTs at bottom.
+    # The dip-bounce strategy should not buy near peaks or short near troughs.
+    # Uses _chart_range_position_cache populated by get_chart_context() during analysis phase.
+    _range_pos = _chart_range_position_cache.get(symbol)
+    if _range_pos is not None:
+        _RANGE_LONG_BLOCK = 70   # Block LONGs above 70% of range — not a dip
+        _RANGE_SHORT_BLOCK = 30  # Block SHORTs below 30% of range — not a peak
+        if signal == "LONG" and _range_pos >= _RANGE_LONG_BLOCK:
+            _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (>={_RANGE_LONG_BLOCK}%) — too high for LONG dip-bounce entry"
+            print(f"  [RANGE-GATE] {_reason}")
+            return {"executed": False, "reason": _reason}
+        elif signal == "SHORT" and _range_pos <= _RANGE_SHORT_BLOCK:
+            _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (<={_RANGE_SHORT_BLOCK}%) — too low for SHORT entry"
+            print(f"  [RANGE-GATE] {_reason}")
+            return {"executed": False, "reason": _reason}
+
     # V3.2.16: Gemini structural TP override — uses 1D+4H chart context to identify
     # the REAL nearest resistance/support, bypassing the 2H anchor when Gemini gives a target.
     # V3.2.61: Do NOT rescue tp_not_found trades. If chart SR found zero candidates above/below
     # entry (entry at ceiling/floor), the trade should be discarded — Gemini can't fix bad entry level.
+    # V3.2.66: Gemini TP override — only use when it IMPROVES on chart SR.
+    # V3.2.65 allowed Gemini to LOWER TP (SOL: chart 1.05% → Gemini 0.43%). Now: only raise.
     _gemini_tp = decision.get("gemini_tp_price")
     _gemini_tp_used = False
     if _gemini_tp and _gemini_tp > 0 and current_price > 0 and not chart_sr.get("tp_not_found"):
+        _chart_tp_pct = chart_sr.get("tp_pct") or 0
         if signal == "LONG" and _gemini_tp > current_price:
             _g_tp_pct = ((_gemini_tp - current_price) / current_price) * 100
-            if 0 < _g_tp_pct <= 5.0:  # V3.2.65: no minimum floor — ceiling handles capping
-                print(f"  [TP/SL] GEMINI TP OVERRIDE (LONG): ${_gemini_tp:.4f} = {_g_tp_pct:.2f}% from ${current_price:.4f}")
-                chart_sr["tp_pct"] = round(_g_tp_pct, 2)
-                chart_sr["tp_price"] = _gemini_tp
-                if chart_sr["method"] == "fallback":
-                    chart_sr["method"] = "chart_mtf"  # Promote so chart path is used
-                _gemini_tp_used = True
-        elif signal == "SHORT" and _gemini_tp < current_price:
-            _g_tp_pct = ((current_price - _gemini_tp) / current_price) * 100
-            if 0 < _g_tp_pct <= 5.0:  # V3.2.65: no minimum floor — ceiling handles capping
-                print(f"  [TP/SL] GEMINI TP OVERRIDE (SHORT): ${_gemini_tp:.4f} = {_g_tp_pct:.2f}% from ${current_price:.4f}")
+            if 0.3 <= _g_tp_pct <= 5.0 and _g_tp_pct > _chart_tp_pct:
+                print(f"  [TP/SL] GEMINI TP OVERRIDE (LONG): ${_gemini_tp:.4f} = {_g_tp_pct:.2f}% from ${current_price:.4f} (chart was {_chart_tp_pct:.2f}%)")
                 chart_sr["tp_pct"] = round(_g_tp_pct, 2)
                 chart_sr["tp_price"] = _gemini_tp
                 if chart_sr["method"] == "fallback":
                     chart_sr["method"] = "chart_mtf"
                 _gemini_tp_used = True
+            elif 0.3 <= _g_tp_pct <= 5.0:
+                print(f"  [TP/SL] GEMINI TP SKIP (LONG): ${_gemini_tp:.4f} = {_g_tp_pct:.2f}% < chart {_chart_tp_pct:.2f}% — keeping chart SR")
+        elif signal == "SHORT" and _gemini_tp < current_price:
+            _g_tp_pct = ((current_price - _gemini_tp) / current_price) * 100
+            if 0.3 <= _g_tp_pct <= 5.0 and _g_tp_pct > _chart_tp_pct:
+                print(f"  [TP/SL] GEMINI TP OVERRIDE (SHORT): ${_gemini_tp:.4f} = {_g_tp_pct:.2f}% from ${current_price:.4f} (chart was {_chart_tp_pct:.2f}%)")
+                chart_sr["tp_pct"] = round(_g_tp_pct, 2)
+                chart_sr["tp_price"] = _gemini_tp
+                if chart_sr["method"] == "fallback":
+                    chart_sr["method"] = "chart_mtf"
+                _gemini_tp_used = True
+            elif 0.3 <= _g_tp_pct <= 5.0:
+                print(f"  [TP/SL] GEMINI TP SKIP (SHORT): ${_gemini_tp:.4f} = {_g_tp_pct:.2f}% < chart {_chart_tp_pct:.2f}% — keeping chart SR")
 
     # V3.2.46: If Gemini TP override succeeded but chart SR has no SL (e.g., candle data
     # insufficient), use MAX_SL_PCT as fallback SL. Prevents discarding valid Gemini signals.
@@ -4724,21 +4750,41 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         print(f"  [TP/SL] {_reason}")
         return {"executed": False, "reason": _reason}
 
-    # V3.2.65: HALVE the SL — tighter stops for dip-bounce strategy.
-    # Chart SR gives structural SL (already capped at MAX_SL_PCT=1.5%). Halving it:
-    #   1.5% → 0.75%, 1.0% → 0.5%. Tighter risk, better R:R with 0.5% TP ceiling.
-    _sl_before_halve = sl_pct_raw
-    sl_pct_raw = round(sl_pct_raw / 2, 2)
-    sl_pct = sl_pct_raw / 100
-    if signal == "LONG":
-        sl_price = current_price * (1 - sl_pct)
-    else:
-        sl_price = current_price * (1 + sl_pct)
-    print(f"  [SL-HALVE] SL {_sl_before_halve:.2f}% → {sl_pct_raw:.2f}% (halved)")
+    # V3.2.66: Restore ATR safety net — prevents noise stop-outs on volatile pairs.
+    # ATR-safety MUST NOT widen past MAX_SL_PCT (1.5%).
+    try:
+        _atr_check = get_pair_atr(symbol)
+        _atr_pct_check = _atr_check.get("atr_pct", 0)
+        if _atr_pct_check > 0:
+            _min_atr_sl = round(_atr_pct_check * 0.8, 2)  # At least 0.8x ATR
+            _max_sl_cap = MAX_SL_PCT * 100  # 1.5% — hard ceiling
+            _min_atr_sl = min(_min_atr_sl, _max_sl_cap)  # Never exceed ceiling
+            if sl_pct_raw < _min_atr_sl:
+                print(f"  [ATR-SAFETY] SL {sl_pct_raw:.2f}% < 0.8x ATR ({_atr_pct_check * 0.8:.2f}%), widening to {_min_atr_sl:.2f}% (capped at {_max_sl_cap:.1f}%)")
+                sl_pct_raw = _min_atr_sl
+                sl_pct = sl_pct_raw / 100
+                if signal == "LONG":
+                    sl_price = current_price * (1 - sl_pct)
+                else:
+                    sl_price = current_price * (1 + sl_pct)
+    except Exception:
+        pass
 
-    # V3.2.65: No fee floor or R:R guard — let all trades through with TP ≤ 0.5% ceiling.
-    # The 0.5% TP ceiling + halved SL is the strategy. No additional blocking gates.
+    # V3.2.66: Restore fee floor — TP must clear round-trip taker fees.
+    # 0.08%/side = 0.16% round-trip + 0.04% buffer = 0.20% minimum viable TP.
+    _FEE_FLOOR_TP_PCT = 0.20
+    if tp_pct_raw < _FEE_FLOOR_TP_PCT:
+        _reason = f"TP {tp_pct_raw:.2f}% below fee floor ({_FEE_FLOOR_TP_PCT:.2f}%) — trade is net-negative after 0.16% round-trip fees"
+        print(f"  [FEE-FLOOR] {_reason}")
+        return {"executed": False, "reason": _reason}
+
+    # V3.2.66: Restore R:R guard — minimum 0.5:1 (break-even at ~65% win rate).
+    MIN_RR_RATIO = 0.5
     _rr_ratio = tp_pct_raw / sl_pct_raw if sl_pct_raw > 0 else 0
+    if _rr_ratio < MIN_RR_RATIO:
+        _reason = f"R:R {_rr_ratio:.2f}:1 below minimum {MIN_RR_RATIO}:1 (TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}%)"
+        print(f"  [R:R GUARD] {_reason}")
+        return {"executed": False, "reason": _reason}
     print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | R:R {_rr_ratio:.1f}:1 | Method: {chart_sr['method']}")
 
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
