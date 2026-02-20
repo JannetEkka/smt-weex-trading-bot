@@ -3897,9 +3897,17 @@ class MultiPersonaAnalyzer:
         print(f"  [TECHNICAL] {tech_vote['signal']} ({tech_vote['confidence']:.0%}): {tech_vote['reasoning']}")
         
         # 5. Judge makes final decision
-        print(f"  [JUDGE] Deciding...")
-        final = self.judge.decide(votes, pair, balance, competition_status)
-        print(f"  [JUDGE] Final: {final['decision']} ({final.get('confidence', 0):.0%})")
+        print(f"  [JUDGE] Deciding...", flush=True)
+        try:
+            final = self.judge.decide(votes, pair, balance, competition_status)
+        except Exception as _judge_err:
+            import traceback
+            print(f"  [JUDGE] CRASH: {_judge_err}", flush=True)
+            traceback.print_exc()
+            final = {"decision": "WAIT", "confidence": 0.0, "reasoning": f"Judge crashed: {_judge_err}",
+                     "take_profit_percent": 0.5, "stop_loss_percent": 1.5, "hold_time_hours": 8,
+                     "tier": 1, "tier_name": "Unknown", "fallback_only": True}
+        print(f"  [JUDGE] Final: {final['decision']} ({final.get('confidence', 0):.0%})", flush=True)
         
         if final['decision'] in ("LONG", "SHORT"):
             print(f"  [JUDGE] TP: {final.get('take_profit_percent')}%, SL: {final.get('stop_loss_percent')}%, Max Hold: {final.get('hold_time_hours')}h")
@@ -5036,7 +5044,7 @@ if __name__ == "__main__":
     # Test analysis on one pair from each tier
     analyzer = MultiPersonaAnalyzer()
     
-    for pair in ["BTC", "SOL", "DOGE"]:
+    for pair in ["BTC", "SOL", "XRP"]:  # DOGE removed V3.2.11
         print(f"\n{'='*60}")
         result = analyzer.analyze(pair, TRADING_PAIRS[pair], balance, competition, positions)
         print(f"\nFINAL for {pair}: {result['decision']} ({result.get('confidence', 0):.0%})")
