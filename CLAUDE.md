@@ -139,7 +139,7 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 # Position sizing (V3.2.46: confidence-scaled for 1-slot cross-margin)
 # sizing_base = available (free margin from API)
 # sizing_base = min(sizing_base, balance * 2.5)   # cap at 2.5× balance
-# V3.2.57: $1000 sizing floor REMOVED (margin guard at $1000 already blocks undersized trades)
+# sizing_base = max(sizing_base, 500.0)            # V3.2.57: floor lowered $1000→$500 (meaningful size during drawdowns)
 # V3.2.57: Confidence-scaled sizing (MIN_CONFIDENCE now 85%):
 #   85-89% confidence: sizing_base * 0.35  (standard — all trades now in this band or higher)
 #   90%+   confidence: sizing_base * 0.50  (maximum conviction)
@@ -394,7 +394,7 @@ Current: V3.2.57. Next change should be V3.2.58.
 - V3.2.57: (**CURRENT**) BlitzMode final 72h — velocity exit + confidence 85% + cooldown reduction + Judge hold-time awareness.
   `MIN_CONFIDENCE_TO_TRADE` 80%→85%: In 1-slot mode, 80-84% trades at 20% sizing block the slot from better 90%+ signals.
   All trades now 35-50% of sizing_base (85-89%=35%, 90%+=50%). The 20% tier is eliminated.
-  `$1000 sizing floor` removed — `margin guard` at $1000 already prevents undersized trades.
+  `$1000 sizing floor` lowered to $500 — ensures meaningful position size during drawdowns while reducing artificial inflation.
   `GLOBAL_TRADE_COOLDOWN` 900→600s (15→10min): +5-6 extra trade windows in final 72h.
   `VELOCITY_EXIT`: New exit for "flat/stale" trades — if peak PnL < 0.15% after 40min, close immediately. Zero cooldown.
   Distinct from early_exit (needs loss) and peak_fade (needs peak then reversal). Covers "thesis never even started."

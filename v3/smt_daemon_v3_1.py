@@ -3587,7 +3587,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.57 - BlitzMode final 72h: MIN_CONFIDENCE 85%%, velocity_exit 40min/0.15%%, GLOBAL_COOLDOWN 600s, $1000 floor removed, Judge BLITZ MODE prompt")
+    logger.info("SMT Daemon V3.2.57 - BlitzMode final 72h: MIN_CONFIDENCE 85%%, velocity_exit 40min/0.15%%, GLOBAL_COOLDOWN 600s, sizing floor $1000→$500, Judge BLITZ MODE prompt")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3664,7 +3664,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.57: BlitzMode final 72h — MIN_CONFIDENCE 80%%→85%% (1-slot: 80-84%% tier blocks slot at 20%% sizing); velocity_exit (40min/0.15%% peak threshold, zero cooldown); GLOBAL_TRADE_COOLDOWN 900→600s; $1000 sizing floor removed (margin guard redundant); Judge prompt BLITZ MODE: momentum bias, stale price levels removed, ADX<20=WAIT, RANGE_BOUNDARY/VWAP_REVERSION deprioritized")
+    logger.info("  V3.2.57: BlitzMode final 72h — MIN_CONFIDENCE 80%%→85%% (1-slot: 80-84%% tier blocks slot at 20%% sizing); velocity_exit (40min/0.15%% peak threshold, zero cooldown); GLOBAL_TRADE_COOLDOWN 900→600s; sizing floor $1000→$500; Judge prompt BLITZ MODE: momentum bias, stale price levels removed, ADX<20=WAIT, RANGE_BOUNDARY/VWAP_REVERSION deprioritized")
     logger.info("  V3.2.56: Macro blackout exit — monitor_positions() closes unprofitable (pnl<0) positions when blackout window activates; profitable positions ride with SL; AI log sent with order_id. Funding rate direction-aware: Judge now told paying vs receiving side based on persona consensus (fixes bonus-labeled-as-drag for LONG on negative funding)")
     logger.info("  V3.2.55: _fetch_plan_order_ids() retry loop — 2s initial sleep + up to 2 retries (2s apart) on HTTP 404 or empty plan-orders response; eliminates stored-ID=None fallback on WEEX registration lag")
     logger.info("  V3.2.54: Tiered peak-fade — T1(BTC/ETH): MIN=0.30%%,TRIG=0.15%%; T2/T3(altcoins): MIN=0.45%%,TRIG=0.25%%; altcoin wick noise needs 2x breathing room vs majors; exit_reason peak_fade_T{n} includes tier+thresholds")

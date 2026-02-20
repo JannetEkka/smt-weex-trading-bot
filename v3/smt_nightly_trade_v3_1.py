@@ -1851,7 +1851,7 @@ def get_sizing_base(balance: float) -> float:
         # V3.2.26: Floor at $1000 — always size off at least $1000 base → $250 margin min → $5k notional at 20x
         sizing_base = available if available > 0 else balance
         sizing_base = min(sizing_base, balance * 2.5)   # Cap runaway (e.g. huge UPnL inflating available)
-        # V3.2.57: $1000 floor removed — margin guard (available < $1000 → return 0) already prevents undersized trades
+        sizing_base = max(sizing_base, 500.0)             # V3.2.57: floor at $500 (was $1000) — ensures meaningful position size during drawdowns
 
         print(f"  [SIZING] Equity: ${equity:.0f} | Available: ${available:.0f} | Balance: ${balance:.0f} | Sizing base: ${sizing_base:.0f}")
 
