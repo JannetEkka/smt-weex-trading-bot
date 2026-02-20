@@ -173,6 +173,10 @@ CLEANUP_CHECK_INTERVAL = 30
 OPPOSITE_MIN_AGE_MIN = 20          # Don't flip positions younger than 20 minutes
 OPPOSITE_TP_PROGRESS_BLOCK = 30    # Block flip if position is >= 30% toward TP
 DEFERRED_FLIP_MAX_AGE_MIN = 30     # Deferred signal expires after 30 minutes
+# V3.2.51: Emergency flip — 90%+ confidence opposite bypasses the age gate only.
+# TP proximity gate (>= 30% toward TP) is preserved regardless of confidence:
+# abandoning a winning position costs real fees + foregone TP profit.
+EMERGENCY_FLIP_CONFIDENCE = 0.90   # Age gate bypass threshold for opposite signals
 
 
 # Competition
@@ -981,7 +985,8 @@ def check_trading_signals():
                             else:
                                 can_trade_this = True
                                 trade_type = "opposite"
-                                logger.info(f"    -> OPPOSITE: LONG {confidence:.0%} >= SHORT {existing_conf:.0%}. Tighten SHORT SL + open LONG")
+                                _flip_tag = "EMERGENCY FLIP" if confidence >= EMERGENCY_FLIP_CONFIDENCE else "OPPOSITE"
+                                logger.info(f"    -> {_flip_tag}: LONG {confidence:.0%} >= SHORT {existing_conf:.0%}. Closing SHORT, opening LONG")
                         else:
                             logger.info(f"    -> Has SHORT at {existing_conf:.0%}, LONG {confidence:.0%} not stronger. Hold.")
                             upload_ai_log_to_weex(
@@ -1021,7 +1026,8 @@ def check_trading_signals():
                             else:
                                 can_trade_this = True
                                 trade_type = "opposite"
-                                logger.info(f"    -> OPPOSITE: SHORT {confidence:.0%} >= LONG {existing_conf:.0%}. Tighten LONG SL + open SHORT")
+                                _flip_tag = "EMERGENCY FLIP" if confidence >= EMERGENCY_FLIP_CONFIDENCE else "OPPOSITE"
+                                logger.info(f"    -> {_flip_tag}: SHORT {confidence:.0%} >= LONG {existing_conf:.0%}. Closing LONG, opening SHORT")
                         else:
                             logger.info(f"    -> Has LONG at {existing_conf:.0%}, SHORT {confidence:.0%} not stronger. Hold.")
                             upload_ai_log_to_weex(
@@ -1390,9 +1396,11 @@ def check_trading_signals():
                                         break
 
                                 _dir_shift_oid = close_result.get("order_id")
-                                logger.info(f"  [AI-LOG] Directional Shift close orderId: {_dir_shift_oid or 'not found'}")
+                                _is_emergency_flip = confidence >= EMERGENCY_FLIP_CONFIDENCE
+                                _flip_stage = "Emergency Flip" if _is_emergency_flip else "Directional Shift"
+                                logger.info(f"  [AI-LOG] {_flip_stage} close orderId: {_dir_shift_oid or 'not found'}")
                                 upload_ai_log_to_weex(
-                                    stage=f"Directional Shift: {pair} {opp_side} closed for {signal}",
+                                    stage=f"{_flip_stage}: {pair} {opp_side} closed for {signal}",
                                     input_data={
                                         "symbol": sym,
                                         "closed_side": opp_side,
@@ -1401,12 +1409,13 @@ def check_trading_signals():
                                         "closed_pnl": round(opp_pnl, 2),
                                         "new_signal": signal,
                                         "new_confidence": confidence,
+                                        "emergency_flip": _is_emergency_flip,
                                     },
                                     output_data={
                                         "action": "OPPOSITE_CLOSE",
-                                        "reason": "opposite_signal_stronger",
+                                        "reason": "emergency_opposite_signal" if _is_emergency_flip else "opposite_signal_stronger",
                                     },
-                                    explanation=f"AI closed {opp_side} {pair} (entry ${opp_entry:.4f}, PnL {opp_pnl:.2f}) to open {signal} at {confidence:.0%} confidence. Clean flip."[:1000],
+                                    explanation=f"{'EMERGENCY: age gate bypassed at ' + str(round(confidence*100)) + '%+ conviction. ' if _is_emergency_flip else ''}AI closed {opp_side} {pair} (entry ${opp_entry:.4f}, PnL {opp_pnl:.2f}) to open {signal} at {confidence:.0%} confidence."[:1000],
                                     order_id=int(_dir_shift_oid) if _dir_shift_oid and str(_dir_shift_oid).isdigit() else None,
                                 )
                             except Exception as close_err:
@@ -2045,6 +2054,11 @@ _deferred_opposite_queue = {}
 
 def _check_opposite_swap_gates(symbol, existing_side, new_signal, new_confidence, opportunity):
     """V3.1.100: Gate opposite swaps based on TP proximity and position age.
+    V3.2.51: Age gate (Gate A) bypassed when new_confidence >= EMERGENCY_FLIP_CONFIDENCE.
+    A 90%+ Judge signal has already passed the HIGH NOISE RISK filter in the prompt
+    (WHALE+FLOW both >75% required to flip), so it is genuine conviction, not noise.
+    TP proximity gate (Gate B) is preserved regardless of confidence — don't disturb
+    a position that is >= 30% toward its TP even for a 90%+ opposite signal.
 
     Returns: (blocked: bool, reason: str)
     """
@@ -2054,13 +2068,20 @@ def _check_opposite_swap_gates(symbol, existing_side, new_signal, new_confidence
     if not existing_trade:
         return False, ""  # No tracker data, allow swap
 
-    # Gate A: Minimum age — don't flip positions younger than 20 minutes
+    is_emergency = new_confidence >= EMERGENCY_FLIP_CONFIDENCE
+
+    # Gate A: Minimum age — don't flip positions younger than 20 minutes.
+    # V3.2.51: Bypassed for emergency flips (>= 90% confidence) — wrong entry,
+    # get out now rather than waiting for the age gate to expire with losses mounting.
     opened_at = existing_trade.get("opened_at")
     if opened_at:
         try:
             age_min = (datetime.now(timezone.utc) - datetime.fromisoformat(opened_at)).total_seconds() / 60
             if age_min < OPPOSITE_MIN_AGE_MIN:
-                return True, f"{existing_side} only {age_min:.0f}m old (need {OPPOSITE_MIN_AGE_MIN}m)"
+                if is_emergency:
+                    logger.info(f"  [EMERGENCY FLIP] {existing_side} only {age_min:.0f}m old — age gate bypassed at {new_confidence:.0%} (>= {EMERGENCY_FLIP_CONFIDENCE:.0%} threshold)")
+                else:
+                    return True, f"{existing_side} only {age_min:.0f}m old (need {OPPOSITE_MIN_AGE_MIN}m)"
         except Exception:
             pass  # If timestamp parsing fails, skip age gate
 
@@ -3443,7 +3464,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.50 - Fee rate corrected (0.08%/side, 3.2% margin RT); plan order IDs stored at open for deterministic AI log upload")
+    logger.info("SMT Daemon V3.2.51 - Emergency flip: 90%+ opposite signal bypasses age gate (TP proximity gate preserved)")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3520,6 +3541,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.51: Emergency flip — EMERGENCY_FLIP_CONFIDENCE=0.90; age gate bypassed at 90%+ opposite confidence; TP proximity gate preserved; 'EMERGENCY FLIP' tag in logs + AI log")
     logger.info("  V3.2.50: TAKER_FEE_RATE corrected 0.0006→0.0008 (0.08%/side, 3.2%% margin RT); _fetch_plan_order_ids() stores tp/sl plan IDs at open; daemon uses stored IDs for AI log upload (no sleep/guesswork)")
     logger.info("  V3.2.49: Final stretch — T1: 3h/1h, T2: 2h/45m, T3: 1.5h/30m (was 24/12/8h); sync display reads live TIER_CONFIG not stale trade state")
     logger.info("  V3.2.48: Macro blackout (PCE 13:15-14:00 UTC), weekend mode (BTC/ETH/SOL only), Emperor's Birthday thin-liq, funding hold-cost in Judge, ZRO unlock context")
