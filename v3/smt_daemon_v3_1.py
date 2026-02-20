@@ -3675,7 +3675,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.60 - Dip-bounce TPs + R:R guard removed + ATR respects SL ceiling. V3.2.59: Gemini event detection")
+    logger.info("SMT Daemon V3.2.61 - TP ceilings raised + R:R guard restored + tp_not_found gate. V3.2.60: ATR ceiling fix, breakeven SL classification")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3685,7 +3685,7 @@ def run_daemon():
     logger.info("  Circuit breaker: 60min+ cooldown after SL/force stop | Breakeven SL at +0.4%%")
     # --- Confidence & entry filters ---
     logger.info("ENTRY FILTERS:")
-    logger.info("  MIN_CONFIDENCE: 80%% HARD FLOOR — no exceptions, no discounts, no overrides")
+    logger.info("  MIN_CONFIDENCE: 85%% HARD FLOOR — no exceptions, no discounts, no overrides")
     logger.info("  Chop filter: logging only (no penalties since V3.2.18)")
     logger.info("  Consecutive loss block: 2 losses same direction in 24h = block re-entry")
     logger.info("  Freshness filter: block entering after move already happened")
@@ -3695,7 +3695,7 @@ def run_daemon():
     logger.info("TP/SL (V3.2.41 LARGER GAINS):")
     logger.info("  MIN_VIABLE_TP_PCT: 0.40%% (was 0.20%% — filters micro-moves, pushes to 4H/48H structure)")
     logger.info("  MAX_SL_PCT: 1.50%% ceiling (was no ceiling — 4H anchors can be wide at 20x)")
-    logger.info("  PAIR_TP_CEILING: BTC/ETH=0.70%%, SOL=0.80%%, BNB/LTC/XRP/ADA=0.60%% (V3.2.60: dip-bounce realistic)")
+    logger.info("  PAIR_TP_CEILING: BTC/ETH=1.0%%, SOL=1.5%%, BNB/LTC/XRP/ADA=0.80%% (V3.2.61: R:R balanced)")
     logger.info("  TP anchor: 4H high/low tried first, then 48H walk (was 2H anchor → 48H walk)")
     logger.info("  SOL sizing: 30%% of sizing_base max (was 50%% — high beta risk control)")
     logger.info("  TP priority: Gemini tp_price (4H structure) > 4H anchor > 48H SR walk")
@@ -3726,7 +3726,7 @@ def run_daemon():
     # --- Timing ---
     logger.info("TIMING:")
     logger.info("  Signal check: 10min | Position monitor: 2min | Orphan sweep: 30s | Health: 60s")
-    logger.info("  Global trade cooldown: 15min between trades")
+    logger.info("  Global trade cooldown: 10min between trades")
     logger.info("  Gemini: 90s timeout + 8s rate limit between calls")
     # --- Persona weights ---
     logger.info("PERSONA CONFIG:")
@@ -3752,7 +3752,8 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.60: Dip-bounce TP ceilings (0.60-0.80%%), R:R guard removed (high win-rate strategy), ATR-safety respects MAX_SL_PCT ceiling (was overriding to 1.84%%), breakeven SL classified correctly.")
+    logger.info("  V3.2.61: TP ceilings raised (BTC/ETH=1.0%%, SOL=1.5%%, others=0.80%%), R:R guard restored (min 0.5:1), Gemini TP override blocked when chart SR returns tp_not_found (entry at resistance). Banner: confidence=85%%, cooldown=10min.")
+    logger.info("  V3.2.60: ATR-safety respects MAX_SL_PCT ceiling (was overriding to 1.84%%), breakeven SL classified correctly.")
     logger.info("  V3.2.59: Gemini event detection — detect_macro_events() uses Gemini Search to scan upcoming macro/crypto events (30min cache). Dynamic blackout for HIGH-impact events within 15min. Replaces hardcoded _macro_events dict in Judge prompt. Also: ADX<20 WAIT removed, 2-slot mode, TP fee-floor guard.")
     logger.info("  V3.2.58: Altcoin execution priority — sort key now (confidence desc, tier desc) so T3>T2>T1 at equal confidence. Prevents T1 BTC/ETH crowding out altcoins when same 85%% threshold hit in same cycle.")
     logger.info("  V3.2.57: BlitzMode final 72h — MIN_CONFIDENCE 80%%→85%%; velocity_exit (40min/0.15%% peak, zero cooldown); GLOBAL_TRADE_COOLDOWN 900→600s; sizing floor $1000→$500; Judge BLITZ MODE prompt")
