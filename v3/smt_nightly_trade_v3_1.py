@@ -1801,7 +1801,7 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 MAX_LEVERAGE = 20
 # V3.2.16: 7 pairs, 4 slots flat. BTC/ETH/BNB re-added (Gemini chart context makes them viable).
 # V3.2.18: Shorts allowed for ALL pairs (was LTC only). 80% floor + chop filter = sufficient protection.
-MAX_TOTAL_POSITIONS = 1  # V3.2.46: 1 position at a time — cross margin = full account as buffer
+MAX_TOTAL_POSITIONS = 2  # V3.2.59: 2 slots — diversification without cascading risk. $500 sizing floor. At $3.4K, worst case (both SL 1.5%) = ~$1K loss (30%) — survivable.
 
 def get_max_positions_for_equity(equity: float) -> int:
     """V3.2.16: Fixed 4-slot system for 7 pairs. Equity no longer scales slots."""
@@ -1840,10 +1840,11 @@ def get_sizing_base(balance: float) -> float:
         if equity <= 0:
             equity = balance  # API failed, fall back to balance
 
-        # FLOOR 1: If available margin < $1000, signal "don't trade" — not enough free margin to size meaningfully
-        # V3.2.26: fixed $1000 guard (was balance*0.15 ≈ $150 — too low, led to tiny rejected orders)
-        if available > 0 and available < 1000.0:
-            print(f"  [MARGIN GUARD] Available ${available:.0f} < $1000 minimum. Sizing blocked.")
+        # FLOOR 1: If available margin < $500, signal "don't trade" — not enough free margin to size meaningfully
+        # V3.2.59: lowered $1000→$500 for 2-slot mode (was $1000 in V3.2.26). With 2 slots at $3.4K,
+        # first trade deploys ~$600-850 margin; second slot needs remaining $500+ to open.
+        if available > 0 and available < 500.0:
+            print(f"  [MARGIN GUARD] Available ${available:.0f} < $500 minimum. Sizing blocked.")
             _sizing_equity_cache = {"sizing_base": 0, "equity": equity, "available": available, "ts": now}
             return 0
 
@@ -1923,7 +1924,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.58-AltcoinPriority-TierTiebreak"
+PIPELINE_VERSION = "SMT-v3.2.59-GeminiEventDetection-DynamicBlackout"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -2720,6 +2721,162 @@ Respond with JSON only:
         }
 
 # ============================================================
+# V3.2.59: GEMINI EVENT DETECTION — dynamic macro event scanner
+# Replaces hardcoded _macro_events dict with live Gemini Search.
+# Called once per signal cycle (30-min cache). Returns structured
+# event list for Judge context + dynamic blackout detection.
+# ============================================================
+
+_macro_event_cache = {"timestamp": 0, "events": [], "summary": ""}
+_MACRO_EVENT_CACHE_TTL = 1800  # 30 minutes
+
+def detect_macro_events() -> dict:
+    """V3.2.59: Use Gemini Search Grounding to detect upcoming macro/crypto events.
+
+    Returns: {"events": [...], "summary": str}
+    Each event: {"name": str, "time_utc": str, "impact": "HIGH"|"MEDIUM"|"LOW",
+                 "description": str, "affected_pairs": [...]}
+
+    30-minute cache. Returns empty on failure (no disruption to existing flow).
+    """
+    import time as _evt_time
+
+    # Check cache
+    now = _evt_time.time()
+    if now - _macro_event_cache["timestamp"] < _MACRO_EVENT_CACHE_TTL and _macro_event_cache["events"] is not None:
+        return {"events": _macro_event_cache["events"], "summary": _macro_event_cache["summary"]}
+
+    _current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    _current_hour = datetime.now(timezone.utc).strftime("%H:%M")
+
+    prompt = f"""You are an economic/crypto event scanner. Current UTC: {_current_date} {_current_hour}.
+
+Search for events happening in the NEXT 12 HOURS that could impact crypto futures trading.
+Search queries to use:
+- "economic calendar {_current_date}" (CPI, PCE, FOMC, NFP, GDP, PMI, jobless claims)
+- "crypto token unlock schedule {_current_date}" (large supply unlocks for top tokens)
+- "Fed speech schedule {_current_date}" (central bank speakers)
+- "crypto news today {_current_date}" (exchange hacks, regulatory, protocol upgrades)
+
+For each event found, classify impact:
+- HIGH: FOMC decisions, CPI/PCE releases, major token unlocks (>$20M), exchange hacks, regulatory rulings
+- MEDIUM: Fed/ECB speeches, medium token unlocks ($5-20M), protocol upgrades, futures expiry
+- LOW: minor data releases, small unlocks, routine governance votes
+
+IMPORTANT: Only include events with SPECIFIC timing. Do not fabricate events.
+If no events are found for a category, omit it. Return an empty events list if nothing notable is scheduled.
+
+Trading pairs we care about: BTC, ETH, BNB, LTC, XRP, SOL, ADA.
+For macro events (CPI, FOMC, etc.), affected_pairs should be ["ALL"].
+For token-specific events, list only the affected pair(s).
+
+Respond with JSON ONLY (no markdown, no citation markers):
+{{"events": [{{"name": "short event name", "time_utc": "YYYY-MM-DD HH:MM" or "UNKNOWN", "impact": "HIGH" or "MEDIUM" or "LOW", "description": "1-2 sentence market impact", "affected_pairs": ["ALL"] or ["BTC", "ETH"]}}], "summary": "1-2 sentence overall risk assessment for next 12h"}}
+
+If no notable events found, return: {{"events": [], "summary": "No significant macro or crypto events detected in next 12 hours."}}"""
+
+    try:
+        _rate_limit_gemini()
+        from google.genai.types import GenerateContentConfig, GoogleSearch, Tool
+
+        grounding_config = GenerateContentConfig(
+            tools=[Tool(google_search=GoogleSearch())],
+            temperature=0.1,
+        )
+
+        print(f"  [EVENT SCANNER] Searching for upcoming macro/crypto events...", flush=True)
+        response = _gemini_full_call("gemini-2.5-flash", prompt, grounding_config, timeout=90)
+
+        if response and hasattr(response, 'text') and response.text:
+            _raw = response.text.strip()
+            _json_match = re.search(r'\{.*\}', _raw, re.DOTALL)
+            if not _json_match:
+                print(f"  [EVENT SCANNER] No JSON in response, using empty result")
+                _macro_event_cache.update({"timestamp": now, "events": [], "summary": ""})
+                return {"events": [], "summary": ""}
+
+            data = json.loads(_json_match.group(0))
+            events = data.get("events", [])
+            summary = data.get("summary", "")
+
+            # Validate event structure
+            valid_events = []
+            for evt in events:
+                if isinstance(evt, dict) and "name" in evt:
+                    valid_events.append({
+                        "name": evt.get("name", "Unknown"),
+                        "time_utc": evt.get("time_utc", "UNKNOWN"),
+                        "impact": evt.get("impact", "LOW").upper(),
+                        "description": evt.get("description", ""),
+                        "affected_pairs": evt.get("affected_pairs", ["ALL"]),
+                    })
+
+            print(f"  [EVENT SCANNER] Found {len(valid_events)} events: {', '.join(e['name'] for e in valid_events) or 'none'}")
+            _macro_event_cache.update({"timestamp": now, "events": valid_events, "summary": summary})
+            return {"events": valid_events, "summary": summary}
+
+        print(f"  [EVENT SCANNER] Empty Gemini response, using empty result")
+        _macro_event_cache.update({"timestamp": now, "events": [], "summary": ""})
+        return {"events": [], "summary": ""}
+
+    except Exception as e:
+        print(f"  [EVENT SCANNER] Error: {e} — continuing without event data")
+        # Cache the failure briefly (5 min) to avoid hammering on errors
+        _macro_event_cache.update({"timestamp": now - _MACRO_EVENT_CACHE_TTL + 300, "events": [], "summary": ""})
+        return {"events": [], "summary": ""}
+
+
+def _check_dynamic_blackout(events: list) -> tuple:
+    """V3.2.59: Check if any HIGH-impact event is imminent (within 15 min).
+    Returns (is_blacked_out: bool, label: str).
+
+    Only triggers on HIGH impact events with known times.
+    Hardcoded MACRO_BLACKOUT_WINDOWS in daemon takes priority — this catches
+    events that weren't hardcoded (surprise Fed speeches, exchange incidents, etc.).
+    """
+    now = datetime.now(timezone.utc)
+    for evt in events:
+        if evt.get("impact") != "HIGH":
+            continue
+        time_str = evt.get("time_utc", "UNKNOWN")
+        if time_str == "UNKNOWN":
+            continue
+        try:
+            evt_time = datetime.strptime(time_str, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+            # Blackout window: 15 min before → 30 min after event
+            window_start = evt_time - timedelta(minutes=15)
+            window_end = evt_time + timedelta(minutes=30)
+            if window_start <= now < window_end:
+                return True, f"[DYNAMIC] {evt['name']}"
+        except (ValueError, TypeError):
+            continue
+    return False, ""
+
+
+def _format_events_for_judge(events: list, summary: str) -> str:
+    """V3.2.59: Format detected events into Judge-readable context text."""
+    if not events:
+        return summary if summary else "No significant macro or crypto events detected."
+
+    lines = []
+    for evt in events:
+        time_str = evt.get("time_utc", "UNKNOWN")
+        impact = evt.get("impact", "LOW")
+        pairs = ", ".join(evt.get("affected_pairs", ["ALL"]))
+        line = f"  [{impact}] {evt['name']}"
+        if time_str != "UNKNOWN":
+            line += f" at {time_str} UTC"
+        line += f" — {evt.get('description', 'No details')}"
+        line += f" (affects: {pairs})"
+        lines.append(line)
+
+    if summary:
+        lines.append(f"  Overall: {summary}")
+
+    return "\n".join(lines)
+
+
+# ============================================================
 # PERSONA 3: ORDER FLOW
 # ============================================================
 
@@ -3441,33 +3598,16 @@ class JudgePersona:
         except Exception as _fr_err:
             print(f"  [JUDGE] Funding rate fetch error for {pair}: {_fr_err}")
 
-        # V3.2.48: MACRO EVENT CONTEXT (Option B — context to Judge, not hardcoded restrictions)
-        # Date-sensitive events that affect liquidity, volatility, or altcoin flows.
-        # Judge uses this as qualitative context alongside FLOW/WHALE data.
+        # V3.2.59: DYNAMIC MACRO EVENT CONTEXT — Gemini Search detects events automatically.
+        # Replaces hardcoded _macro_events dict. detect_macro_events() is cached (30min TTL),
+        # so this call is free if already fetched this cycle.
         macro_event_text = ""
-        _today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        _macro_events = {
-            "2026-02-20": (
-                "US Core PCE Price Index release at 13:30 UTC. High-impact macro data — "
-                "expect volatility spike and algorithmic rebalancing for 15-30 min post-release. "
-                "Also: LayerZero (ZRO) $46.27M token unlock today — liquidity drain from altcoin markets. "
-                "FLOW data may show temporary volume spikes unrelated to directional conviction. "
-                "Favor BTC/ETH (deep books) over thin altcoins. If FLOW shows unusual volume surge on altcoins, "
-                "it may be unlock-related selling, not organic buying pressure."
-            ),
-            "2026-02-21": (
-                "Post-PCE Friday — markets digesting PCE data from yesterday. "
-                "Weekend liquidity thinning begins after US close (~21:00 UTC). "
-                "Favor early-session trades and faster TPs. Avoid holding into weekend."
-            ),
-            "2026-02-23": (
-                "Emperor's Birthday (Japan) — Japanese banks and CME closed during Asian session. "
-                "Japan is a major crypto liquidity provider. Expect thin order books and fakeout wicks "
-                "until US session opens (~14:00 UTC). Favor BTC/ETH only until liquidity normalizes."
-            ),
-        }
-        if _today_str in _macro_events:
-            macro_event_text = _macro_events[_today_str]
+        try:
+            _detected = detect_macro_events()
+            macro_event_text = _format_events_for_judge(_detected.get("events", []), _detected.get("summary", ""))
+        except Exception as _evt_err:
+            print(f"  [JUDGE] Event detection error: {_evt_err} — continuing without event data")
+            macro_event_text = "Event detection unavailable."
 
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
 Your job: analyze all signals and plan the SINGLE BEST action for {pair} over the NEXT 1.5-3 HOURS (tier-dependent — see HOLD TIME LIMITS below).
@@ -3550,8 +3690,13 @@ VELOCITY > PATIENCE. Competition ends in <72h. We need compounding cycles, not p
 
 PRIORITY ORDER: MOMENTUM_CROSS > CATALYST_DRIVE > CORRELATION_LAG > SUPPORT_SWEEP > RANGE_BOUNDARY > VWAP_REVERSION
 BETA BIAS: Prefer Tier 3 (SOL, ADA) for momentum. Only enter BTC/ETH if confidence >= 90%.
-STALE SIGNAL: If ADX < 20, return WAIT regardless of WHALE/FLOW signal. Flat markets waste our slot.
-RANGE/MEAN-REVERSION: RANGE_BOUNDARY and VWAP_REVERSION are slow strategies — only use if setup is perfect AND ADX < 15 AND FLOW confirms wall clearly. Otherwise WAIT.
+LOW ADX NOTE (V3.2.59): ADX < 20 means range-bound — this is WHERE our dip-bounce strategy works best.
+  Do NOT force WAIT on low ADX. If WHALE+FLOW show accumulation in a range, that IS the dip entry.
+  Only WAIT if WHALE+FLOW are both weak/neutral (<60%) in a low-ADX environment.
+RANGE/MEAN-REVERSION: RANGE_BOUNDARY and VWAP_REVERSION work well in low-ADX environments. Use if FLOW confirms wall.
+EXTREME FEAR DIP (V3.2.59): F&G < 15 + FLOW showing heavy bid accumulation = TEXTBOOK dip setup.
+  This is exactly what the bot was designed for. Lean INTO these setups, not away from them.
+  FLOW bid accumulation in extreme fear = smart money positioning for bounce. Trust it.
 LIVE PRICES: Use CHART DATA provided in context for all price levels. Ignore any hardcoded example prices below.
 
 === HOLD TIME LIMITS (V3.2.57 — HARD DAEMON LIMITS) ===
@@ -3628,13 +3773,13 @@ If no clear structure reachable within hold window, omit tp_price — code will 
 USE THIS AS CONTEXT ONLY — not a veto. Poor historical win rate = note it in reasoning, then follow WHALE+FLOW if they clearly agree.
 If a pair has >15% win rate, it has proven itself — trust stronger signals on it.
 
-FEAR & GREED (SOFT BIAS - V3.1.88):
-- F&G < 15 (EXTREME FEAR): Slightly favor LONG (contrarian bounce possible), but allow SHORT if WHALE+FLOW+SENTIMENT confirm bearish. Sustained fear ≠ imminent bounce. Trust the signals.
-- F&G < 30 (FEAR): Mild LONG bias. SHORT is fine if signals confirm.
+FEAR & GREED (V3.2.59 — DIP-BOUNCE STRATEGY):
+- F&G < 15 (EXTREME FEAR): This is DIP TERRITORY. If FLOW shows bid accumulation (taker-buy ratio rising, bid walls building), this is the textbook contrarian entry this bot was built for. Favor LONG if FLOW confirms buying pressure. Allow SHORT only if WHALE+FLOW+SENTIMENT ALL confirm bearish with high confidence (>75% each).
+- F&G < 30 (FEAR): Favor LONG. Dip-bounce opportunities are frequent here. SHORT needs strong multi-persona confirmation.
 - F&G > 85 (EXTREME GREED): Slightly favor SHORT (contrarian top possible), but allow LONG if WHALE+FLOW+SENTIMENT confirm bullish.
 - F&G > 70 (GREED): Mild SHORT bias. LONG is fine if signals confirm.
 - F&G 30-70 (NEUTRAL ZONE): Use WHALE+FLOW signals normally, no directional bias.
-IMPORTANT: F&G is ONE input, not a hard rule. If 3+ personas say SHORT in extreme fear, trust them - the market IS bearish.
+IMPORTANT: EXTREME FEAR + FLOW accumulation = our highest-conviction setup. Lean into it.
 
 TRADE HISTORY CONTEXT:
 {trade_history_summary}
@@ -4435,6 +4580,15 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         pass
 
     # V3.1.94: Per-pair overrides removed — flat 1.1% TP + chart SL (+0.5%) for all
+
+    # V3.2.59: TP FEE-FLOOR GUARD — ensure TP clears round-trip taker fees.
+    # At 0.08%/side (TAKER_FEE_RATE=0.0008), round-trip = 0.16% price movement.
+    # Any TP below this is GUARANTEED net-negative. Add 0.04% buffer = 0.20% floor.
+    _FEE_FLOOR_TP_PCT = 0.20  # 0.16% fees + 0.04% buffer = minimum viable TP
+    if tp_pct_raw < _FEE_FLOOR_TP_PCT:
+        _reason = f"TP {tp_pct_raw:.2f}% below fee floor ({_FEE_FLOOR_TP_PCT:.2f}%) — trade is net-negative after 0.16% round-trip fees"
+        print(f"  [FEE-FLOOR] {_reason}")
+        return {"executed": False, "reason": _reason}
 
     # V3.1.89: Removed R:R gate — the 1.5:1 requirement conflicted with chart-based
     # TP/SL and ATR safety, blocking high-confidence signals (e.g. 85% SOL SHORT).
