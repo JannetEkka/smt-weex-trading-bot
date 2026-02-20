@@ -240,6 +240,7 @@ try:
         get_account_equity,  # V3.1.19: For proper equity calculation
         upload_ai_log_to_weex,
         _rate_limit_gemini,
+        weex_headers, round_price_to_tick,  # V3.2.46: for breakeven SL
         
         # Position management
         check_position_status, cancel_all_orders_for_symbol,
@@ -632,9 +633,10 @@ def check_trading_signals():
         CONFIDENCE_OVERRIDE_THRESHOLD = 0.85
         MAX_CONFIDENCE_SLOTS = 0  # V3.1.64a: DISABLED - hard cap is absolute
         CONFIDENCE_EXTRA_SLOT = 0.90  # V3.2.39: 90%+ signals may open 5th slot when all 4 full
+        # V3.2.46: With 1-slot cross-margin strategy, disable extra slot bypass entirely.
+        # Full account is buffer for one 20x trade — no concurrent positions.
 
-        # V3.2.38: 4-slot hard cap restored (was removed in V3.2.25)
-        # V3.2.39: base can_open_new on slots; 90%+ exception applied per-signal below
+        # V3.2.46: 1-slot hard cap — cross margin = full account as buffer for single trade
         can_open_new = not low_equity_mode and available_slots > 0
 
         if low_equity_mode:
@@ -905,12 +907,10 @@ def check_trading_signals():
                                 explanation=f"AI decided to maintain SHORT position. Existing SHORT confidence ({existing_conf:.0%}) > new LONG signal ({confidence:.0%}). No directional change warranted."
                             )
                     else:
-                        if can_open_new or (not low_equity_mode and confidence >= CONFIDENCE_EXTRA_SLOT):
-                            # V3.2.39: 4-slot hard cap base; 90%+ signals open 5th slot when full
+                        if can_open_new:
+                            # V3.2.46: 1-slot hard cap — no extra slot bypass (cross margin safety)
                             can_trade_this = True
                             trade_type = "new"
-                            if not can_open_new:
-                                logger.info(f"    -> 90%+ EXTRA SLOT: {confidence:.0%} >= {CONFIDENCE_EXTRA_SLOT:.0%}, opening beyond {effective_max_positions} slots")
 
                 elif signal == "SHORT":
                     # V3.2.18: Shorts allowed for ALL pairs (was LTC only since V3.2.13)
@@ -947,12 +947,10 @@ def check_trading_signals():
                                 explanation=f"AI decided to maintain LONG position. Existing LONG confidence ({existing_conf:.0%}) > new SHORT signal ({confidence:.0%}). No directional change warranted."
                             )
                     else:
-                        if can_open_new or (not low_equity_mode and confidence >= CONFIDENCE_EXTRA_SLOT):
-                            # V3.2.39: 4-slot hard cap base; 90%+ signals open 5th slot when full
+                        if can_open_new:
+                            # V3.2.46: 1-slot hard cap — no extra slot bypass (cross margin safety)
                             can_trade_this = True
                             trade_type = "new"
-                            if not can_open_new:
-                                logger.info(f"    -> 90%+ EXTRA SLOT: {confidence:.0%} >= {CONFIDENCE_EXTRA_SLOT:.0%}, opening beyond {effective_max_positions} slots")
 
                 # V3.1.93: Track best non-executed signal for PM context
                 if signal in ("LONG", "SHORT") and confidence >= 0.80 and not can_trade_this:
@@ -1418,6 +1416,66 @@ def check_trading_signals():
 
 
 # ============================================================
+# V3.2.46: BREAKEVEN TRAILING STOP
+# ============================================================
+BREAKEVEN_TRIGGER_PCT = 0.4  # Move SL to entry when trade reaches +0.4%
+
+def _move_sl_to_breakeven(symbol: str, side: str, entry_price: float, tp_price: float, size: float) -> bool:
+    """V3.2.46: Cancel existing SL and replace with breakeven SL at entry price.
+    Preserves the original TP. Returns True on success."""
+    try:
+        real_symbol = symbol.split(":")[0] if ":" in symbol else symbol
+        # Step 1: Cancel all existing plan orders (TP + SL triggers)
+        cancel_all_orders_for_symbol(real_symbol)
+        time.sleep(0.5)  # Let WEEX process cancellations
+
+        # Step 2: Determine close type for plan orders
+        close_type = "3" if side == "LONG" else "4"  # 3=close long, 4=close short
+
+        # Step 3: Place new SL at breakeven (entry price)
+        breakeven_price = entry_price  # Exact entry — fees already paid, just protect capital
+        plan_order_endpoint = '/capi/v2/order/plan_order'
+
+        sl_body = json.dumps({
+            'symbol': real_symbol,
+            'client_oid': f'smt_be_sl_{int(time.time()*1000)}',
+            'size': str(size),
+            'type': close_type,
+            'match_type': '1',
+            'execute_price': '0',
+            'trigger_price': str(round_price_to_tick(breakeven_price, real_symbol))
+        })
+        sl_r = requests.post(f"{WEEX_BASE_URL}{plan_order_endpoint}",
+                            headers=weex_headers('POST', plan_order_endpoint, sl_body),
+                            data=sl_body, timeout=10)
+        sl_ok = sl_r.status_code == 200 and sl_r.json().get("code") in ("200", "00000")
+
+        # Step 4: Re-place TP at original level
+        tp_ok = False
+        if tp_price and tp_price > 0:
+            tp_body = json.dumps({
+                'symbol': real_symbol,
+                'client_oid': f'smt_be_tp_{int(time.time()*1000)}',
+                'size': str(size),
+                'type': close_type,
+                'match_type': '1',
+                'execute_price': '0',
+                'trigger_price': str(round_price_to_tick(tp_price, real_symbol))
+            })
+            tp_r = requests.post(f"{WEEX_BASE_URL}{plan_order_endpoint}",
+                                headers=weex_headers('POST', plan_order_endpoint, tp_body),
+                                data=tp_body, timeout=10)
+            tp_ok = tp_r.status_code == 200 and tp_r.json().get("code") in ("200", "00000")
+
+        symbol_clean = real_symbol.replace("cmt_", "").upper()
+        logger.info(f"  [BREAKEVEN] {symbol_clean}: SL moved to ${breakeven_price:.4f} (entry) | SL={sl_ok} TP={tp_ok}")
+        return sl_ok
+    except Exception as e:
+        logger.error(f"  [BREAKEVEN] Failed for {symbol}: {e}")
+        return False
+
+
+# ============================================================
 # V3.1.9 TIER-BASED POSITION MONITORING
 # ============================================================
 
@@ -1610,11 +1668,23 @@ def monitor_positions():
                     peak_pnl_pct = pnl_pct
                     tracker.save_state()
                 
+                # V3.2.46: Breakeven trailing stop — move SL to entry when +0.4% reached
+                if not trade.get("sl_moved_to_breakeven", False) and pnl_pct >= BREAKEVEN_TRIGGER_PCT:
+                    _be_tp = trade.get("tp_price", 0)
+                    _be_size = position.get("size", trade.get("size", 0))
+                    _be_ok = _move_sl_to_breakeven(symbol, trade.get("side", "LONG"), entry_price, _be_tp, _be_size)
+                    if _be_ok:
+                        trade["sl_moved_to_breakeven"] = True
+                        trade["sl_price"] = entry_price  # Update tracker
+                        tracker.save_state()
+                        logger.info(f"  [BREAKEVEN] {symbol}: SL moved to entry at +{pnl_pct:.2f}% (trigger: {BREAKEVEN_TRIGGER_PCT}%)")
+
                 # V3.1.41: Get entry confidence for adaptive guards
                 entry_confidence = trade.get("confidence", 0.75)
                 confidence_multiplier = 1.3 if entry_confidence >= 0.85 else 1.0  # High-conf trades get 30% wider guards
-                
-                logger.info(f"  [MONITOR] {symbol} T{tier}: {pnl_pct:+.2f}% (peak: {peak_pnl_pct:.2f}%) conf={entry_confidence:.0%}")
+
+                _be_tag = " [BE]" if trade.get("sl_moved_to_breakeven") else ""
+                logger.info(f"  [MONITOR] {symbol} T{tier}: {pnl_pct:+.2f}% (peak: {peak_pnl_pct:.2f}%) conf={entry_confidence:.0%}{_be_tag}")
                 
                 # V3.1.59: Record PnL trajectory for Smart Monitor
                 if symbol not in _pnl_history:
@@ -3263,7 +3333,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.45 - Larger Gains: Per-Pair TP, 4H Anchor, 4-5H Planning")
+    logger.info("SMT Daemon V3.2.46 - Cross Margin Defense: 1-Slot, Breakeven SL, Circuit Breaker")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")

@@ -1800,7 +1800,7 @@ FLOOR_BALANCE = 400.0  # V3.1.63: Liquidation floor - hard stop
 MAX_LEVERAGE = 20
 # V3.2.16: 7 pairs, 4 slots flat. BTC/ETH/BNB re-added (Gemini chart context makes them viable).
 # V3.2.18: Shorts allowed for ALL pairs (was LTC only). 80% floor + chop filter = sufficient protection.
-MAX_TOTAL_POSITIONS = 4  # Hard cap: 4 slots for 7 pairs
+MAX_TOTAL_POSITIONS = 1  # V3.2.46: 1 position at a time — cross margin = full account as buffer
 
 def get_max_positions_for_equity(equity: float) -> int:
     """V3.2.16: Fixed 4-slot system for 7 pairs. Equity no longer scales slots."""
@@ -1917,7 +1917,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.45-RegexJsonParser-DynamicDate-NoCitation"
+PIPELINE_VERSION = "SMT-v3.2.46-CrossMarginDefense-1Slot-BreakevenSL-CircuitBreaker"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4269,6 +4269,18 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
                     chart_sr["method"] = "chart_mtf"
                 _gemini_tp_used = True
 
+    # V3.2.46: If Gemini TP override succeeded but chart SR has no SL (e.g., candle data
+    # insufficient), use MAX_SL_PCT as fallback SL. Prevents discarding valid Gemini signals.
+    if _gemini_tp_used and chart_sr["tp_pct"] and not chart_sr.get("sl_pct"):
+        chart_sr["sl_pct"] = MAX_SL_PCT
+        if signal == "LONG":
+            chart_sr["sl_price"] = round(current_price * (1 - MAX_SL_PCT / 100), 8)
+        else:
+            chart_sr["sl_price"] = round(current_price * (1 + MAX_SL_PCT / 100), 8)
+        if chart_sr["method"] == "fallback":
+            chart_sr["method"] = "chart_mtf"
+        print(f"  [TP/SL] Gemini TP + SL fallback: SL set to {MAX_SL_PCT:.1f}% (chart SL unavailable)")
+
     if chart_sr["method"] in ("chart", "chart_mtf") and chart_sr["tp_pct"] and chart_sr["sl_pct"]:
         # CHART-BASED: Real S/R levels from candle swing highs/lows (or Gemini structural target)
         tp_pct_raw = chart_sr["tp_pct"]
@@ -4428,10 +4440,14 @@ COOLDOWN_HOURS = {
 # V3.1.89: Per-symbol cooldowns REMOVED. The 80% confidence floor, chop filter,
 # consecutive loss block, and force-stop blacklist are sufficient entry gates.
 # Cooldowns were blocking legitimate re-entries after reversals.
+# V3.2.46: Circuit breaker — 60-min+ cooldown after losses (was all 0.0).
+# Cross margin = shared collateral, revenge trading is account-ending.
+# Mult × base hours (T1=2h, T2=1.5h, T3=1h) → T1=2h, T2=1.5h, T3=1h post-loss.
+# Wins/profit: 0.0 (re-entry OK, trend confirmed).
 COOLDOWN_MULTIPLIERS = {
-    "sl_hit": 0.0,
-    "force_stop": 0.0,
-    "early_exit": 0.0,
+    "sl_hit": 1.0,      # V3.2.46: was 0.0 — 60min+ after SL hit
+    "force_stop": 1.0,  # V3.2.46: was 0.0 — 60min+ after force stop
+    "early_exit": 0.5,  # V3.2.46: was 0.0 — 30-60min after early exit (mild)
     "max_hold": 0.0,
     "profit_lock": 0.0,
     "tp_hit": 0.0,
