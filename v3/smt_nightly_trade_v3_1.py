@@ -58,6 +58,7 @@ import hmac
 import hashlib
 import base64
 import pickle
+import re
 import requests
 import numpy as np
 import random
@@ -1914,7 +1915,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.44-FullGeminiResponseLogs"
+PIPELINE_VERSION = "SMT-v3.2.45-RegexJsonParser-DynamicDate-NoCitation"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -2576,6 +2577,8 @@ class SentimentPersona:
         # V3.2.41: SENTIMENT = macro news analyst (qualitative only). Do NOT ask for price targets
         # or technical epoch strategies — those are JUDGE's job using live chart data.
         # SENTIMENT's edge: Gemini Search Grounding for real-time catalysts and macro context.
+        # V3.2.45: Dynamic date injected so search targets exact 4-5H window (not stale articles)
+        _current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         combined_prompt = f"""You are the Macro News Analyst for {pair}/USDT crypto futures trading.
 Use your Google Search capability to research ONLY qualitative, news-driven factors for the NEXT 4-5 HOURS.
 
@@ -2583,7 +2586,7 @@ RESEARCH TASK — search for these and report findings:
 
 1. CATALYSTS: Are there any active news events, protocol upgrades, ETF flow data, regulatory decisions,
    or macro events (Fed speeches, CPI data, job reports, Treasury auctions) that could move {pair} in
-   the next 4-5 hours? Search: "{pair} crypto news today" and "crypto market catalyst today".
+   the next 4-5 hours? Search: "{pair} crypto news {_current_date}" and "crypto market catalyst {_current_date}".
 
 2. MACRO BIAS: Based on the overall crypto market sentiment RIGHT NOW (not technicals):
    RISK_ON = buy-the-dip mentality, inflows, positive news flow
@@ -2600,7 +2603,7 @@ RESEARCH TASK — search for these and report findings:
 IMPORTANT: Do NOT output price levels, TP targets, SL anchors, or technical strategy names.
 Output ONLY qualitative observations. The trading bot will apply technical analysis separately.
 
-Respond with JSON ONLY (no markdown):
+Respond with JSON ONLY (no markdown). Do not include any inline citation markers (e.g. [1], [2]) inside the JSON keys or values. Output the raw JSON object only:
 {{"macro_bias": "RISK_ON" or "RISK_OFF" or "NEUTRAL", "directional_bias": "BULLISH" or "BEARISH" or "NEUTRAL", "confidence": 0.0-1.0, "catalyst": "specific catalyst description or NONE", "volatility_risk": "HIGH_RISK" or "NORMAL", "volatility_event": "event description or NONE", "pair_specific_news": "{pair}-specific detail or NONE", "reasoning": "concise explanation of macro findings (max 150 words)"}}"""
 
         grounding_config = GenerateContentConfig(
@@ -2614,7 +2617,14 @@ Respond with JSON ONLY (no markdown):
             try:
                 response = _gemini_full_call("gemini-2.5-flash", combined_prompt, grounding_config, timeout=90)
                 if response and hasattr(response, 'text') and response.text:
-                    clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+                    # V3.2.45: Regex extractor — grounding engine may inject citation markers [1][2]
+                    # after the JSON object, causing direct json.loads() to fail. Pull the JSON
+                    # object out of the raw response regardless of what comes before/after it.
+                    _sent_raw = response.text.strip()
+                    _json_match = re.search(r'\{.*\}', _sent_raw, re.DOTALL)
+                    if not _json_match:
+                        raise json.JSONDecodeError("No JSON object in grounded response", _sent_raw, 0)
+                    clean_text = _json_match.group(0)
                     if clean_text:
                         data = json.loads(clean_text)
                         # V3.2.41: New macro analyst format uses directional_bias; fallback to old sentiment field
@@ -3555,9 +3565,12 @@ Respond with JSON ONLY (no markdown, no backticks):
                 _rate_limit_gemini()
                 response = _gemini_full_call("gemini-2.5-flash", prompt, config, timeout=90)
 
-            clean_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+            # V3.2.45: Regex extractor — handles ```json``` wrapping and any trailing text after JSON
+            _judge_raw = response.text.strip()
+            _json_match = re.search(r'\{.*\}', _judge_raw, re.DOTALL)
+            clean_text = _json_match.group(0) if _json_match else _judge_raw.replace("```json", "").replace("```", "").strip()
             data = json.loads(clean_text)
-            
+
             decision = data.get("decision", "WAIT").upper() if data.get("decision") else "WAIT"
             raw_conf = data.get("confidence")
             confidence = min(0.95, max(0.0, float(raw_conf))) if raw_conf is not None else 0.0
@@ -5041,7 +5054,7 @@ def save_local_log(log_data: Dict, timestamp: str):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("SMT V3.2.44 - Multi-Persona Trading")
+    print("SMT V3.2.45 - Multi-Persona Trading")
     print("=" * 60)
     
     print("\nTier Configuration:")
