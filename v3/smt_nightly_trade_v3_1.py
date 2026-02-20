@@ -3633,7 +3633,7 @@ Funding rate (BTC): {regime.get('btc_funding', 0):.6f}
 NOTE: Each entry shows the pair, direction, confidence, how many consecutive 10-min cycles it persisted, and when it first appeared.
 - 2+ cycles same direction = signal is REAL and confirmed. Commit harder (boost confidence).
 - 1 cycle only = fresh signal, could be noise. Normal confidence.
-- If THIS PAIR just flipped direction from last cycle (was SHORT now LONG or vice versa) = HIGH NOISE RISK. Favor WAIT unless WHALE+FLOW are both very strong (>75%).
+- If THIS PAIR just flipped direction from last cycle (was SHORT now LONG or vice versa) = HIGH NOISE RISK. Favor WAIT unless 3+ personas strongly agree (>70%).
 - If THIS PAIR has no history = first time seeing a signal for it. Treat normally.
 - Other pairs' history gives you cross-market context (is everything flipping? broad trend shift?).
 
@@ -3657,7 +3657,7 @@ NOTE: Order book walls are ephemeral and can be pulled. Use them as ONE input fo
 IMPORTANT: SENTIMENT used Google Search to find qualitative catalysts only — NO technical levels.
 - RISK_ON macro + strong WHALE/FLOW signal = add confidence to LONG bias
 - RISK_OFF macro + FLOW distribution = add confidence to SHORT bias
-- HIGH_RISK volatility event: require confidence >=85% before trading — scheduled events can cause extreme wicks
+- HIGH_RISK volatility event: note it in reasoning but do NOT block trades. If 3+ personas agree, TRADE despite volatility risk.
 - CATALYST present: can override RANGE setup to CATALYST_DRIVE epoch strategy
 
 === FUNDING RATE HOLD-COST (V3.2.48 — position carry cost at 20x leverage) ===
@@ -3689,10 +3689,10 @@ Then plan the move WITHIN YOUR TIER'S HOLD WINDOW (see HOLD TIME LIMITS) and set
 VELOCITY > PATIENCE. Competition ends in <72h. We need compounding cycles, not perfect positioning.
 
 PRIORITY ORDER: MOMENTUM_CROSS > CATALYST_DRIVE > CORRELATION_LAG > SUPPORT_SWEEP > RANGE_BOUNDARY > VWAP_REVERSION
-BETA BIAS: Prefer Tier 3 (SOL, ADA) for momentum. Only enter BTC/ETH if confidence >= 90%.
+BETA BIAS: Prefer Tier 3 (SOL, ADA) for momentum — bigger moves in shorter time. BTC/ETH are fine at 85%+ if 3+ personas agree.
 LOW ADX NOTE (V3.2.59): ADX < 20 means range-bound — this is WHERE our dip-bounce strategy works best.
-  Do NOT force WAIT on low ADX. If WHALE+FLOW show accumulation in a range, that IS the dip entry.
-  Only WAIT if WHALE+FLOW are both weak/neutral (<60%) in a low-ADX environment.
+  Do NOT force WAIT on low ADX. If multiple personas show accumulation in a range, that IS the dip entry.
+  Only WAIT if all personas are weak/neutral (<50%) in a low-ADX environment.
 RANGE/MEAN-REVERSION: RANGE_BOUNDARY and VWAP_REVERSION work well in low-ADX environments. Use if FLOW confirms wall.
 EXTREME FEAR DIP (V3.2.59): F&G < 15 + FLOW showing heavy bid accumulation = TEXTBOOK dip setup.
   This is exactly what the bot was designed for. Lean INTO these setups, not away from them.
@@ -3736,27 +3736,45 @@ State your chosen epoch strategy in the reasoning field.
 
 YOUR ONLY JOB: Decide LONG, SHORT, or WAIT based on signal quality. Position limits, TP/SL, and slot management are handled by code -- ignore them entirely.
 
-CRITICAL: Your confidence score MUST reflect actual signal quality, NOT rules or bias.
-- F&G rules below force your DIRECTION (LONG or SHORT), but confidence must honestly reflect how strong the setup is.
-- If all signals weakly agree: 60-70% confidence. If signals are mixed but rules force direction: 50-65%.
-- Only give 85%+ when WHALE + FLOW strongly agree AND align with direction.
+CRITICAL: Your confidence score MUST reflect actual signal quality across ALL 4 personas.
+- 3+ personas agree strongly (>60% each): 85-95% confidence.
+- 3+ personas agree but some weakly: 75-85% confidence.
+- 2 personas agree + extreme F&G supports direction: 70-80% confidence.
+- Strong catalyst (SENTIMENT) + FLOW confirms: 80-90% confidence even if WHALE disagrees.
+- Mixed signals, no clear majority: 40-60% confidence (likely WAIT).
 
-SIGNAL RELIABILITY:
-  CO-PRIMARY (equal weight, these drive your decision):
-    1. WHALE -- smart money / crowd wisdom. Our unique edge.
-       For BTC/ETH: dual-source -- Etherscan on-chain whale wallets (structural) + Cryptoracle community sentiment (crowd). See WHALE DUAL-SOURCE DATA section above for raw numbers. When both agree, WHALE signal is very strong. When they diverge, weight conservatively.
-       For other pairs: Cryptoracle community sentiment only.
-    2. FLOW (order book taker ratio) -- actual money moving right now.
-  SECONDARY (confirmation only, never override WHALE+FLOW):
-    3. SENTIMENT (macro news analyst with Google Search) -- qualitative context. See SENTIMENT MACRO REPORT above. RISK_OFF + HIGH_RISK = raise confidence threshold to 85% before trading. Catalyst present = can override RANGE strategy.
-    4. TECHNICAL (RSI/SMA/momentum) -- lagging indicator, confirmation only. In fear markets (F&G < 30), SMA signals are especially lagged (price already below SMAs); discount TECHNICAL when it conflicts with FLOW+WHALE.
+SIGNAL RELIABILITY (V3.2.59 — ALL PERSONAS MATTER):
+  ALL FOUR personas contribute to the decision. No persona is "confirmation only."
+    1. WHALE -- smart money / crowd wisdom. On-chain flows + community sentiment.
+       For BTC/ETH: dual-source -- Etherscan on-chain + Cryptoracle community. When both agree, strongest signal.
+       For other pairs: Cryptoracle community sentiment only. NOTE: community sentiment is BACKWARD-LOOKING — it reflects
+       what retail thinks based on recent price action, NOT where price is going. When F&G < 20, WHALE community sentiment
+       is OFTEN bearish (reflecting the fear) even when a bounce is forming. Weight WHALE lower in extreme fear environments.
+    2. FLOW (order book taker ratio + depth) -- actual money moving RIGHT NOW. Most forward-looking signal.
+       Taker buy ratio > 1.3 = strong buying pressure. Bid/ask depth ratio > 1.5 = major bid wall accumulation.
+       In extreme fear, FLOW accumulation is the STRONGEST bullish signal — smart money positioning for bounce.
+    3. SENTIMENT (macro news analyst with Google Search) -- real-time catalysts, macro bias, volatility risk.
+       Strong catalysts (ETF inflows, protocol upgrades, institutional adoption) override weak WHALE sentiment.
+       SENTIMENT LONG 70%+ with specific catalyst = treat as a PRIMARY signal, not secondary.
+    4. TECHNICAL (RSI/SMA/momentum) -- trend confirmation. In fear markets (F&G < 30), discount if it conflicts
+       with FLOW, as SMA signals lag. But when TECHNICAL aligns with FLOW + SENTIMENT, it strengthens conviction.
 
-HOW TO DECIDE:
-- If WHALE + FLOW agree: TRADE IT at 85%+ confidence. Strongest possible signal.
-- If WHALE is strong (>65% conf) but FLOW is weak/neutral: trust WHALE direction.
-- If FLOW is strong (>75% conf) but WHALE is weak/neutral: trust FLOW. Money is moving.
-- If WHALE and FLOW directly contradict (opposite directions, both >60%): WAIT.
-- If neither co-primary signal exceeds 60%: WAIT. No clear edge.
+HOW TO DECIDE (V3.2.59 — MAJORITY VOTE + CONTEXT):
+Count how many personas agree on direction. Consider the FULL picture:
+- 3+ personas agree on direction: TRADE IT. Confidence 80-90% based on strength of agreement.
+- 2 personas agree + 1 neutral + F&G extreme (< 15 or > 85) favoring same direction: TRADE IT at 75-85%.
+- FLOW strong (>70%) + SENTIMENT has specific catalyst + same direction: TRADE IT even if WHALE disagrees.
+  WHALE community sentiment lags price action — a catalyst-driven move with FLOW confirmation is more reliable.
+- WHALE strong (>70%) + FLOW agrees: TRADE IT at 85%+. This is the gold standard.
+- ALL 4 personas directly contradict each other (no majority): WAIT.
+- FLOW and WHALE both strong (>70%) in OPPOSITE directions: WAIT (genuine conflict).
+- No persona exceeds 50% confidence: WAIT (no conviction anywhere).
+
+VOLATILITY RISK (from SENTIMENT):
+- HIGH_RISK means a scheduled event COULD cause volatility. It does NOT mean "don't trade."
+- If 3+ personas agree on direction despite HIGH_RISK: TRADE. The event risk is already priced into the signals.
+- Only favor WAIT on HIGH_RISK if signals are genuinely weak/conflicting (no majority agreement).
+- Do NOT impose an arbitrary 85% confidence gate for HIGH_RISK — the confidence should reflect actual signal quality.
 
 TP TARGET (V3.2.57 — STRUCTURAL TARGET WITHIN HOLD WINDOW, NOT 0.5% DEFAULT):
 Look at CHART STRUCTURE (4H/Daily levels) to plan where price will be WITHIN YOUR HOLD WINDOW:
@@ -3770,7 +3788,7 @@ If no clear structure reachable within hold window, omit tp_price — code will 
 
 === HISTORICAL PAIR PERFORMANCE (from RL training data) ===
 {rl_performance}
-USE THIS AS CONTEXT ONLY — not a veto. Poor historical win rate = note it in reasoning, then follow WHALE+FLOW if they clearly agree.
+USE THIS AS CONTEXT ONLY — not a veto. Poor historical win rate = note it in reasoning, but trust the majority of personas.
 If a pair has >15% win rate, it has proven itself — trust stronger signals on it.
 
 FEAR & GREED (V3.2.59 — DIP-BOUNCE STRATEGY):
@@ -3784,12 +3802,12 @@ IMPORTANT: EXTREME FEAR + FLOW accumulation = our highest-conviction setup. Lean
 TRADE HISTORY CONTEXT:
 {trade_history_summary}
 
-IMPORTANT: Say LONG or SHORT if WHALE + FLOW support it. WAIT is valid when signals are weak or contradictory.
-<72 hours left in competition — BLITZ MODE. Larger, well-planned trades beat 0.5% exits. Use the per-pair epoch strategy. TP must be reachable within hold window.
-SHORT ASYMMETRY: In EXTREME FEAR (F&G < 15), require 2+ co-primary signals confirming SHORT before taking it (bounce risk is real). Otherwise treat LONG and SHORT equally — both directions are valid entries.
+IMPORTANT: Count ALL 4 personas. If 3+ agree on direction, TRADE. WAIT only when signals genuinely conflict (no majority).
+<72 hours left in competition — BLITZ MODE. Every cycle without a trade is wasted capital rotation. If the setup is there, TAKE IT.
+SHORT ASYMMETRY: In EXTREME FEAR (F&G < 15), require 3+ personas confirming SHORT (bounce risk is real). For LONG, 2 personas + extreme fear bias is enough — this IS the dip strategy.
 
 Respond with JSON ONLY (no markdown, no backticks):
-{{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences: state epoch strategy selected, why WHALE+FLOW support it, and what target you see within the hold window (T1=3H, T2=2H, T3=1.5H)", "tp_price": null or a number (structural level reachable within hold window — NOT defaulting to 0.5%)}}"""
+{{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences: state how many personas agree, which epoch strategy fits, and what target you see within the hold window (T1=3H, T2=2H, T3=1.5H)", "tp_price": null or a number (structural level reachable within hold window — NOT defaulting to 0.5%)}}"""
 
         try:
             import time as _jtime2
