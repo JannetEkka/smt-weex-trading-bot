@@ -1895,14 +1895,15 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
 
 # V3.1.78: FLAT 20x LEVERAGE, competition only cares about final PnL
 # Tier TP/SL unchanged, R:R floor removed (was broken - tier cap overrode it)
-# V3.2.49: FINAL STRETCH — tightened hold times for last 72h of competition
-# Old: T1=24h/6h, T2=12h/4h, T3=8h/3h → New: T1=6h/2h, T2=4h/1.5h, T3=3h/1h
-# Single-slot mode means a stale position blocks ALL capital rotation.
-# If a dip-bounce hasn't played out in 6h (T1) the thesis is dead — cut and re-scan.
+# V3.2.49: FINAL STRETCH — aggressive hold times for last 72h of competition
+# Old: T1=24h/6h, T2=12h/4h, T3=8h/3h → New: T1=3h/1h, T2=2h/0.75h, T3=1.5h/0.5h
+# Single-slot mode: stale position blocks ALL capital rotation.
+# Dip-bounce strategy = move happens in first 30-60min or thesis is dead.
+# More at-bats = more compounding opportunities in remaining 72h.
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.01, "time_limit": 360, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 6, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.035, "trailing_stop": 0.012, "time_limit": 240, "tp_pct": 3.5, "sl_pct": 1.5, "max_hold_hours": 4, "early_exit_hours": 1.5, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.03, "trailing_stop": 0.015, "time_limit": 180, "tp_pct": 3.0, "sl_pct": 1.8, "max_hold_hours": 3, "early_exit_hours": 1, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.01, "time_limit": 180, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 3, "early_exit_hours": 1, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.035, "trailing_stop": 0.012, "time_limit": 120, "tp_pct": 3.5, "sl_pct": 1.5, "max_hold_hours": 2, "early_exit_hours": 0.75, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.03, "trailing_stop": 0.015, "time_limit": 90, "tp_pct": 3.0, "sl_pct": 1.8, "max_hold_hours": 1.5, "early_exit_hours": 0.5, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
 }
 # V3.1.78: Tier reassignment based on actual ATR/volatility analysis
 # BTC T1→T2 (2.28% actual SL, +52% stretch - behaves mid-cap)
