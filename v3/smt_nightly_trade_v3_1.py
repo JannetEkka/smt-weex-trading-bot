@@ -1922,7 +1922,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.54-TieredPeakFade"
+PIPELINE_VERSION = "SMT-v3.2.55-PlanOrderRetry"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4976,26 +4976,40 @@ def _fix_plan_orders(symbol: str, signal: str, size: float, tp_price: float, sl_
 
 
 def _fetch_plan_order_ids(symbol: str, expected_tp: float, expected_sl: float) -> dict:
-    """V3.2.50: Query WEEX plan orders after placement. Returns tp_plan_order_id and
-    sl_plan_order_id fetched at trade-open time — eliminates the need to guess the close
-    order ID later via get_recent_close_order_id().
+    """V3.2.55: Query WEEX plan orders after placement, with retry on 404/empty.
+    Returns tp_plan_order_id and sl_plan_order_id fetched at trade-open time —
+    eliminates the need to guess the close order ID later via get_recent_close_order_id().
     Also verifies trigger prices match what we sent (preserves V3.2.30 mismatch detection).
     LONG: higher trigger = TP, lower = SL. SHORT: reversed.
+    Retry: 2s initial sleep, then up to 2 retries (2s apart) on 404 or empty response.
     Returns {"tp_plan_order_id": X, "sl_plan_order_id": Y} — both None on failure.
     """
     result = {"tp_plan_order_id": None, "sl_plan_order_id": None}
+    pair = symbol.replace("cmt_", "").upper()
     try:
-        time.sleep(1.5)  # Let WEEX finish registering preset plan orders
         endpoint = f"/capi/v2/order/plan_orders?symbol={symbol}"
-        r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=10)
-        if r.status_code != 200:
-            print(f"  [WEEX-CONFIRM] plan_orders HTTP {r.status_code} for {symbol}")
-            return result
-        resp = r.json()
-        orders = resp if isinstance(resp, list) else (resp.get("data") or [])
-        pair = symbol.replace("cmt_", "").upper()
+        orders = None
+        _INITIAL_SLEEP = 2.0   # WEEX needs time to register preset plan orders
+        _RETRY_SLEEP   = 2.0
+        _MAX_RETRIES   = 2
+        time.sleep(_INITIAL_SLEEP)
+        for attempt in range(1 + _MAX_RETRIES):
+            r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=10)
+            if r.status_code != 200:
+                print(f"  [WEEX-CONFIRM] plan_orders HTTP {r.status_code} for {symbol} (attempt {attempt+1})")
+                if attempt < _MAX_RETRIES:
+                    time.sleep(_RETRY_SLEEP)
+                    continue
+                return result
+            resp = r.json()
+            orders = resp if isinstance(resp, list) else (resp.get("data") or [])
+            if orders:
+                break  # Got data — proceed to parse
+            print(f"  [WEEX-CONFIRM] {pair}: no plan orders yet (attempt {attempt+1}/{1+_MAX_RETRIES})")
+            if attempt < _MAX_RETRIES:
+                time.sleep(_RETRY_SLEEP)
         if not orders:
-            print(f"  [WEEX-CONFIRM] {pair}: no plan orders on WEEX (preset may still be processing)")
+            print(f"  [WEEX-CONFIRM] {pair}: plan orders not available after retries — stored IDs will be None")
             return result
         # Extract (trigger_price, order_id) — field names vary; try both conventions
         entries = []
