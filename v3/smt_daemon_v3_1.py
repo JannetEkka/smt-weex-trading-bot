@@ -1904,8 +1904,17 @@ def monitor_positions():
                 # positions on normal noise (ADA closed at -0.17%, BNB at -0.33%).
                 # SL on exchange is the safety net. Let trades breathe.
 
+                # V3.2.56: MACRO BLACKOUT EXIT — close unprofitable positions when blackout window activates.
+                # News algos cause 1-2% instant spikes; a negative position is exposed to SL whipsaw.
+                # Profitable positions (pnl_pct >= 0) are let ride — they have a buffer, SL protects.
+                # Position monitor runs every 2min → out within 2min of window start (15min before data drop).
+                _is_blacked_out, _blackout_label = _is_macro_blackout()
+                if _is_blacked_out and pnl_pct < 0:
+                    should_exit = True
+                    exit_reason = f"macro_blackout_exit ({_blackout_label}, pnl={pnl_pct:.2f}%)"
+
                 # 1. Max hold time exceeded (tier-specific)
-                if hours_open >= max_hold:
+                elif hours_open >= max_hold:
                     should_exit = True
                     exit_reason = f"max_hold_T{tier} ({hours_open:.1f}h > {max_hold}h)"
                 
@@ -3646,6 +3655,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.56: Macro blackout exit — monitor_positions() closes unprofitable (pnl<0) positions when blackout window activates; profitable positions ride with SL; AI log sent with order_id. Funding rate direction-aware: Judge now told paying vs receiving side based on persona consensus (fixes bonus-labeled-as-drag for LONG on negative funding)")
     logger.info("  V3.2.55: _fetch_plan_order_ids() retry loop — 2s initial sleep + up to 2 retries (2s apart) on HTTP 404 or empty plan-orders response; eliminates stored-ID=None fallback on WEEX registration lag")
     logger.info("  V3.2.54: Tiered peak-fade — T1(BTC/ETH): MIN=0.30%%,TRIG=0.15%%; T2/T3(altcoins): MIN=0.45%%,TRIG=0.25%%; altcoin wick noise needs 2x breathing room vs majors; exit_reason peak_fade_T{n} includes tier+thresholds")
     logger.info("  V3.2.53: Peak-fade soft stop — PEAK_FADE_MIN_PEAK=0.20%%, PEAK_FADE_TRIGGER=0.12%%; fires when peak>=0.20%% and current<=peak-0.12%%; 'peak_fade' reason = zero cooldown; only when BE-SL not yet placed")
