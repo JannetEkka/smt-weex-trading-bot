@@ -1922,7 +1922,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.51-EmergencyFlip-AgeGateBypassAt90pct"
+PIPELINE_VERSION = "SMT-v3.2.52-PreCycleExitSweep"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes

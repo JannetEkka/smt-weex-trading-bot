@@ -751,6 +751,91 @@ def check_trading_signals():
         if _thin_liquidity:
             logger.info(f"[WEEKEND MODE] {_thin_reason} — restricting to {', '.join(sorted(WEEKEND_ALLOWED_PAIRS))} only (thin altcoin books)")
 
+        # V3.2.52: PRE-CYCLE EXIT SWEEP — close expired positions BEFORE the 7-pair
+        # Gemini analysis starts. Signal check blocks for ~6 minutes; without this,
+        # a position can breach max_hold/force_exit mid-cycle and only get closed by
+        # monitor_positions AFTER the full analysis completes.
+        # Checks max_hold (timestamp only), force_exit_loss, and early_exit in seconds.
+        _pre_exits = 0
+        for _pre_sym in list(tracker.get_active_symbols()):
+            _pre_trade = tracker.get_active_trade(_pre_sym)
+            if not _pre_trade:
+                continue
+            _pre_real_sym = _pre_sym.split(":")[0] if ":" in _pre_sym else _pre_sym
+            _pre_clean = _pre_real_sym.replace("cmt_", "").upper()
+            try:
+                _pre_opened = datetime.fromisoformat(_pre_trade["opened_at"].replace("Z", "+00:00"))
+                _pre_hours = (datetime.now(timezone.utc) - _pre_opened).total_seconds() / 3600
+            except Exception:
+                continue
+            _pre_tier = _pre_trade.get("tier", 2)
+            _pre_tc = get_tier_config(_pre_tier)
+            _pre_max_hold = _pre_tc["max_hold_hours"]
+            _pre_should_exit = False
+            _pre_exit_reason = ""
+            _pre_pnl_pct = 0.0
+            # Gate 1: max_hold — timestamp only, no API call needed
+            if _pre_hours >= _pre_max_hold:
+                _pre_should_exit = True
+                _pre_exit_reason = f"max_hold_T{_pre_tier} ({_pre_hours:.1f}h > {_pre_max_hold}h)"
+            else:
+                # Gates 2+3: PnL-based exits (early_exit, force_stop) — need current price
+                try:
+                    _pre_entry = _pre_trade.get("entry_price", 0)
+                    _pre_side = _pre_trade.get("side", "LONG")
+                    if _pre_entry > 0:
+                        _pre_cur = get_price(_pre_real_sym)
+                        if _pre_cur and _pre_cur > 0:
+                            _pre_pnl_pct = ((_pre_cur - _pre_entry) / _pre_entry * 100) if _pre_side == "LONG" else ((_pre_entry - _pre_cur) / _pre_entry * 100)
+                            _pre_early_h = _pre_tc["early_exit_hours"]
+                            _pre_early_loss = _pre_tc["early_exit_loss_pct"]
+                            _pre_force_loss = _pre_tc["force_exit_loss_pct"]
+                            if _pre_hours >= _pre_early_h and _pre_pnl_pct <= _pre_early_loss:
+                                _pre_should_exit = True
+                                _pre_exit_reason = f"early_exit_T{_pre_tier} ({_pre_pnl_pct:.2f}% after {_pre_hours:.1f}h)"
+                            elif _pre_pnl_pct <= _pre_force_loss:
+                                _pre_should_exit = True
+                                _pre_exit_reason = f"force_stop_T{_pre_tier} ({_pre_pnl_pct:.2f}%)"
+                except Exception as _pre_pnl_err:
+                    logger.debug(f"[PRE-CYCLE] PnL check error {_pre_sym}: {_pre_pnl_err}")
+            if not _pre_should_exit:
+                continue
+            logger.warning(f"[PRE-CYCLE] {_pre_clean}: {_pre_exit_reason} — closing before signal analysis")
+            try:
+                _pre_pos = check_position_status(_pre_sym)
+                if not _pre_pos.get("is_open"):
+                    logger.info(f"[PRE-CYCLE] {_pre_clean}: already closed, cleaning tracker")
+                    tracker.close_trade(_pre_sym, {"reason": _pre_exit_reason, "tier": _pre_tier, "hours_open": _pre_hours, "final_pnl_pct": _pre_pnl_pct})
+                    state.trades_closed += 1
+                    _pre_exits += 1
+                    continue
+                _pre_close = close_position_manually(
+                    symbol=_pre_real_sym,
+                    side=_pre_pos.get("side", _pre_trade.get("side", "LONG")),
+                    size=float(_pre_pos.get("size", _pre_trade.get("size", 0)))
+                )
+                tracker.close_trade(_pre_sym, {"reason": _pre_exit_reason, "tier": _pre_tier, "hours_open": _pre_hours, "final_pnl_pct": _pre_pnl_pct, "close_result": _pre_close})
+                state.trades_closed += 1
+                _pre_oid = _pre_close.get("order_id") if _pre_close else None
+                logger.info(f"  [PRE-CYCLE] Smart Exit close orderId: {_pre_oid or 'not found'}")
+                upload_ai_log_to_weex(
+                    stage=f"Smart Exit - {_pre_clean}",
+                    input_data={"symbol": _pre_sym, "tier": _pre_tier, "hours_open": round(_pre_hours, 2)},
+                    output_data={"reason": _pre_exit_reason, "pnl_pct": round(_pre_pnl_pct, 4)},
+                    explanation=f"Tier {_pre_tier} pre-cycle exit: {_pre_exit_reason}. Closed before 7-pair signal analysis to prevent stale hold."[:1000],
+                    order_id=int(_pre_oid) if _pre_oid and str(_pre_oid).isdigit() else None,
+                )
+                _pre_exits += 1
+                # Refresh slot state so the freed slot is visible to pair analysis below
+                open_positions = get_open_positions()
+                weex_position_count = len(open_positions)
+                available_slots = effective_max_positions - weex_position_count
+                can_open_new = not low_equity_mode and available_slots > 0
+            except Exception as _pre_close_err:
+                logger.error(f"[PRE-CYCLE] Error closing {_pre_sym}: {_pre_close_err}")
+        if _pre_exits > 0:
+            logger.info(f"[PRE-CYCLE] Swept {_pre_exits} expired position(s) before signal analysis")
+
         # Build map: symbol -> {side: position}
         # This tracks BOTH long and short for each symbol
         position_map = {}
@@ -3464,7 +3549,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.51 - Emergency flip: 90%+ opposite signal bypasses age gate (TP proximity gate preserved)")
+    logger.info("SMT Daemon V3.2.52 - Pre-cycle exit sweep: expired positions closed before 7-pair Gemini analysis starts")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3541,6 +3626,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.52: Pre-cycle exit sweep — max_hold/force_exit/early_exit checked at START of check_trading_signals(); positions closed with full AI log BEFORE 7-pair Gemini analysis (fixes 6-min blind spot)")
     logger.info("  V3.2.51: Emergency flip — EMERGENCY_FLIP_CONFIDENCE=0.90; age gate bypassed at 90%+ opposite confidence; TP proximity gate preserved; 'EMERGENCY FLIP' tag in logs + AI log")
     logger.info("  V3.2.50: TAKER_FEE_RATE corrected 0.0006→0.0008 (0.08%/side, 3.2%% margin RT); _fetch_plan_order_ids() stores tp/sl plan IDs at open; daemon uses stored IDs for AI log upload (no sleep/guesswork)")
     logger.info("  V3.2.49: Final stretch — T1: 3h/1h, T2: 2h/45m, T3: 1.5h/30m (was 24/12/8h); sync display reads live TIER_CONFIG not stale trade state")
