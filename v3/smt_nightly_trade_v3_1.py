@@ -1922,7 +1922,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.52-PreCycleExitSweep"
+PIPELINE_VERSION = "SMT-v3.2.53-PeakFadeSoftStop"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
