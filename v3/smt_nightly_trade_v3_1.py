@@ -4609,13 +4609,17 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
 
     # V3.1.84: ATR safety net - if chart SL is tighter than 0.5x ATR, widen it
     # Prevents noise stop-outs on volatile pairs even with chart-based SL
+    # V3.2.60: ATR-safety MUST NOT widen past MAX_SL_PCT (1.5%). Otherwise it blows R:R
+    # and the TP ceiling can never pass. ATR-safety is a floor, MAX_SL_PCT is the ceiling.
     try:
         _atr_check = get_pair_atr(symbol)
         _atr_pct_check = _atr_check.get("atr_pct", 0)
         if _atr_pct_check > 0:
             _min_atr_sl = round(_atr_pct_check * 0.8, 2)  # At least 0.8x ATR
+            _max_sl_cap = MAX_SL_PCT * 100  # 1.5% — hard ceiling
+            _min_atr_sl = min(_min_atr_sl, _max_sl_cap)  # V3.2.60: never exceed ceiling
             if sl_pct_raw < _min_atr_sl:
-                print(f"  [ATR-SAFETY] SL {sl_pct_raw:.2f}% < 0.8x ATR ({_min_atr_sl:.2f}%), widening to {_min_atr_sl:.2f}%")
+                print(f"  [ATR-SAFETY] SL {sl_pct_raw:.2f}% < 0.8x ATR ({_atr_pct_check * 0.8:.2f}%), widening to {_min_atr_sl:.2f}% (capped at {_max_sl_cap:.1f}%)")
                 sl_pct_raw = _min_atr_sl
                 sl_pct = sl_pct_raw / 100
                 if signal == "LONG":
@@ -4636,15 +4640,10 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         print(f"  [FEE-FLOOR] {_reason}")
         return {"executed": False, "reason": _reason}
 
-    # V3.2.60: R:R minimum guard — reject trades where risk far exceeds reward.
-    # Old 1.5:1 gate was too strict; 0.5:1 minimum catches TP 0.5% / SL 1.5% = 0.33:1 losers
-    # while allowing normal chart-based TP/SL ratios through.
+    # V3.2.60: R:R guard REMOVED. Dip-bounce strategy = high win-rate, NOT high R:R.
+    # 0.6% TP / 1.5% SL = R:R 0.4:1 is BY DESIGN. The 10-min re-entry loop IS the edge.
+    # Log R:R for diagnostics only.
     _rr_ratio = tp_pct_raw / sl_pct_raw if sl_pct_raw > 0 else 0
-    _MIN_RR_RATIO = 0.50
-    if _rr_ratio < _MIN_RR_RATIO:
-        _reason = f"R:R {_rr_ratio:.2f}:1 below minimum {_MIN_RR_RATIO}:1 (TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}%) — need {sl_pct_raw * _MIN_RR_RATIO:.2f}%+ TP"
-        print(f"  [R:R GUARD] {_reason}")
-        return {"executed": False, "reason": _reason}
     print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | R:R {_rr_ratio:.1f}:1 | Method: {chart_sr['method']}")
 
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
