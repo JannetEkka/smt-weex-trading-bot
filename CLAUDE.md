@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.58** — all production code is in `v3/`.
+**Current version: V3.2.64** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -119,17 +119,18 @@ MIN_CONFIDENCE_TO_TRADE = 0.85      # V3.2.57: 85% floor (was 80%). 1-slot mode:
 GLOBAL_TRADE_COOLDOWN = 600          # V3.2.57: 10min between trades (was 900/15min)
 SIGNAL_CHECK_INTERVAL = 600          # 10min
 POSITION_MONITOR_INTERVAL = 120      # 2min
-MAX_TOTAL_POSITIONS = 1              # V3.2.46: 1-slot cross-margin defense — full account as buffer
-# CONFIDENCE_EXTRA_SLOT = 0.90      # V3.2.46: DISABLED — was V3.2.39 90%+ extra slot; now 1-slot hard cap
+MAX_TOTAL_POSITIONS = 2              # V3.2.59: 2-slot cross-margin — diversification without cascading risk
+# CONFIDENCE_EXTRA_SLOT = 0.90      # V3.2.46: DISABLED — extra slot bypass removed
 TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected from 0.0006); 3.2% margin round-trip at 20x
 
-# Slot system (V3.2.46: 1-slot cross-margin strategy)
+# Slot system (V3.2.59: 2-slot cross-margin strategy)
 # Pairs: BTC, ETH, BNB, LTC, XRP, SOL, ADA (7 pairs, BTC/ETH/BNB re-added V3.2.16)
 # Shorts: ALL pairs as of V3.2.18 (was LTC-only)
-# If no signals reach 80%, ALL pairs show WAIT — this is expected, not a bug.
+# If no signals reach 85%, ALL pairs show WAIT — this is expected, not a bug.
 # Existing position + same direction signal = WAIT (already have that side).
-# V3.2.46: Cross margin = shared collateral. One 20x trade at a time.
-#   Full account acts as buffer — no concurrent positions to cascade liquidations.
+# V3.2.59: Cross margin = shared collateral. Two 20x trades max.
+#   Diversification benefit without excessive cascading risk.
+#   Low equity (<$1500) falls back to 1 slot.
 #   can_open_new = not low_equity_mode AND available_slots > 0
 
 # Regime exit thresholds (V3.2.17: get_market_regime_for_exit() DISABLED)
@@ -245,7 +246,7 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 
 ## Trading Pairs & Tiers
 
-**Active pairs (V3.2.16+): BTC, ETH, BNB, LTC, XRP, SOL, ADA — 1 slot (V3.2.46 cross-margin)**
+**Active pairs (V3.2.16+): BTC, ETH, BNB, LTC, XRP, SOL, ADA — 2 slots (V3.2.59 cross-margin)**
 
 | Pair | Symbol | Tier | TP (fallback) | SL (fallback) | Max Hold | Early Exit | Shorts? |
 |------|--------|------|---------------|---------------|----------|------------|---------|
@@ -274,7 +275,7 @@ Key endpoints:
 - `GET /capi/v2/account/allPosition` — open positions
 - `POST /capi/v2/order/placeOrder` — place order (type: 1=open long, 2=open short, 3=close long, 4=close short)
 - `POST /capi/v2/order/cancel` — cancel regular order
-- `GET /capi/v2/order/plan_orders` — list trigger orders (TP/SL); used by `_fetch_plan_order_ids()`
+- `GET /capi/v2/order/currentPlan` — list trigger orders (TP/SL); used by `_fetch_plan_order_ids()` (V3.2.62 fix: was `/plan_orders` which returned 404)
 - `POST /capi/v2/order/cancel_plan` — cancel trigger order
 - `POST /capi/v2/order/uploadAiLog` — upload AI decision log
 - `GET /capi/v2/order/history` — filled order history; used by `get_recent_close_order_id()`
@@ -371,7 +372,7 @@ python3 v3/cryptoracle_client.py
 11. **Watchdog hang detection** — If daemon logs go stale for 15min, watchdog force-kills and restarts. This is intentional; don't disable it.
 12. **Gemini portfolio review disabled** — `gemini_portfolio_review()` is disabled in V3.2.17. Do not re-enable without testing.
 13. **ANTI-WAIT removed (V3.2.37)** — Do NOT re-add post-Judge direction overrides. Gemini's WAIT reasoning text often contains direction keywords (e.g. "WHALE (LONG 63%)" explaining why it's waiting), which caused the keyword-scanning fallback to flip WAIT→LONG on genuinely mixed signals. Trust the Judge.
-14. **1-slot cross-margin (V3.2.46)** — MAX_TOTAL_POSITIONS = 1. Full account is buffer for one 20x trade. Do NOT re-add multi-slot behavior — concurrent positions create cascading liquidation risk under cross margin. Circuit breaker enforces 60min+ cooldown after losses.
+14. **2-slot cross-margin (V3.2.59)** — MAX_TOTAL_POSITIONS = 2 (was 1 in V3.2.46). Two concurrent 20x trades max. Low equity (<$1500) falls back to 1 slot. Circuit breaker enforces 60min+ cooldown after losses.
 15. **Gemini citation injection (V3.2.45)** — Gemini Search Grounding can inject `[1][2]` citation markers into JSON responses, breaking `json.loads()`. The regex JSON parser (`re.search(r'\{.*\}', re.DOTALL)`) handles this. Do not revert to naive JSON parsing.
 16. **Macro blackout bypass (V3.2.48)** — `_is_macro_blackout()` skips the entire signal cycle during high-impact data releases. Do not add "check anyway" logic — macro volatility can spike 1-3% in seconds, invalidating any signal computed pre-release.
 17. **Weekend thin liquidity (V3.2.48)** — Altcoins (BNB, LTC, XRP, ADA) restricted during Sat/Sun + bank holidays. Do not override — 20-25% lower volume means wider spreads and fakeout wicks.
@@ -382,16 +383,24 @@ python3 v3/cryptoracle_client.py
 22. **Funding rate direction (V3.2.56)** — Judge prompt now specifies whether the bot is "paying" or "receiving" funding for each position. Negative funding + LONG = bot receives funding (a bonus, not a drag). Positive funding + LONG = bot pays. Was previously always labeled as "drag" regardless of direction, causing incorrect Judge reasoning on favorable funding positions.
 23. **Velocity exit vs peak-fade vs early exit (V3.2.57)** — Three distinct exit mechanisms: (1) early_exit = trade open > X min AND losing > -1%; (2) peak_fade = trade peaked then reversed (peak > threshold, current < peak - trigger); (3) velocity_exit = trade never moved at all (peak < 0.15% after 40 min). Velocity exit gate: `peak_pnl_pct < VELOCITY_MIN_PEAK_PCT` — fires ONLY when breakeven SL NOT placed (peak too low to trigger BE-SL). All three are distinct conditions; do not merge or confuse them.
 24. **Judge hold-time mismatch (V3.2.57 FIX)** — Prior versions told Judge "4-5H planning horizon" but TIER_CONFIG kills at 1.5-3H. Judge was picking unreachable TP targets. V3.2.57 adds explicit HOLD TIME LIMITS section to Judge prompt with actual per-tier limits. Do not re-add "4-5H" references.
+25. **Plan orders endpoint 404 (V3.2.64 FIX)** — `_fetch_plan_order_ids()` and `cancel_all_orders_for_symbol()` were using `/capi/v2/order/plan_orders` which returns HTTP 404. Correct endpoint is `/capi/v2/order/currentPlan`. This was causing: (1) plan order IDs stored as None at trade open, (2) orphan TP/SL triggers not being cleaned up on manual close, (3) mismatch detection disabled. The runner code (line 5504) was already using the correct endpoint.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.57. Next change should be V3.2.58.
+Current: V3.2.64. Next change should be V3.2.65.
 
 **Recent version history:**
-- V3.2.58: (**CURRENT**) Altcoin execution priority — sort key changed to `(confidence desc, tier desc)` so T3 > T2 > T1 at equal confidence.
+- V3.2.64: (**CURRENT**) Shorts re-enabled + bidirectional Judge + plan_orders endpoint fix.
+  Judge prompt rewritten: removed LONG-only bias language, added CONTINUATION SHORT strategy for extreme fear.
+  Shorts now evaluated equally with LONGs based on FLOW/SENTIMENT/WHALE confluence.
+  `_fetch_plan_order_ids()` + `cancel_all_orders_for_symbol()`: endpoint fixed `/plan_orders` → `/currentPlan` (was returning HTTP 404).
+  Orphan cleanup now works for plan/trigger orders (was silently failing due to wrong endpoint).
+  MAX_TOTAL_POSITIONS changed from 1 → 2 (V3.2.59): diversification without cascading risk.
+  `PIPELINE_VERSION = "SMT-v3.2.64-ShortsReEnabled-BidirectionalJudge"`.
+- V3.2.58: Altcoin execution priority — sort key changed to `(confidence desc, tier desc)` so T3 > T2 > T1 at equal confidence.
   Fixes: BTC/ETH crowding out altcoins at same 85% threshold. When multiple pairs hit the same confidence, altcoins now execute first.
   Example: BTC SHORT 85% + XRP LONG 85% in same cycle → XRP wins the slot (T2 > T1). Higher confidence always wins regardless of tier.
   `PIPELINE_VERSION = "SMT-v3.2.58-AltcoinPriority-TierTiebreak"`.
