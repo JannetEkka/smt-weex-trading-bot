@@ -1104,14 +1104,11 @@ def check_trading_signals():
                                 explanation=f"AI decided to maintain SHORT position. Existing SHORT confidence ({existing_conf:.0%}) > new LONG signal ({confidence:.0%}). No directional change warranted."
                             )
                     else:
-                        if can_open_new:
+                        # V3.2.59: Always collect 85%+ signals — slot check deferred to execution
+                        # time where positions are re-queried (catches TP/SL during analysis window).
+                        if can_open_new or confidence >= MIN_CONFIDENCE_TO_TRADE:
                             can_trade_this = True
                             trade_type = "new"
-                        elif confidence >= CONFIDENCE_EXTRA_SLOT and not low_equity_mode:
-                            # V3.2.59: 90%+ confidence opens 2nd slot
-                            can_trade_this = True
-                            trade_type = "new"
-                            logger.info(f"    -> 90%+ EXTRA SLOT: {confidence:.0%} >= {CONFIDENCE_EXTRA_SLOT:.0%}, bypassing slot cap")
 
                 elif signal == "SHORT":
                     # V3.2.18: Shorts allowed for ALL pairs (was LTC only since V3.2.13)
@@ -1149,14 +1146,10 @@ def check_trading_signals():
                                 explanation=f"AI decided to maintain LONG position. Existing LONG confidence ({existing_conf:.0%}) > new SHORT signal ({confidence:.0%}). No directional change warranted."
                             )
                     else:
-                        if can_open_new:
+                        # V3.2.59: Always collect 85%+ signals — slot check deferred to execution
+                        if can_open_new or confidence >= MIN_CONFIDENCE_TO_TRADE:
                             can_trade_this = True
                             trade_type = "new"
-                        elif confidence >= CONFIDENCE_EXTRA_SLOT and not low_equity_mode:
-                            # V3.2.59: 90%+ confidence opens 2nd slot
-                            can_trade_this = True
-                            trade_type = "new"
-                            logger.info(f"    -> 90%+ EXTRA SLOT: {confidence:.0%} >= {CONFIDENCE_EXTRA_SLOT:.0%}, bypassing slot cap")
 
                 # V3.1.93: Track best non-executed signal for PM context
                 if signal in ("LONG", "SHORT") and confidence >= 0.85 and not can_trade_this:
@@ -1295,15 +1288,34 @@ def check_trading_signals():
             # V3.2.58: Sort by confidence desc, then tier desc (altcoin tiebreak — T3 > T2 > T1 at equal confidence)
             trade_opportunities.sort(key=lambda x: (x["decision"]["confidence"], x["pair_info"].get("tier", 1)), reverse=True)
 
-            current_positions = len(open_positions)
-            # V3.2.25: No cascade truncation — all 80%+ qualified signals execute
-            logger.info(f"  Executing {len(trade_opportunities)} opportunit{'y' if len(trade_opportunities)==1 else 'ies'} ({current_positions} positions currently open)")
+            # V3.2.59: Re-query positions BEFORE execution — catches TP/SL that fired during
+            # the ~7 min analysis window. Without this, slots show as occupied when positions
+            # already closed on WEEX, blocking new trades (ADA 85% blocked by closed SOL/XRP bug).
+            _fresh_positions = get_open_positions()
+            _fresh_count = len(_fresh_positions)
+            if _fresh_count != len(open_positions):
+                logger.info(f"  [SLOT REFRESH] Positions changed during analysis: {len(open_positions)} → {_fresh_count}")
+                open_positions = _fresh_positions
+                weex_position_count = _fresh_count
+                available_slots = effective_max_positions - weex_position_count
+                can_open_new = not low_equity_mode and available_slots > 0
+                # Rebuild position_map for execution
+                position_map = {}
+                for pos in open_positions:
+                    _sym = pos.get("symbol")
+                    _side = pos.get("side", "").upper()
+                    if _sym not in position_map:
+                        position_map[_sym] = {}
+                    position_map[_sym][_side] = pos
+
+            current_positions = _fresh_count
+            logger.info(f"  Executing {len(trade_opportunities)} opportunit{'y' if len(trade_opportunities)==1 else 'ies'} ({current_positions} positions currently open, {available_slots} slots free)")
 
             trades_executed_count_ref = 0  # kept for slot_swap compat below
-            
+
             # V3.1.41: Count directional exposure BEFORE executing
-            long_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "LONG")
-            short_count = sum(1 for p in get_open_positions() if p.get("side","").upper() == "SHORT")
+            long_count = sum(1 for p in _fresh_positions if p.get("side","").upper() == "LONG")
+            short_count = sum(1 for p in _fresh_positions if p.get("side","").upper() == "SHORT")
             MAX_SAME_DIRECTION = 5  # V3.1.55: was 99, caused all-LONG pileup  # V3.1.42: Recovery - match Gemini Judge rule 9
             # V3.1.43: Allow 7 LONGs during Capitulation (F&G < 15)
             if trade_opportunities:
@@ -1458,7 +1470,17 @@ def check_trading_signals():
                 pair = opportunity["pair"]
                 signal = opportunity["decision"]["decision"]
                 confidence = opportunity["decision"]["confidence"]
-                
+
+                # V3.2.59: Execution-time slot check for new trades.
+                # Signals are collected during analysis regardless of can_open_new,
+                # but slot availability is enforced HERE with fresh position data.
+                if trade_type == "new" and available_slots <= 0:
+                    if confidence >= CONFIDENCE_EXTRA_SLOT and not low_equity_mode:
+                        logger.info(f"  90%+ EXTRA SLOT: {pair} {signal} {confidence:.0%} — bypassing slot cap")
+                    else:
+                        logger.info(f"  SLOT BLOCKED: {pair} {signal} {confidence:.0%} — {available_slots} slots, need 90%+ for extra")
+                        continue
+
                 logger.info(f"")
                 type_label = "[FLIP] " if trade_type == "flip" else ""
                 logger.info(f"EXECUTING {type_label}{pair} {signal} (T{tier}) - {confidence:.0%}")

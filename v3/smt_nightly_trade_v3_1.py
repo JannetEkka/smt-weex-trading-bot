@@ -1809,7 +1809,7 @@ def get_max_positions_for_equity(equity: float) -> int:
 MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
 MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.2.57: 85% floor (was 80%). In 1-slot mode, 80-84% trades at 20% sizing block the slot from better signals. 85%+ = all trades at 35-50% sizing minimum.
-CHOP_FALLBACK_CONFIDENCE = 0.80  # V3.1.85: Raised to 80%. No sub-80% trades, period.
+CHOP_FALLBACK_CONFIDENCE = 0.85  # V3.2.59: Aligned with MIN_CONFIDENCE_TO_TRADE (was 0.80, creating gate bypass)
 
 # V3.1.92: Equity-based sizing with liquidation safety floors
 _sizing_equity_cache = {"sizing_base": 0, "equity": 0, "available": 0, "ts": 0}
@@ -2690,7 +2690,7 @@ Respond with JSON ONLY (no markdown). Do not include any inline citation markers
         try:
             fallback_prompt = f"""You are a crypto trading analyst. Based on your knowledge of {pair} cryptocurrency:
 
-Analyze the LIKELY current short-term (1-4 hour) price action for {pair}.
+Analyze the LIKELY current short-term (1-3 hour) price action for {pair}.
 Consider: recent trend direction, typical volatility, market cycle position.
 
 Respond with JSON only:
@@ -3822,7 +3822,7 @@ TRADE HISTORY CONTEXT:
 
 IMPORTANT: Count ALL 4 personas. If 3+ agree on direction, TRADE. WAIT only when signals genuinely conflict (no majority).
 <72 hours left in competition — BLITZ MODE. Every cycle without a trade is wasted capital rotation. If the setup is there, TAKE IT.
-SHORT ASYMMETRY: In EXTREME FEAR (F&G < 15), require 3+ personas confirming SHORT (bounce risk is real). For LONG, 2 personas + extreme fear bias is enough — this IS the dip strategy.
+SHORT ASYMMETRY: In EXTREME FEAR (F&G < 15), require 3+ personas confirming SHORT with high confidence (bounce risk is real). For LONG, 2 strong personas (65%+ each) + extreme fear bias can justify 85%+ confidence — this IS the dip strategy. IMPORTANT: Your confidence output MUST be >= 0.85 to trade. Below 85% = WAIT regardless of direction or F&G.
 
 Respond with JSON ONLY (no markdown, no backticks):
 {{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences: state how many personas agree, which epoch strategy fits, and what target you see within the hold window (T1=3H, T2=2H, T3=1.5H)", "tp_price": null or a number (structural level reachable within hold window — NOT defaulting to 0.5%)}}"""
