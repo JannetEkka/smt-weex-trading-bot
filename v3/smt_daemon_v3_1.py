@@ -1790,23 +1790,42 @@ def monitor_positions():
                         except Exception as e:
                             logger.debug(f"RL outcome log error: {e}")
                     
+                    # V3.2.60: Detect breakeven SL — if SL was moved to entry and gross PnL < round-trip fees,
+                    # this was breakeven SL close, not a real TP. Fees ate the profit → net loss.
+                    _is_breakeven_sl = False
+                    if trade.get("sl_moved_to_breakeven", False) and actual_pnl > 0 and position_usdt > 0:
+                        _notional = position_usdt * 20
+                        _rt_fees = _notional * TAKER_FEE_RATE * 2
+                        if actual_pnl < _rt_fees:
+                            _is_breakeven_sl = True
+                            logger.info(f"  [BREAKEVEN_SL] Gross ${actual_pnl:.2f} < fees ${_rt_fees:.2f} — classifying as BREAKEVEN_SL (not TP)")
+
+                    _close_reason = "breakeven_sl" if _is_breakeven_sl else "tp_sl_hit"
                     tracker.close_trade(symbol, {
-                        "reason": "tp_sl_hit",
+                        "reason": _close_reason,
                         "cleanup": cleanup,
                         "symbol": symbol,
                         "pnl": actual_pnl,
                         "final_pnl_pct": pnl_pct,  # V3.1.82 FIX: was "pnl_pct" but close_trade reads "final_pnl_pct"
                     })
                     state.trades_closed += 1
-                    
+
                     # V3.1.59: Clean PnL history for closed position
                     if symbol in _pnl_history:
                         del _pnl_history[symbol]
-                    
+
                     # V3.1.36: AI log for TP/SL closes
                     symbol_clean = symbol.replace("cmt_", "").upper()
-                    hit_tp = actual_pnl > 0
-                    exit_type = "TAKE_PROFIT" if hit_tp else "STOP_LOSS"
+                    # V3.2.60: Breakeven SL is not a real TP — classify correctly
+                    if _is_breakeven_sl:
+                        hit_tp = False
+                        exit_type = "BREAKEVEN_SL"
+                    elif actual_pnl > 0:
+                        hit_tp = True
+                        exit_type = "TAKE_PROFIT"
+                    else:
+                        hit_tp = False
+                        exit_type = "STOP_LOSS"
                     try:
                         hours_open = 0
                         if trade.get("opened_at"):
@@ -2959,9 +2978,20 @@ def quick_cleanup_check():
                         hit_tp = pnl_usd > 0
                     except:
                         pass
-                
+
+                # V3.2.60: Detect breakeven SL (same logic as monitor_positions)
+                _is_breakeven_sl = False
+                if trade.get("sl_moved_to_breakeven", False) and pnl_usd > 0 and position_usdt > 0:
+                    _notional = position_usdt * 20
+                    _rt_fees = _notional * TAKER_FEE_RATE * 2
+                    if pnl_usd < _rt_fees:
+                        _is_breakeven_sl = True
+                        hit_tp = False
+                        logger.info(f"  [BREAKEVEN_SL] {symbol}: Gross ${pnl_usd:.2f} < fees ${_rt_fees:.2f} — BREAKEVEN_SL")
+
+                _close_reason = "breakeven_sl" if _is_breakeven_sl else "tp_sl_hit"
                 tracker.close_trade(symbol, {
-                    "reason": "tp_sl_hit",
+                    "reason": _close_reason,
                     "cleanup": cleanup,
                     "symbol": symbol,
                     "pnl": round(pnl_usd, 2),
@@ -2970,10 +3000,16 @@ def quick_cleanup_check():
                 })
                 state.trades_closed += 1
                 position_closed = True
-                
+
                 # V3.1.36: AI log for quick cleanup closes
                 symbol_clean = symbol.replace("cmt_", "").upper()
-                exit_type = "TAKE_PROFIT" if hit_tp else "STOP_LOSS"
+                # V3.2.60: Breakeven SL classified correctly
+                if _is_breakeven_sl:
+                    exit_type = "BREAKEVEN_SL"
+                elif hit_tp:
+                    exit_type = "TAKE_PROFIT"
+                else:
+                    exit_type = "STOP_LOSS"
                 try:
                     hours_open = 0
                     if trade.get("opened_at"):
@@ -3639,7 +3675,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.59 - Gemini event detection + dynamic blackout. V3.2.58: altcoin tiebreak. V3.2.57: BlitzMode, velocity_exit, conf 85%%")
+    logger.info("SMT Daemon V3.2.60 - Dip-bounce TP ceilings + breakeven SL fix. V3.2.59: Gemini event detection. V3.2.58: altcoin tiebreak")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3659,7 +3695,7 @@ def run_daemon():
     logger.info("TP/SL (V3.2.41 LARGER GAINS):")
     logger.info("  MIN_VIABLE_TP_PCT: 0.40%% (was 0.20%% — filters micro-moves, pushes to 4H/48H structure)")
     logger.info("  MAX_SL_PCT: 1.50%% ceiling (was no ceiling — 4H anchors can be wide at 20x)")
-    logger.info("  PAIR_TP_CEILING: BTC/ETH=1.5%%, SOL=2.0%%, XRP/BNB/LTC/ADA=1.0%% (was 0.5%% flat)")
+    logger.info("  PAIR_TP_CEILING: BTC/ETH=0.70%%, SOL=0.80%%, BNB/LTC/XRP/ADA=0.60%% (V3.2.60: dip-bounce realistic)")
     logger.info("  TP anchor: 4H high/low tried first, then 48H walk (was 2H anchor → 48H walk)")
     logger.info("  SOL sizing: 30%% of sizing_base max (was 50%% — high beta risk control)")
     logger.info("  TP priority: Gemini tp_price (4H structure) > 4H anchor > 48H SR walk")
@@ -3716,6 +3752,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.60: Dip-bounce TP ceilings — PAIR_TP_CEILING lowered to 0.60-0.80%% (was 1.0-2.0%%). Old ceilings unreachable in hold windows, causing BE-SL → fee bleed. Breakeven SL fix: exit classified as BREAKEVEN_SL (not TAKE_PROFIT) when gross PnL < fees. Cooldown 0.5x applied (was 0x as tp_hit).")
     logger.info("  V3.2.59: Gemini event detection — detect_macro_events() uses Gemini Search to scan upcoming macro/crypto events (30min cache). Dynamic blackout for HIGH-impact events within 15min. Replaces hardcoded _macro_events dict in Judge prompt. Also: ADX<20 WAIT removed, 2-slot mode, TP fee-floor guard.")
     logger.info("  V3.2.58: Altcoin execution priority — sort key now (confidence desc, tier desc) so T3>T2>T1 at equal confidence. Prevents T1 BTC/ETH crowding out altcoins when same 85%% threshold hit in same cycle.")
     logger.info("  V3.2.57: BlitzMode final 72h — MIN_CONFIDENCE 80%%→85%%; velocity_exit (40min/0.15%% peak, zero cooldown); GLOBAL_TRADE_COOLDOWN 900→600s; sizing floor $1000→$500; Judge BLITZ MODE prompt")

@@ -1485,18 +1485,18 @@ COMPETITION_FALLBACK_SL = {
     3: 1.5,   # Tier 3: 1.8% → 1.5%
 }
 
-# V3.2.41: Per-pair TP ceiling — replaces flat 0.5% COMPETITION_FALLBACK_TP.
-# Based on tier hold-window volatility profile per pair. Ceiling-only: if chart SR < ceiling, use chart SR.
-# These unlock the 48H resistance walk which has genuine 1-2% SR levels.
-# V3.2.57: Hold windows — T1=3H, T2=2H, T3=1.5H (velocity exit at 40M if no movement)
+# V3.2.60: Per-pair TP ceiling — dip-bounce realistic. Old 1.0-2.0% ceilings were unreachable
+# in hold windows (T1=3H, T2=2H, T3=1.5H), causing breakeven SL to fire → fees eat the trade.
+# ~0.5% TP philosophy: bank the dip-bounce fast, re-enter next 10-min cycle if trend continues.
+# Ceiling-only: if chart SR < ceiling, use chart SR. Never raises a low TP.
 PAIR_TP_CEILING = {
-    "BTC": 1.5,   # Tier 1. 3H hold window. VWAP mean-reversion. 1-1.5%.
-    "ETH": 1.5,   # Tier 1. 3H hold window. Support sweep entries. 1-1.5%.
-    "BNB": 1.0,   # Tier 2. 2H hold window. Low beta, catalyst-driven.
-    "LTC": 1.0,   # Tier 2. 2H hold window. Conservative 1H S/R channel. 0.8-1%.
-    "XRP": 1.0,   # Tier 2. 2H hold window. Range-bound. 1.0% avoids missing fill at range top.
-    "SOL": 2.0,   # Tier 3. 1.5H hold window. High beta. MACD momentum. 1.5-2%.
-    "ADA": 1.0,   # Tier 3. 1.5H hold window. BTC-correlated laggard. 0.8-1%.
+    "BTC": 0.70,   # Tier 1. 3H hold. Majors move 0.3-0.8% in 1-2h.
+    "ETH": 0.70,   # Tier 1. 3H hold. Similar to BTC.
+    "BNB": 0.60,   # Tier 2. 2H hold. Lower beta.
+    "LTC": 0.60,   # Tier 2. 2H hold. Conservative.
+    "XRP": 0.60,   # Tier 2. 2H hold. Range-bound.
+    "SOL": 0.80,   # Tier 3. High beta, can move 0.5-1% quickly.
+    "ADA": 0.60,   # Tier 3. BTC-correlated laggard.
 }
 
 # V3.2.41: Per-pair max position size. Default: MAX_SINGLE_POSITION_PCT = 0.50.
@@ -1924,7 +1924,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.59-GeminiEventDetection-DynamicBlackout"
+PIPELINE_VERSION = "SMT-v3.2.60-DipBounceTPs-BreakevenSLFix"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4764,6 +4764,7 @@ COOLDOWN_MULTIPLIERS = {
     "sl_hit": 1.0,      # V3.2.46: was 0.0 — 60min+ after SL hit
     "force_stop": 1.0,  # V3.2.46: was 0.0 — 60min+ after force stop
     "early_exit": 0.5,  # V3.2.46: was 0.0 — 30-60min after early exit (mild)
+    "breakeven_sl": 0.5, # V3.2.60: BE-SL fired, gross+ but net- (fees ate profit). Mild cooldown.
     "max_hold": 0.0,
     "profit_lock": 0.0,  # kept for TradeTracker compatibility
     "peak_fade": 0.0,
@@ -4889,6 +4890,9 @@ class TradeTracker:
             elif "regime_exit" in reason:
                 cd_mult = COOLDOWN_MULTIPLIERS["regime_exit"]
                 cd_type = "REGIME"
+            elif "breakeven_sl" in reason:
+                cd_mult = COOLDOWN_MULTIPLIERS["breakeven_sl"]
+                cd_type = "BREAKEVEN_SL"
             elif pnl_pct > 0:
                 cd_mult = COOLDOWN_MULTIPLIERS["tp_hit"]
                 cd_type = "WIN"
