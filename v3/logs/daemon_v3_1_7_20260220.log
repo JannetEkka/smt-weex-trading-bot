@@ -2352,3 +2352,429 @@ FINAL for BTC: WAIT (0%)
 2026-02-20 07:23:45 | INFO     |   [MONITOR] cmt_btcusdt T1: -0.12% (peak: 0.13%) conf=85%
 2026-02-20 07:23:46 | INFO     | HEALTH | Up: 0:06:38 | Signals: 1 | Trades: 0/0 | Active: 2
 2026-02-20 07:24:48 | INFO     | HEALTH | Up: 0:07:40 | Signals: 1 | Trades: 0/0 | Active: 2
+2026-02-20 07:25:49 | INFO     |   [MONITOR] cmt_adausdt T3: -0.04% (peak: 0.18%) conf=85%
+2026-02-20 07:25:50 | INFO     |   [MONITOR] cmt_btcusdt T1: -0.16% (peak: 0.13%) conf=85%
+2026-02-20 07:25:51 | INFO     | HEALTH | Up: 0:08:43 | Signals: 1 | Trades: 0/0 | Active: 2
+2026-02-20 07:26:53 | INFO     | HEALTH | Up: 0:09:45 | Signals: 1 | Trades: 0/0 | Active: 2
+2026-02-20 07:35:09 | INFO     | Trade module imports OK
+2026-02-20 07:35:09 | INFO     | ============================================================
+2026-02-20 07:35:09 | INFO     | SMT Daemon V3.2.46 - Cross Margin Defense: 1-Slot, Breakeven SL, Circuit Breaker
+2026-02-20 07:35:09 | INFO     | ============================================================
+2026-02-20 07:35:09 | INFO     | PAIRS & SLOTS:
+2026-02-20 07:35:09 | INFO     |   Pairs: BTC, ETH, BNB, LTC, XRP, SOL, ADA (7)
+2026-02-20 07:35:09 | INFO     |   Max slots: 1 (cross-margin defense — full account as buffer) | Leverage: 20x flat | Shorts: ALL pairs
+2026-02-20 07:35:09 | INFO     |   Sizing: 80-84%%=20%%, 85-89%%=35%%, 90%%+=50%% of sizing_base (SOL capped 30%%)
+2026-02-20 07:35:09 | INFO     |   Circuit breaker: 60min+ cooldown after SL/force stop | Breakeven SL at +0.4%%
+2026-02-20 07:35:09 | INFO     | ENTRY FILTERS:
+2026-02-20 07:35:09 | INFO     |   MIN_CONFIDENCE: 80%% HARD FLOOR — no exceptions, no discounts, no overrides
+2026-02-20 07:35:09 | INFO     |   Chop filter: logging only (no penalties since V3.2.18)
+2026-02-20 07:35:09 | INFO     |   Consecutive loss block: 2 losses same direction in 24h = block re-entry
+2026-02-20 07:35:09 | INFO     |   Freshness filter: block entering after move already happened
+2026-02-20 07:35:09 | INFO     |   Regime veto: post-judge filter (not disabled, separate from regime exits)
+2026-02-20 07:35:09 | INFO     |   Margin guard: skip trade if available margin < $1000
+2026-02-20 07:35:09 | INFO     | TP/SL (V3.2.41 LARGER GAINS):
+2026-02-20 07:35:09 | INFO     |   MIN_VIABLE_TP_PCT: 0.40%% (was 0.20%% — filters micro-moves, pushes to 4H/48H structure)
+2026-02-20 07:35:09 | INFO     |   MAX_SL_PCT: 1.50%% ceiling (was no ceiling — 4H anchors can be wide at 20x)
+2026-02-20 07:35:09 | INFO     |   PAIR_TP_CEILING: BTC/ETH=1.5%%, SOL=2.0%%, XRP/BNB/LTC/ADA=1.0%% (was 0.5%% flat)
+2026-02-20 07:35:09 | INFO     |   TP anchor: 4H high/low tried first, then 48H walk (was 2H anchor → 48H walk)
+2026-02-20 07:35:09 | INFO     |   SOL sizing: 30%% of sizing_base max (was 50%% — high beta risk control)
+2026-02-20 07:35:09 | INFO     |   TP priority: Gemini tp_price (4H structure) > 4H anchor > 48H SR walk
+2026-02-20 07:35:09 | INFO     |   TP floor: 0.3%% (MIN_TP_PCT) | Fallback TP: 0.5%% all tiers (COMPETITION_FALLBACK_TP)
+2026-02-20 07:35:09 | INFO     |   Extreme fear TP cap: 0.5%% when F&G < 20 (both LONG and SHORT)
+2026-02-20 07:35:09 | INFO     |   XRP TP cap: 0.70%% (only when no Gemini structural override)
+2026-02-20 07:35:09 | INFO     |   SL method: lowest wick in 12H (1H grid) + last 3 4H candles | SL floor: 1.0%%
+2026-02-20 07:35:09 | INFO     |   TP method: max high of last 2 complete 1H candles (LONG) / min low (SHORT)
+2026-02-20 07:35:09 | INFO     |   FLOW walls in Judge prompt: ask/bid walls from 200-level order book (context, not hard override)
+2026-02-20 07:35:09 | INFO     |   Gemini Judge: sees chart structure (1D+4H) + FLOW walls + chop → returns tp_price
+2026-02-20 07:35:09 | INFO     | POSITION SIZING (V3.2.46 confidence-scaled):
+2026-02-20 07:35:09 | INFO     |   sizing_base = max(min(available, balance * 2.5), 1000)
+2026-02-20 07:35:09 | INFO     |   80-84%%: sizing_base * 0.20 | 85-89%%: sizing_base * 0.35 | 90%%+: sizing_base * 0.50
+2026-02-20 07:35:09 | INFO     |   SOL cap: 30%% of sizing_base (high beta) | Single slot = full account buffer
+2026-02-20 07:35:09 | INFO     | OPPOSITE SWAP (V3.1.100):
+2026-02-20 07:35:09 | INFO     |   Block flip if position < 20min old or >= 30%% toward TP
+2026-02-20 07:35:09 | INFO     |   Blocked signal queued → auto-executes after old position closes
+2026-02-20 07:35:09 | INFO     |   Deferred flip expires after 30min
+2026-02-20 07:35:09 | INFO     | TIMING:
+2026-02-20 07:35:09 | INFO     |   Signal check: 10min | Position monitor: 2min | Orphan sweep: 30s | Health: 60s
+2026-02-20 07:35:09 | INFO     |   Global trade cooldown: 15min between trades
+2026-02-20 07:35:09 | INFO     |   Gemini: 90s timeout + 8s rate limit between calls
+2026-02-20 07:35:09 | INFO     | PERSONA CONFIG:
+2026-02-20 07:35:09 | INFO     |   WHALE: 1.0 | Etherscan on-chain + Cryptoracle (always combined for BTC/ETH)
+2026-02-20 07:35:09 | INFO     |   SENTIMENT: 1.0 | Gemini 2.5 Flash w/ Search Grounding
+2026-02-20 07:35:09 | INFO     |   FLOW: 1.0 | Taker ratio beats depth | 180-flip = confidence halved
+2026-02-20 07:35:09 | INFO     |   TECHNICAL: 1.0 (halved to 0.4 when F&G<30) | RSI(14), SMA 20/50, 5-candle momentum
+2026-02-20 07:35:09 | INFO     |   JUDGE: Gemini aggregator | Receives chart context (1D+4H) for TP targeting
+2026-02-20 07:35:09 | INFO     | DISABLED:
+2026-02-20 07:35:09 | INFO     |   Gemini portfolio review (V3.2.17) | Stale auto-close (V3.2.17)
+2026-02-20 07:35:09 | INFO     |   Regime-based auto-exits (V3.2.17) — SL handles exits
+2026-02-20 07:35:09 | INFO     |   Chop score penalties (V3.2.18) — logging only
+2026-02-20 07:35:09 | INFO     |   Fee tracking: 0.06%%/side taker, logged per trade + session cumulative in HEALTH
+2026-02-20 07:35:09 | INFO     | TIER CONFIG:
+2026-02-20 07:35:09 | INFO     |   Tier 1: BTC, ETH
+2026-02-20 07:35:09 | INFO     |     TP: 3.0%%, SL: 1.5%%, Hold: 24h | No Runner
+2026-02-20 07:35:09 | INFO     |   Tier 2: BNB, LTC, XRP
+2026-02-20 07:35:09 | INFO     |     TP: 3.5%%, SL: 1.5%%, Hold: 12h | No Runner
+2026-02-20 07:35:09 | INFO     |   Tier 3: SOL, ADA
+2026-02-20 07:35:09 | INFO     |     TP: 3.0%%, SL: 1.8%%, Hold: 8h | No Runner
+2026-02-20 07:35:09 | INFO     | CHANGELOG (recent):
+2026-02-20 07:35:09 | INFO     |   V3.2.45: Regex JSON parser for SENTIMENT+JUDGE (re.search(r'\{.*\}', re.DOTALL) — immune to grounding citation injection [1][2]); dynamic date in SENTIMENT search; no-citation prompt directive
+2026-02-20 07:35:09 | INFO     |   V3.2.44: Full Gemini response visibility — removed [:200] on SENTIMENT reasoning, [:600] on JUDGE reasoning print, [:200] on Judge prompt persona summary; market_context no longer capped
+2026-02-20 07:35:09 | INFO     |   V3.2.43: [AI-LOG] SENT verbose print on every upload (stage/expl/out/WEEX code); WAIT upload includes per-persona reasoning (SENTIMENT+JUDGE visible in log)
+2026-02-20 07:35:09 | INFO     |   V3.2.42: Judge progress prints ([JUDGE] Calling Gemini / responded in Xs); sync_tracker AI log now sends order_id via get_recent_close_order_id()
+2026-02-20 07:35:09 | INFO     |   V3.2.38: 4-slot hard cap restored (can_open_new checks available_slots > 0)
+2026-02-20 07:35:09 | INFO     |   V3.2.37: ANTI-WAIT removed — Gemini Judge WAIT = WAIT; no persona-consensus or keyword override
+2026-02-20 07:35:09 | INFO     |   V3.2.36: MIN_VIABLE_TP_PCT=0.20%% — skip SR levels < 0.20%% from entry; entry at resistance = tp_not_found = discard
+2026-02-20 07:35:09 | INFO     |   V3.2.35: Opposite signal = close existing position first, then open new side (was SL-tighten + dual-open)
+2026-02-20 07:35:09 | INFO     |   V3.2.34: Judge receives WHALE dual-source data (Etherscan+Cryptoracle) separately for BTC/ETH
+2026-02-20 07:35:09 | INFO     |   V3.2.33: SHORT TP back to min(lows_1h[1:3]) (deepest wick = real support)
+2026-02-20 07:35:09 | INFO     |   V3.2.31: 48H SR lookback (was 12H); 0.5%% TP cap universal ceiling on ALL trades
+2026-02-20 07:35:09 | INFO     |   V3.2.29: Walk SR list before discard; 0.5%% TP cap on ALL trades (not just fear); no-SR = no trade (no fallback)
+2026-02-20 07:35:09 | INFO     |   V3.2.28: Bad-TP trades discarded (entry at resistance); sizing cache reset after each trade for accurate available
+2026-02-20 07:35:09 | INFO     |   V3.2.25: No slot cap (margin guard limits); dust+orphan sweep every cycle; opp-side resolve at cycle end; sizing from available margin
+2026-02-20 07:35:09 | INFO     |   V3.2.24: MIN_TP_PCT=0.3%% floor removed — chart SR is the TP, no artificial minimum
+2026-02-20 07:35:09 | INFO     |   V3.2.18: Chop penalties removed | Shorts ALL pairs | Trust 80%% floor + 0.5%% TP
+2026-02-20 07:35:09 | INFO     | ============================================================
+2026-02-20 07:35:09 | INFO     | Syncing tracker with WEEX positions...
+2026-02-20 07:35:10 | INFO     |   Removed orphan cmt_adausdt
+2026-02-20 07:35:10 | INFO     |   Removed orphan cmt_btcusdt
+2026-02-20 07:35:10 | INFO     | Sync complete. Tracking 0 entries for 0 WEEX positions.
+2026-02-20 07:35:15 | INFO     | Competition ACTIVE - initial signal check
+2026-02-20 07:35:15 | INFO     | ============================================================
+2026-02-20 07:35:15 | INFO     | SIGNAL CHECK - 20260220_073515
+2026-02-20 07:35:15 | INFO     | ============================================================
+2026-02-20 07:35:17 | INFO     | Balance: 3436.74 USDT | Equity: 3436.74 USDT | UPnL: +0.00
+2026-02-20 07:35:17 | INFO     | Open positions: 0
+2026-02-20 07:35:17 | INFO     | Days left: 3
+2026-02-20 07:35:17 | INFO     | CAPITULATION: F&G=7 < 15, hedging DISABLED (pick a side)
+2026-02-20 07:35:17 | INFO     | F&G: 7 (EXTREME FEAR) | Positions open: 0/1 slots
+2026-02-20 07:35:26 | INFO     | AFC is enabled with max remote calls: 10.
+  [HOT-RELOAD] Enabled
+
+  === Multi-Persona Analysis: BTC (Tier 1: Blue Chip) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (68%): Whale accumulation: +1380 ETH net inflow | Binance Main: +2592 ETH; Binance 3: -1135 ETH [CR DIVERGES: community=SHORT sent=0.43] [PM: SHORT MILD (-0.205)]
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] NEUTRAL (70%): The broader crypto market is currently in a risk-off sentiment, marked by investor fear, institutional outflows from ETFs, and macroeconomic headwinds like sticky inflation and a restrictive Fed stance. Despite this, Bitcoin is demonstrating resilience, maintaining its price amidst the general market gloom. The next 4-5 hours are high-risk due to several scheduled events: the release of Advance Q4 GDP, Personal Income & Spending, and U. of Michigan Consumer Sentiment data for the US, a significant Bitcoin difficulty adjustment, and large token unlocks for LayerZero (ZRO) and Kaito (KAITO). These factors suggest potential for sudden market movements, but Bitcoin's current stability against a fearful backdrop leads to a neutral directional bias for the immediate short term.
+  [FLOW] Analyzing...
+  [REGIME] NEUTRAL (score: 0, conf: 50%)
+  [REGIME] BTC 24h: -0.8% | F&G: 7 | Funding: -0.00005
+  [REGIME] OI Signal: NEUTRAL | Volatility: NORMAL | Alts: -0.4%
+  [REGIME]   > BTC weak: -0.8%
+  [REGIME]   > EXTREME FEAR (7): mild contrarian BUY bias
+  [FLOW] Depth - Bids: 13.76, Asks: 7.63, Ratio: 1.80
+  [FLOW] Walls - Ask: $67877.8 (resistance/LONG-TP), Bid: $67877.7 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 5.6472, Sell: 10.0686, Ratio: 0.56
+  [FLOW] Funding rate: 0.000018
+  [FLOW] Taker ratio: 0.56 | Extreme sell: False | Heavy sell: False
+  [FLOW] SHORT (50%): Taker sell pressure: 0.56
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (70%): RSI overbought: 74.2
+  [JUDGE] Deciding...
+2026-02-20 07:35:55 | INFO     | Trade module imports OK
+  [CHOP-5M] BTCUSDT: OK: ADX=30, BB=1.7%, Dir=96%, disp=0.1%
+  [JUDGE] Calling Gemini (rate-limit + up to 90s)...
+2026-02-20 07:35:56 | INFO     | AFC is enabled with max remote calls: 10.
+  [JUDGE] Gemini responded in 15.7s
+  [JUDGE] Gemini: WAIT (0%)
+  [JUDGE] Reasoning: The market is in an EXTREME FEAR regime (F&G=7) with HIGH_RISK volatility due to multiple scheduled economic data releases and crypto-specific events. Primary signals are mixed: WHALE shows a blended LONG bias (68%), but FLOW is weakly SHORT (50%) and TECHNICAL indicates overbought conditions (SHORT 70%). The conflicting signals, combined with the high volatility risk requiring >=85% confidence for a trade, prevent a high-conviction directional decision.
+  [AI-LOG] SENT  stage='Gemini Judge: WAIT'
+  [AI-LOG]       expl: AI Judge decided WAIT: Gemini Judge: The market is in an EXTREME FEAR regime (F&G=7) with HIGH_RISK volatility due to mu
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "judge_version": "gemini-judge", "reason": "Gemini Judge: The market is in an EXTREME FEAR regime (F&G=7) with HIGH_RISK volatility due to multiple scheduled ec
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+  [JUDGE] Final: WAIT (0%)
+2026-02-20 07:36:12 | INFO     |   BTC (T1): WAIT (0%)
+2026-02-20 07:36:12 | INFO     |     -> reason: Gemini Judge: The market is in an EXTREME FEAR regime (F&G=7) with HIGH_RISK vol
+  [AI-LOG] SENT  stage='Analysis - BTC (Tier 1)'
+  [AI-LOG]       expl: Gemini Judge: The market is in an EXTREME FEAR regime (F&G=7) with HIGH_RISK volatility due to multiple scheduled econom
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "tp_pct": 3.0, "sl_pct": 1.5, "can_trade": false, "trade_type": "none"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+2026-02-20 07:36:17 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: ETH (Tier 1: Blue Chip) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (83%): Whale accumulation: +1380 ETH net inflow | Binance Main: +2592 ETH; Binance 3: -1135 ETH [CR confirms: sent=0.66, mom=0.94]
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (80%): The crypto market is currently experiencing a risk-off sentiment, with institutional outflows from Bitcoin and Ethereum ETFs outweighing inflows, and capital shifting defensively from altcoins to Bitcoin. Macroeconomic headwinds, including a restrictive Fed stance and sticky inflation, contribute to a shadow of uncertainty. Key volatility events in the next 4-5 hours include the US Q4 2025 GDP release and the commencement of trading for BlackRock's staked Ethereum ETF and iShares Bitcoin ETP. Additionally, significant token unlocks for LayerZero (ZRO) and Kaito (KAITO) are scheduled for today, which could introduce volatility. While the Ethereum Foundation has outlined positive long-term protocol priorities for 2026, the immediate outlook for ETH is neutral to bearish, despite some institutional accumulation and deleveraging in derivatives markets.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 157.50, Asks: 182.81, Ratio: 0.86
+  [FLOW] Walls - Ask: $1962.71 (resistance/LONG-TP), Bid: $1962.7 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 28.4930, Sell: 12.1380, Ratio: 2.35
+  [FLOW] Funding rate: -0.000026
+  [FLOW] Taker ratio: 2.35 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (70%): Heavy taker buying: 2.35
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -2.6%
+  [JUDGE] Deciding...
+  [CHOP-5M] ETHUSDT: OK: ADX=25, BB=1.9%, Dir=100%, disp=0.2%
+  [JUDGE] Calling Gemini (rate-limit + up to 90s)...
+2026-02-20 07:36:42 | INFO     | AFC is enabled with max remote calls: 10.
+  [JUDGE] Gemini responded in 17.5s
+  [JUDGE] Gemini tp_price: $2000.0000 (structural target from chart)
+  [JUDGE] Gemini: LONG (90%)
+  [JUDGE] Reasoning: CATALYST_DRIVE strategy. WHALE and FLOW strongly support a LONG, indicating significant accumulation and heavy taker buying. Despite a general risk-off macro and high volatility, the launch of BlackRock's staked Ethereum ETF acts as a strong positive catalyst for ETH, likely driving price towards the psychological $2000 resistance in the next 4-5 hours.
+  [SIZING] Equity: $3437 | Available: $3437 | Balance: $3437 | Sizing base: $3437
+  [SIZING] MAX (90%+): 90% -> 50% of sizing_base ($1718)
+  [AI-LOG] SENT  stage='Gemini Judge Decision: ETH (Tier 1)'
+  [AI-LOG]       expl: Gemini AI Judge Decision for ETH: LONG at 90% confidence. CATALYST_DRIVE strategy. WHALE and FLOW strongly support a LON
+  [AI-LOG]       out:  {"decision": "LONG", "confidence": 0.9, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 24, "position_usdt": 1718.37, "ai_model": "gemini-2.5-flash", "judge_version": "gemini-judge"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+  [JUDGE] Final: LONG (90%)
+2026-02-20 07:37:00 | INFO     |   ETH (T1): LONG (90%)
+  [JUDGE] TP: 3.0%, SL: 1.5%, Max Hold: 24h
+  [AI-LOG] SENT  stage='Analysis - ETH (Tier 1)'
+  [AI-LOG]       expl: Gemini Judge: CATALYST_DRIVE strategy. WHALE and FLOW strongly support a LONG, indicating significant accumulation and h
+  [AI-LOG]       out:  {"decision": "LONG", "confidence": 0.9, "tp_pct": 3.0, "sl_pct": 1.5, "can_trade": true, "trade_type": "new"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+2026-02-20 07:37:03 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: BNB (Tier 2: Mid Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (72%): Strong bullish community sentiment (0.83); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] LONG (65%): The crypto market faces significant macro events today with the release of US Q4 2025 GDP and Core PCE Price Index, which could influence interest rate expectations. A positive regulatory development from the SEC regarding stablecoin liquidity for broker-dealers is supportive. Binance's substantial stablecoin reserves and the ongoing WLFI airdrop campaign are positive for the BNB ecosystem. While overall market sentiment is cautious with recent ETF outflows, potential positive surprises from economic data and BNB-specific developments could lead to a bullish directional bias, albeit with high volatility risk due to the scheduled data releases.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 985.00, Asks: 276.60, Ratio: 3.56
+  [FLOW] Walls - Ask: $611.92 (resistance/LONG-TP), Bid: $611.91 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 56.8000, Sell: 36.1000, Ratio: 1.57
+  [FLOW] Funding rate: 0.000052
+  [FLOW] Taker ratio: 1.57 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (85%): Taker buy pressure: 1.57; EXTREME bid depth: 3.56x
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] NEUTRAL (40%): No clear technical signal. RSI: 59.0
+  [JUDGE] Deciding...
+  [CHOP-5M] BNBUSDT: MEDIUM CHOP: ADX=20 (weak trend); BB=1.3% (very tight, T2 thresh=2.0), disp=0.1%
+  [JUDGE] Calling Gemini (rate-limit + up to 90s)...
+2026-02-20 07:37:28 | INFO     | AFC is enabled with max remote calls: 10.
+  [JUDGE] Gemini responded in 13.5s
+  [JUDGE] Gemini tp_price: $618.0300 (structural target from chart)
+  [JUDGE] Gemini: LONG (85%)
+  [JUDGE] Reasoning: The CATALYST_DRIVE strategy is selected due to positive BNB-specific news, including SEC stablecoin regulation adjustments and the WLFI airdrop campaign, which are supported by very strong buying pressure from FLOW (85% taker buy, extreme bid depth). WHALE also shows strong bullish sentiment at 72%. These factors, despite high macro volatility, suggest a potential upward move for BNB in the next 4-5 hours.
+  [SIZING] HIGH (85-89%): 85% -> 35% of sizing_base ($1203)
+  [AI-LOG] SENT  stage='Gemini Judge Decision: BNB (Tier 2)'
+  [AI-LOG]       expl: Gemini AI Judge Decision for BNB: LONG at 85% confidence. The CATALYST_DRIVE strategy is selected due to positive BNB-sp
+  [AI-LOG]       out:  {"decision": "LONG", "confidence": 0.85, "tp_pct": 3.5, "sl_pct": 1.5, "max_hold_hours": 12, "position_usdt": 1202.86, "ai_model": "gemini-2.5-flash", "judge_version": "gemini-judge"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+  [JUDGE] Final: LONG (85%)
+2026-02-20 07:37:42 | INFO     |   BNB (T2): LONG (85%)
+  [JUDGE] TP: 3.5%, SL: 1.5%, Max Hold: 12h
+  [CHOP_FILTER] DETECTED MEDIUM chop: MEDIUM CHOP: ADX=20 (weak trend); BB=1.3% (very tight, T2 thresh=2.0) — NO PENALTY (V3.2.18: trust signals)
+  [AI-LOG] SENT  stage='Analysis - BNB (Tier 2)'
+  [AI-LOG]       expl: Gemini Judge: The CATALYST_DRIVE strategy is selected due to positive BNB-specific news, including SEC stablecoin regula
+  [AI-LOG]       out:  {"decision": "LONG", "confidence": 0.85, "tp_pct": 3.5, "sl_pct": 1.5, "can_trade": true, "trade_type": "new"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+2026-02-20 07:37:45 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: LTC (Tier 2: Mid Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (73%): Strong bearish community sentiment (0.14); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] NEUTRAL (60%): The broader crypto market is currently in a volatile phase with mixed sentiment, characterized by institutional outflows from ETFs and macroeconomic headwinds, leading to a 'wait-and-see' mode. However, Litecoin has seen several positive developments, including increased utility through new lending integrations and institutional recognition via ETF filings. Significant US economic data releases (GDP, Core PCE, Personal Income & Spending, Consumer Sentiment) are scheduled within the next 4-5 hours, which are high-impact events likely to introduce considerable volatility and could sway overall market sentiment.
+  [FLOW] Analyzing...
+  [REGIME] NEUTRAL (score: 0, conf: 50%)
+  [REGIME] BTC 24h: -0.8% | F&G: 7 | Funding: -0.00005
+  [REGIME] OI Signal: NEUTRAL | Volatility: NORMAL | Alts: -0.3%
+  [REGIME]   > BTC weak: -0.8%
+  [REGIME]   > EXTREME FEAR (7): mild contrarian BUY bias
+  [FLOW] Depth - Bids: 37524.60, Asks: 23603.20, Ratio: 1.59
+  [FLOW] Walls - Ask: $53.55 (resistance/LONG-TP), Bid: $53.47 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 193.0000, Sell: 327.0000, Ratio: 0.59
+  [FLOW] Funding rate: 0.000026
+  [FLOW] Taker ratio: 0.59 | Extreme sell: False | Heavy sell: False
+  [FLOW] SHORT (50%): Taker sell pressure: 0.59
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] NEUTRAL (40%): No clear technical signal. RSI: 55.1
+  [JUDGE] Deciding...
+  [CHOP-5M] LTCUSDT: MEDIUM CHOP: BB=1.6% (very tight, T2 thresh=2.0), disp=0.1%
+  [JUDGE] Calling Gemini (rate-limit + up to 90s)...
+2026-02-20 07:38:15 | INFO     | AFC is enabled with max remote calls: 10.
+  [JUDGE] Gemini responded in 20.1s
+  [JUDGE] Gemini: WAIT (0%)
+  [JUDGE] Reasoning: The market faces extremely high volatility risk due to multiple high-impact US economic data releases scheduled within the next 4-5 hours. While WHALE sentiment is strongly SHORT (73%), FLOW is only weakly bearish (50%), and the Fear & Greed Index is at 7 (Extreme Fear), which requires 2+ strong co-primary signals for a SHORT. This condition is not met, and trading into such unpredictable events without overwhelming confidence (>=85%) is not advisable.
+  [AI-LOG] SENT  stage='Gemini Judge: WAIT'
+  [AI-LOG]       expl: AI Judge decided WAIT: Gemini Judge: The market faces extremely high volatility risk due to multiple high-impact US econ
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "judge_version": "gemini-judge", "reason": "Gemini Judge: The market faces extremely high volatility risk due to multiple high-impact US economic data releases 
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+  [JUDGE] Final: WAIT (0%)
+2026-02-20 07:38:35 | INFO     |   LTC (T2): WAIT (0%)
+2026-02-20 07:38:35 | INFO     |     -> reason: Gemini Judge: The market faces extremely high volatility risk due to multiple hi
+  [AI-LOG] SENT  stage='Analysis - LTC (Tier 2)'
+  [AI-LOG]       expl: Gemini Judge: The market faces extremely high volatility risk due to multiple high-impact US economic data releases sche
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "tp_pct": 3.5, "sl_pct": 1.5, "can_trade": false, "trade_type": "none"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+2026-02-20 07:38:38 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: XRP (Tier 2: Mid Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] LONG (55%): Mild bullish sentiment (0.60)
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] NEUTRAL (60%): The overall crypto market is in a 'wait-and-see' mode, characterized by extreme fear and deleveraging, with macroeconomic headwinds from the Federal Reserve's restrictive stance and sticky inflation. This points to a general risk-off sentiment. However, XRP exhibits some counter-trends, including continued ETF inflows and positive sentiment from Wall Street and social platforms. A Ripple executive also reported a breakthrough in a DC crypto meeting. Upcoming US Personal Income & Spending and U. of Michigan Consumer Sentiment data releases within the next 4-5 hours pose a high volatility risk. Despite broader market caution, XRP-specific developments suggest underlying resilience.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 582250.00, Asks: 554900.00, Ratio: 1.05
+  [FLOW] Walls - Ask: $1.4209 (resistance/LONG-TP), Bid: $1.4196 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 8740.0000, Sell: 5800.0000, Ratio: 1.51
+  [FLOW] Funding rate: -0.000076
+  [FLOW] Taker ratio: 1.51 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (50%): Taker buy pressure: 1.51
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -4.5%
+  [JUDGE] Deciding...
+  [CHOP-5M] XRPUSDT: HIGH CHOP: ADX=15 (very weak trend); BB=1.6% (very tight, T2 thresh=2.0), disp=0.1%
+  [JUDGE] Calling Gemini (rate-limit + up to 90s)...
+2026-02-20 07:38:59 | INFO     | AFC is enabled with max remote calls: 10.
+  [JUDGE] Gemini responded in 9.6s
+  [JUDGE] Gemini: WAIT (45%)
+  [JUDGE] Reasoning: Co-primary signals (WHALE 55% LONG, FLOW 50% LONG) are weak and do not meet the 60% threshold for a clear edge. Microstructure analysis indicates high chop (ADX=15, tight BB width), suggesting the market is ranging with no clear direction. Furthermore, SENTIMENT highlights high volatility risk due to upcoming US economic data releases within the 4-5 hour window, requiring a confidence of >=85% to trade, a level not met by current signals.
+  [AI-LOG] SENT  stage='Gemini Judge: WAIT'
+  [AI-LOG]       expl: AI Judge decided WAIT: Gemini Judge: Co-primary signals (WHALE 55% LONG, FLOW 50% LONG) are weak and do not meet the 60%
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "judge_version": "gemini-judge", "reason": "Gemini Judge: Co-primary signals (WHALE 55% LONG, FLOW 50% LONG) are weak and do not meet the 60% threshold for a cl
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+  [JUDGE] Final: WAIT (0%)
+2026-02-20 07:39:09 | INFO     |   XRP (T2): WAIT (0%)
+2026-02-20 07:39:09 | INFO     |     -> reason: Gemini Judge: Co-primary signals (WHALE 55% LONG, FLOW 50% LONG) are weak and do
+  [AI-LOG] SENT  stage='Analysis - XRP (Tier 2)'
+  [AI-LOG]       expl: Gemini Judge: Co-primary signals (WHALE 55% LONG, FLOW 50% LONG) are weak and do not meet the 60% threshold for a clear 
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "tp_pct": 3.5, "sl_pct": 1.5, "can_trade": false, "trade_type": "none"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+2026-02-20 07:39:13 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: SOL (Tier 3: Small Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] NEUTRAL (40%): Neutral community sentiment (0.51); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] LONG (70%): The broader crypto market is currently in a volatile phase, characterized by recent price corrections, ETF outflows, and macroeconomic headwinds, leading to an overall risk-off sentiment. However, Solana (SOL) is exhibiting a bullish directional bias, primarily driven by sustained whale accumulation, robust ecosystem growth with over 500 decentralized applications, and increasing institutional adoption through new lending programs and tokenized securities initiatives. While medium-impact EU CPI data is scheduled for 11:00 AM UTC, no high-risk volatility events like major token unlocks or futures expiries are anticipated within the next 4-5 hours.
+  [FLOW] Analyzing...
+  [FLOW] Depth - Bids: 26127.20, Asks: 26762.80, Ratio: 0.98
+  [FLOW] Walls - Ask: $83.73 (resistance/LONG-TP), Bid: $83.63 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 312.9000, Sell: 255.8000, Ratio: 1.22
+  [FLOW] Funding rate: -0.000093
+  [FLOW] Taker ratio: 1.22 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (50%): Taker buy pressure: 1.22
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] LONG (50%): Price above SMAs (uptrend)
+  [JUDGE] Deciding...
+  [CHOP-5M] SOLUSDT: MEDIUM CHOP: BB=2.1% (very tight, T3 thresh=2.6), disp=0.4%
+  [JUDGE] Calling Gemini (rate-limit + up to 90s)...
+2026-02-20 07:39:44 | INFO     | AFC is enabled with max remote calls: 10.
+  [JUDGE] Gemini responded in 11.4s
+  [JUDGE] Gemini: WAIT (0%)
+  [JUDGE] Reasoning: Neither WHALE (40% Neutral) nor FLOW (50% Long) signals exceed the 60% confidence threshold, indicating no clear edge. The market is in a medium chop environment, and despite extreme fear (F&G=7) suggesting a contrarian long, the primary signals are too weak and somewhat conflicting to justify a trade. The medium-impact EU CPI data at 11:00 AM UTC also adds a layer of uncertainty.
+  [AI-LOG] SENT  stage='Gemini Judge: WAIT'
+  [AI-LOG]       expl: AI Judge decided WAIT: Gemini Judge: Neither WHALE (40% Neutral) nor FLOW (50% Long) signals exceed the 60% confidence t
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "judge_version": "gemini-judge", "reason": "Gemini Judge: Neither WHALE (40% Neutral) nor FLOW (50% Long) signals exceed the 60% confidence threshold, indicatin
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+  [JUDGE] Final: WAIT (0%)
+2026-02-20 07:39:56 | INFO     |   SOL (T3): WAIT (0%)
+2026-02-20 07:39:56 | INFO     |     -> reason: Gemini Judge: Neither WHALE (40% Neutral) nor FLOW (50% Long) signals exceed the
+  [AI-LOG] SENT  stage='Analysis - SOL (Tier 3)'
+  [AI-LOG]       expl: Gemini Judge: Neither WHALE (40% Neutral) nor FLOW (50% Long) signals exceed the 60% confidence threshold, indicating no
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "tp_pct": 3.0, "sl_pct": 1.8, "can_trade": false, "trade_type": "none"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+2026-02-20 07:39:59 | INFO     | AFC is enabled with max remote calls: 10.
+
+  === Multi-Persona Analysis: ADA (Tier 3: Small Cap) ===
+  [WHALE] Analyzing...
+  [WHALE] SHORT (61%): Mild bearish sentiment (0.41); Trend: FALLING
+  [SENTIMENT] Analyzing...
+  [SENTIMENT] SHORT (60%): The broader crypto market is currently in a volatile, risk-off phase characterized by significant deleveraging and ETF outflows. Several key US economic data releases, including Q4 GDP, Personal Income & Spending, and Consumer Sentiment, are scheduled for today, which could introduce market volatility. Additionally, token unlocks for LayerZero and Kaito, along with potential Bitcoin futures settlement, are slated for February 20th. While Coinbase's decision to accept ADA as collateral for DeFi loans is a positive development for its utility, short-term news-driven technical analysis suggests a minor bearish trend for ADA, with expectations of further intraday decline, overriding the positive ADA-specific news in the immediate 4-5 hour window.
+  [FLOW] Analyzing...
+  [REGIME] NEUTRAL (score: 0, conf: 50%)
+  [REGIME] BTC 24h: -0.8% | F&G: 7 | Funding: -0.00005
+  [REGIME] OI Signal: NEUTRAL | Volatility: NORMAL | Alts: -0.4%
+  [REGIME]   > BTC weak: -0.8%
+  [REGIME]   > EXTREME FEAR (7): mild contrarian BUY bias
+  [FLOW] Depth - Bids: 6409980.00, Asks: 9164200.00, Ratio: 0.70
+  [FLOW] Walls - Ask: $0.2744 (resistance/LONG-TP), Bid: $0.2739 (support/SHORT-TP)
+  [FLOW] Taker - Buy: 12410.0000, Sell: 1420.0000, Ratio: 8.74
+  [FLOW] Funding rate: -0.000090
+  [FLOW] Taker ratio: 8.74 | Extreme sell: False | Heavy sell: False
+  [FLOW] LONG (85%): EXTREME taker buying: 8.74
+  [TECHNICAL] Analyzing...
+  [TECHNICAL] SHORT (40%): Weak momentum: -3.9%
+  [JUDGE] Deciding...
+  [CHOP-5M] ADAUSDT: HIGH CHOP: ADX=12 (very weak trend); BB=1.7% (very tight, T3 thresh=2.6), disp=0.3%
+  [JUDGE] Calling Gemini (rate-limit + up to 90s)...
+2026-02-20 07:40:27 | INFO     | AFC is enabled with max remote calls: 10.
+  [JUDGE] Gemini responded in 13.0s
+  [JUDGE] Gemini: WAIT (0%)
+  [JUDGE] Reasoning: The primary co-signals, WHALE (61% SHORT) and FLOW (85% LONG), directly contradict, indicating significant market indecision. This is compounded by a HIGH CHOP microstructure (ADX=12, tight BB) and a HIGH_RISK macro environment due to upcoming US economic data releases, which requires 85%+ confidence to trade. Given the conflicting signals and high volatility risk, waiting for clearer market direction is the most disciplined action.
+  [AI-LOG] SENT  stage='Gemini Judge: WAIT'
+  [AI-LOG]       expl: AI Judge decided WAIT: Gemini Judge: The primary co-signals, WHALE (61% SHORT) and FLOW (85% LONG), directly contradict,
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "judge_version": "gemini-judge", "reason": "Gemini Judge: The primary co-signals, WHALE (61% SHORT) and FLOW (85% LONG), directly contradict, indicating signifi
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+  [JUDGE] Final: WAIT (0%)
+2026-02-20 07:40:41 | INFO     |   ADA (T3): WAIT (0%)
+2026-02-20 07:40:41 | INFO     |     -> reason: Gemini Judge: The primary co-signals, WHALE (61% SHORT) and FLOW (85% LONG), dir
+  [AI-LOG] SENT  stage='Analysis - ADA (Tier 3)'
+  [AI-LOG]       expl: Gemini Judge: The primary co-signals, WHALE (61% SHORT) and FLOW (85% LONG), directly contradict, indicating significant
+  [AI-LOG]       out:  {"decision": "WAIT", "confidence": 0.0, "tp_pct": 3.0, "sl_pct": 1.8, "can_trade": false, "trade_type": "none"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+2026-02-20 07:40:44 | INFO     |   Executing 2 opportunities (0 positions currently open)
+2026-02-20 07:40:44 | INFO     | CAPITULATION MODE: F&G=7, keeping hard cap at BASE_SLOTS=1
+2026-02-20 07:40:44 | INFO     | EXTREME F&G=7 but 80% floor enforced for ETH (90%)
+2026-02-20 07:40:44 | INFO     | SESSION [DEAD_HOURS]: 7:00 UTC, 90% >= 80%, proceeding ETH
+2026-02-20 07:40:45 | INFO     | 
+2026-02-20 07:40:45 | INFO     | EXECUTING ETH LONG (T1) - 90%
+  [SIZING] Equity: $3437 | Available: $3437 | Balance: $3437 | Sizing base: $3437
+  [LEVERAGE] Tier 1 (NEUTRAL, ULTRA 90%): Using 20x
+  [AI-LOG] SENT  stage='Leverage Decision: LONG ETHUSDT'
+  [AI-LOG]       expl: Confidence-tiered leverage: 20x for Tier 1 at 90% confidence. Margin: $1718, Notional: $34367.
+  [AI-LOG]       out:  {"leverage": 20, "notional_usdt": 34367.37, "conf_bracket": "ULTRA"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+  [CHART-SR] ETHUSDT 1H anchors: 2H_high=1964.5600, 2H_low=1929.3700, 12H_low=1926.6500, 12H_high=1964.5600
+  [CHART-SR] ETHUSDT 4H: SL_low=1905.5900, SL_high=1963.5600, TP_high=1952.3700, TP_low=1905.5900
+  [CHART-SR] LONG TP (48H walk): 1972.1800 → 0.41%
+  [CHART-SR] LONG SL: 3.27% > 1.5% ceiling — capping at 1.5%
+  [CHART-SR] LONG SL: min(1H=1926.6500, 4H=1905.5900)=1905.5900 → 1.50%
+  [CHART-SR] ETHUSDT LONG: TP 0.41% ($1972.1800), SL 1.50% ($1934.6287)
+  [TP/SL] GEMINI TP OVERRIDE (LONG): $2000.0000 = 1.83% from $1964.0900
+  [TP/SL] CHART-BASED [GEMINI]: TP 1.83% SL 1.50% (Tier 1)
+  [TP/SL] Per-pair TP ceiling (ETH): 1.83% → 1.50%
+  [FINAL] TP: $1993.5513 (1.50%) | SL: $1934.6287 (1.50%) | R:R 1.0:1 | Method: chart_mtf
+  [LEVERAGE OK] cmt_ethusdt set to 20x cross
+  [TRADE] LONG cmt_ethusdt: 17.49 @ $1964.0900
+  [TRADE] Tier 1 (Blue Chip): TP $1993.5513 (1.5%), SL $1934.6287 (1.5%)
+  [WEEX-CONFIRM] plan_orders HTTP 404 for cmt_ethusdt
+  [AI-LOG] SENT  stage='Trade: LONG ETHUSDT' | orderId=719630367824282469
+  [AI-LOG]       expl: Gemini Judge: CATALYST_DRIVE strategy. WHALE and FLOW strongly support a LONG, indicating significant accumulation and h
+  [AI-LOG]       out:  {"signal": "LONG", "confidence": 0.9, "size": 17.49, "entry_price": 1964.09, "tp_price": 1993.5513499999997, "sl_price": 1934.62865, "tp_pct": 1.5, "sl_pct": 1.5}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+2026-02-20 07:40:52 | INFO     | Trade executed: 719630367824282469
+2026-02-20 07:40:52 | INFO     |   TP: 1.5%, SL: 1.5%
+2026-02-20 07:40:52 | INFO     |   [FEE] Open: ~$20.62 (0.06% × $34367 notional)
+2026-02-20 07:40:55 | INFO     | EXTREME F&G=7 but 80% floor enforced for BNB (85%)
+2026-02-20 07:40:55 | INFO     | SESSION [DEAD_HOURS]: 7:00 UTC, 85% >= 80%, proceeding BNB
+2026-02-20 07:40:56 | INFO     | 
+2026-02-20 07:40:56 | INFO     | EXECUTING BNB LONG (T2) - 85%
+  [SIZING] Equity: $3426 | Available: $1709 | Balance: $1710 | Sizing base: $1709
+  [LEVERAGE] Tier 2 (NEUTRAL, HIGH 85%): Using 20x
+  [AI-LOG] SENT  stage='Leverage Decision: LONG BNBUSDT'
+  [AI-LOG]       expl: Confidence-tiered leverage: 20x for Tier 2 at 85% confidence. Margin: $855, Notional: $17092.
+  [AI-LOG]       out:  {"leverage": 20, "notional_usdt": 17092.14, "conf_bracket": "HIGH"}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+  [CHART-SR] BNBUSDT 1H anchors: 2H_high=613.8600, 2H_low=605.0500, 12H_low=601.7100, 12H_high=613.8600
+  [CHART-SR] BNBUSDT 4H: SL_low=595.4700, SL_high=610.4500, TP_high=609.1400, TP_low=595.7900
+  [CHART-SR] LONG TP (48H walk): 614.6100 → 0.42%
+  [CHART-SR] LONG SL: 3.00% > 1.5% ceiling — capping at 1.5%
+  [CHART-SR] LONG SL: min(1H=601.7100, 4H=595.4700)=595.4700 → 1.50%
+  [CHART-SR] BNBUSDT LONG: TP 0.42% ($614.6100), SL 1.50% ($602.8791)
+  [TP/SL] GEMINI TP OVERRIDE (LONG): $618.0300 = 0.98% from $612.0600
+  [TP/SL] CHART-BASED [GEMINI]: TP 0.98% SL 1.50% (Tier 2)
+  [FINAL] TP: $618.0300 (0.98%) | SL: $602.8791 (1.50%) | R:R 0.7:1 | Method: chart_mtf
+  [LEVERAGE OK] cmt_bnbusdt set to 20x cross
+  [TRADE] LONG cmt_bnbusdt: 27.9 @ $612.0600
+  [TRADE] Tier 2 (Mid Cap): TP $618.0300 (1.0%), SL $602.8791 (1.5%)
+  [WEEX-CONFIRM] plan_orders HTTP 404 for cmt_bnbusdt
+  [AI-LOG] SENT  stage='Trade: LONG BNBUSDT' | orderId=719630411629593445
+  [AI-LOG]       expl: Gemini Judge: The CATALYST_DRIVE strategy is selected due to positive BNB-specific news, including SEC stablecoin regula
+  [AI-LOG]       out:  {"signal": "LONG", "confidence": 0.85, "size": 27.9, "entry_price": 612.06, "tp_price": 618.03, "sl_price": 602.8791, "tp_pct": 0.98, "sl_pct": 1.5}
+  [AI-LOG]       WEEX: code=00000 msg='success' | ACCEPTED
+2026-02-20 07:41:02 | INFO     | Trade executed: 719630411629593445
+2026-02-20 07:41:02 | INFO     |   TP: 1.0%, SL: 1.5%
+2026-02-20 07:41:02 | INFO     |   [FEE] Open: ~$10.26 (0.06% × $17092 notional)
+2026-02-20 07:41:05 | INFO     | 
+2026-02-20 07:41:05 | INFO     | Executed 2 trades this cycle
+2026-02-20 07:41:06 | INFO     | --- Cycle summary: 2 signals (2 at 80%+), 5 WAIT, 0 blocked, 2 opportunities ---
+2026-02-20 07:41:06 | INFO     |   [MONITOR] cmt_ethusdt T1: +0.00% (peak: 0.00%) conf=90%
+2026-02-20 07:41:07 | INFO     |   [MONITOR] cmt_bnbusdt T2: +0.02% (peak: 0.02%) conf=85%
+2026-02-20 07:41:08 | INFO     | HEALTH | Up: 0:05:58 | Signals: 1 | Trades: 2/0 | Active: 2
+2026-02-20 07:42:10 | INFO     | HEALTH | Up: 0:07:00 | Signals: 1 | Trades: 2/0 | Active: 2
