@@ -1609,12 +1609,14 @@ def check_trading_signals():
 # V3.2.46: BREAKEVEN TRAILING STOP
 # ============================================================
 BREAKEVEN_TRIGGER_PCT = 0.4  # Move SL to entry when trade reaches +0.4%
-# V3.2.53: Peak-fade soft stop — capture partial gain when move fades before TP
-# Fires when: peak_pnl >= PEAK_FADE_MIN_PEAK AND current <= peak - PEAK_FADE_TRIGGER_PCT
-# Only active below the breakeven trigger (>= 0.40% case handled by BE-SL on WEEX).
+# V3.2.54: Tiered peak-fade soft stop — per-tier params to match liquidity profile
+# T1 (BTC/ETH): deep liquidity → tighter fade; floor exit 0.15% → 3.0% gross ROE (break-even at fees)
+# T2 (BNB/LTC/XRP): high-beta altcoin → needs room; floor exit 0.20% → 4.0% gross - 3.2% fees = +0.8%
+# T3 (SOL/ADA): most volatile → widest gate; same 0.45/0.25 as T2 (prevents whipsaw wicks)
+# Gate: SL not yet moved to breakeven (WEEX BE-SL covers the >= 0.40% case).
 # exit_reason "peak_fade" → COOLDOWN_MULTIPLIERS["profit_lock"] = 0.0 → zero cooldown.
-PEAK_FADE_MIN_PEAK = 0.20    # Min peak% to activate (below = noise, don't chase)
-PEAK_FADE_TRIGGER_PCT = 0.12 # Exit when current has dropped this far below peak
+PEAK_FADE_MIN_PEAK   = {1: 0.30, 2: 0.45, 3: 0.45}  # Min peak% per tier to activate fade
+PEAK_FADE_TRIGGER_PCT = {1: 0.15, 2: 0.25, 3: 0.25}  # Drop threshold per tier (current <= peak - trigger)
 
 def _move_sl_to_breakeven(symbol: str, side: str, entry_price: float, tp_price: float, size: float) -> bool:
     """V3.2.46: Cancel existing SL and replace with breakeven SL at entry price.
@@ -1921,15 +1923,17 @@ def monitor_positions():
 
                 # 4. V3.1.102 stale exit REMOVED (V3.2.17) — slot swap handles underperformers
 
-                # 5. V3.2.53: Peak-fade soft stop
+                # 5. V3.2.54: Tiered peak-fade soft stop
                 # Position had a meaningful peak but reversed before hitting TP. Exit to lock
                 # in a fraction of the gain rather than riding it back to near-zero at max_hold.
                 # Gate: SL not yet moved to breakeven (WEEX BE-SL covers the >= 0.40% case).
-                elif (not trade.get("sl_moved_to_breakeven", False)
-                      and peak_pnl_pct >= PEAK_FADE_MIN_PEAK
-                      and pnl_pct <= peak_pnl_pct - PEAK_FADE_TRIGGER_PCT):
-                    should_exit = True
-                    exit_reason = f"peak_fade ({peak_pnl_pct:.2f}%→{pnl_pct:.2f}%, fade={peak_pnl_pct - pnl_pct:.2f}%)"
+                # Tier-specific thresholds: T1 (BTC/ETH) tighter; T2/T3 (altcoins) wider for volatility.
+                elif not trade.get("sl_moved_to_breakeven", False):
+                    _pf_min  = PEAK_FADE_MIN_PEAK.get(tier, 0.45)
+                    _pf_trig = PEAK_FADE_TRIGGER_PCT.get(tier, 0.25)
+                    if peak_pnl_pct >= _pf_min and pnl_pct <= peak_pnl_pct - _pf_trig:
+                        should_exit = True
+                        exit_reason = f"peak_fade_T{tier} ({peak_pnl_pct:.2f}%→{pnl_pct:.2f}%, fade={peak_pnl_pct - pnl_pct:.2f}%, thr={_pf_min:.2f}/{_pf_trig:.2f})"
 
                 if should_exit:
                     symbol_clean = symbol.replace("cmt_", "").upper()
@@ -3565,7 +3569,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.53 - Peak-fade soft stop: exit when peak >= 0.20% and price retraces 0.12% from peak (zero cooldown)")
+    logger.info("SMT Daemon V3.2.54 - Tiered peak-fade: T1(BTC/ETH) 0.30%%/0.15%%, T2/T3(altcoins) 0.45%%/0.25%% (volatility-matched, zero cooldown)")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3642,6 +3646,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.54: Tiered peak-fade — T1(BTC/ETH): MIN=0.30%%,TRIG=0.15%%; T2/T3(altcoins): MIN=0.45%%,TRIG=0.25%%; altcoin wick noise needs 2x breathing room vs majors; exit_reason peak_fade_T{n} includes tier+thresholds")
     logger.info("  V3.2.53: Peak-fade soft stop — PEAK_FADE_MIN_PEAK=0.20%%, PEAK_FADE_TRIGGER=0.12%%; fires when peak>=0.20%% and current<=peak-0.12%%; 'peak_fade' reason = zero cooldown; only when BE-SL not yet placed")
     logger.info("  V3.2.52: Pre-cycle exit sweep — max_hold/force_exit/early_exit checked at START of check_trading_signals(); positions closed with full AI log BEFORE 7-pair Gemini analysis (fixes 6-min blind spot)")
     logger.info("  V3.2.51: Emergency flip — EMERGENCY_FLIP_CONFIDENCE=0.90; age gate bypassed at 90%+ opposite confidence; TP proximity gate preserved; 'EMERGENCY FLIP' tag in logs + AI log")
