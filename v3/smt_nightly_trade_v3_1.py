@@ -4585,19 +4585,25 @@ def get_recent_close_order_id(symbol: str) -> Optional[int]:
     Used to attach a close orderId to the AI log when WEEX auto-executes a TP/SL trigger.
     Returns None on failure — AI log still uploads, just without orderId.
     """
+    pair = symbol.replace("cmt_", "").upper()
     try:
         endpoint = f"/capi/v2/order/orders?symbol={symbol}&status=2"
         r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=10)
-        if r.status_code == 200:
-            resp = r.json()
-            orders = resp if isinstance(resp, list) else (resp.get("data") or [])
-            # Filter for close order types (3=close long, 4=close short)
-            close_orders = [o for o in orders if str(o.get("type", "")) in ("3", "4")]
-            if close_orders:
-                oid = close_orders[0].get("order_id")
-                return int(oid) if oid and str(oid).isdigit() else None
-    except Exception:
-        pass
+        if r.status_code != 200:
+            print(f"  [AI-LOG] get_recent_close_order_id {pair}: HTTP {r.status_code}", flush=True)
+            return None
+        resp = r.json()
+        orders = resp if isinstance(resp, list) else (resp.get("data") or [])
+        print(f"  [AI-LOG] get_recent_close_order_id {pair}: {len(orders)} order(s) returned (status=2)", flush=True)
+        # Filter for close order types (3=close long, 4=close short)
+        close_orders = [o for o in orders if str(o.get("type", "")) in ("3", "4")]
+        if close_orders:
+            oid = close_orders[0].get("order_id")
+            print(f"  [AI-LOG] {pair} close orderId found: {oid}", flush=True)
+            return int(oid) if oid and str(oid).isdigit() else None
+        print(f"  [AI-LOG] {pair}: no close-type orders in response — raw[0]={orders[0] if orders else 'empty'}", flush=True)
+    except Exception as e:
+        print(f"  [AI-LOG] get_recent_close_order_id {pair} error: {e}", flush=True)
     return None
 
 
