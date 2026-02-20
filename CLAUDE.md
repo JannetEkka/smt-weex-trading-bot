@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.56** — all production code is in `v3/`.
+**Current version: V3.2.57** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -77,7 +77,7 @@ Key pattern: **FLOW/WHALE fire first → dip completes → bot enters at the bot
 
 - **Preferred TP is ~0.5%.** Grab the dip bounce and exit fast. If the move continues, the next 10-min signal cycle catches re-entry. Do NOT hold waiting for a bigger move — the 10-min daemon loop IS the strategy.
 - **High win rate > high R:R.** With correct dip entries the win rate is high enough that small TPs are profitable at scale. Classical swing-trade R:R math does not apply here.
-- **The chop filter exists for logging only (V3.2.18).** Chop penalties have been removed — the 80% confidence floor + 0.5% minimum TP handle signal quality. Chop data is still computed and logged for diagnostics.
+- **The chop filter exists for logging only (V3.2.18).** Chop penalties have been removed — the 85% confidence floor (V3.2.57) + 0.5% minimum TP handle signal quality. Chop data is still computed and logged for diagnostics.
 - **FLOW EXTREME overrides chop (V3.2.3):** If FLOW confidence >=85% and matches signal direction, MEDIUM chop penalty is skipped. HIGH chop is reduced to medium (15% penalty). Now historical reference only since V3.2.18 removed all chop penalties.
 - **Compound fast.** Many small wins × leverage × reinvestment beats waiting for 3% moves. Capital rotation speed is the edge.
 
@@ -109,14 +109,14 @@ Never manually edit this file while the daemon is running.
 ### Competition Timing
 - Signal check: every 10 minutes (V3.1.84, was 15)
 - Position monitor: every 2 minutes
-- Global trade cooldown: 15 minutes between trades (prevents fee bleed)
+- Global trade cooldown: 10 minutes between trades (V3.2.57, was 15min — final stretch velocity)
 
 ## Key Constants & Thresholds
 
 ```python
 MAX_LEVERAGE = 20                    # Flat 20x on all positions, all tiers (leverage_manager.py)
-MIN_CONFIDENCE_TO_TRADE = 0.80      # 80% HARD FLOOR - NO exceptions (V3.1.85)
-GLOBAL_TRADE_COOLDOWN = 900          # 15min between trades
+MIN_CONFIDENCE_TO_TRADE = 0.85      # V3.2.57: 85% floor (was 80%). 1-slot mode: 80-84% at 20% sizing blocks slot from better trades
+GLOBAL_TRADE_COOLDOWN = 600          # V3.2.57: 10min between trades (was 900/15min)
 SIGNAL_CHECK_INTERVAL = 600          # 10min
 POSITION_MONITOR_INTERVAL = 120      # 2min
 MAX_TOTAL_POSITIONS = 1              # V3.2.46: 1-slot cross-margin defense — full account as buffer
@@ -139,10 +139,9 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 # Position sizing (V3.2.46: confidence-scaled for 1-slot cross-margin)
 # sizing_base = available (free margin from API)
 # sizing_base = min(sizing_base, balance * 2.5)   # cap at 2.5× balance
-# sizing_base = max(sizing_base, 1000.0)           # floor at $1000 always
-# V3.2.46: Confidence-scaled sizing (replaces flat 0.25 multiplier):
-#   80-84% confidence: sizing_base * 0.20  (conservative)
-#   85-89% confidence: sizing_base * 0.35  (standard)
+# V3.2.57: $1000 sizing floor REMOVED (margin guard at $1000 already blocks undersized trades)
+# V3.2.57: Confidence-scaled sizing (MIN_CONFIDENCE now 85%):
+#   85-89% confidence: sizing_base * 0.35  (standard — all trades now in this band or higher)
 #   90%+   confidence: sizing_base * 0.50  (maximum conviction)
 # SOL capped at 30% of sizing_base via PAIR_MAX_POSITION_PCT (high beta risk control)
 # Margin guard: skip trades if available margin < $1000 (V3.2.26)
@@ -155,7 +154,7 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 #   force_stop: 1.0   → 60min+ cooldown after force stop
 #   early_exit: 0.5   → 30-60min cooldown after early exit
 #   tp_hit: 0.0       → immediate re-entry OK (trend confirmed)
-#   max_hold/profit_lock/peak_fade: 0.0  → no cooldown
+#   max_hold/profit_lock/peak_fade/velocity_exit: 0.0  → no cooldown
 # Cross margin = shared collateral — revenge trading is account-ending.
 
 # TP/SL bounds (V3.2.41: per-pair ceiling + MAX_SL + 4H anchor; V3.2.46: SL cap instead of discard)
@@ -192,6 +191,12 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 # PEAK_FADE_TRIGGER_PCT = {1: 0.15, 2: 0.25, 3: 0.25}   # Drop from peak to trigger soft exit
 #   T1 (BTC/ETH): tighter (majors have less wick noise). T2/T3 (altcoins): 2× breathing room.
 #   exit_reason "peak_fade_T{n}" → zero cooldown (profit was taken).
+# Velocity exit (V3.2.57): exits flat/stale trades that never moved
+# VELOCITY_EXIT_MINUTES = 40     # Kill trade if no movement after 40 min
+# VELOCITY_MIN_PEAK_PCT = 0.15   # "No movement" = peak never reached 0.15%
+#   Distinct from early_exit (needs actual loss) and peak_fade (needs peak then reversal).
+#   Covers "trade opened but price never moved in our direction" — thesis is dead.
+#   exit_reason "velocity_exit" → zero cooldown (slot freed immediately).
 
 # Emergency flip (V3.2.51)
 # EMERGENCY_FLIP_CONFIDENCE = 0.90  # At 90%+ opposite confidence, bypass the 20-min age gate
@@ -375,16 +380,31 @@ python3 v3/cryptoracle_client.py
 20. **Plan order ID registration lag (V3.2.55)** — WEEX registers TP/SL plan orders with a brief lag after placement. `_fetch_plan_order_ids()` uses 2s initial sleep + 2 retries (2s apart) on 404/empty response. Do not remove retries — the fallback `stored-ID=None` was eliminated in V3.2.55 to prevent AI log uploads with missing order IDs.
 21. **Pre-cycle exit sweep order (V3.2.52)** — Expired positions (max_hold/force_exit/early_exit) are closed at the START of `check_trading_signals()`, BEFORE the 7-pair Gemini analysis loop runs. Do not move this after the analysis — it fixes the 6-min blind spot where expired positions weren't closed until after a full analysis cycle.
 22. **Funding rate direction (V3.2.56)** — Judge prompt now specifies whether the bot is "paying" or "receiving" funding for each position. Negative funding + LONG = bot receives funding (a bonus, not a drag). Positive funding + LONG = bot pays. Was previously always labeled as "drag" regardless of direction, causing incorrect Judge reasoning on favorable funding positions.
+23. **Velocity exit vs peak-fade vs early exit (V3.2.57)** — Three distinct exit mechanisms: (1) early_exit = trade open > X min AND losing > -1%; (2) peak_fade = trade peaked then reversed (peak > threshold, current < peak - trigger); (3) velocity_exit = trade never moved at all (peak < 0.15% after 40 min). Velocity exit gate: `peak_pnl_pct < VELOCITY_MIN_PEAK_PCT` — fires ONLY when breakeven SL NOT placed (peak too low to trigger BE-SL). All three are distinct conditions; do not merge or confuse them.
+24. **Judge hold-time mismatch (V3.2.57 FIX)** — Prior versions told Judge "4-5H planning horizon" but TIER_CONFIG kills at 1.5-3H. Judge was picking unreachable TP targets. V3.2.57 adds explicit HOLD TIME LIMITS section to Judge prompt with actual per-tier limits. Do not re-add "4-5H" references.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.56. Next change should be V3.2.57.
+Current: V3.2.57. Next change should be V3.2.58.
 
 **Recent version history:**
-- V3.2.56: (**CURRENT**) Macro blackout exit + funding rate direction fix.
+- V3.2.57: (**CURRENT**) BlitzMode final 72h — velocity exit + confidence 85% + cooldown reduction + Judge hold-time awareness.
+  `MIN_CONFIDENCE_TO_TRADE` 80%→85%: In 1-slot mode, 80-84% trades at 20% sizing block the slot from better 90%+ signals.
+  All trades now 35-50% of sizing_base (85-89%=35%, 90%+=50%). The 20% tier is eliminated.
+  `$1000 sizing floor` removed — `margin guard` at $1000 already prevents undersized trades.
+  `GLOBAL_TRADE_COOLDOWN` 900→600s (15→10min): +5-6 extra trade windows in final 72h.
+  `VELOCITY_EXIT`: New exit for "flat/stale" trades — if peak PnL < 0.15% after 40min, close immediately. Zero cooldown.
+  Distinct from early_exit (needs loss) and peak_fade (needs peak then reversal). Covers "thesis never even started."
+  Judge prompt: BLITZ MODE section (momentum priority, T3 bias, ADX<20=WAIT, RANGE/VWAP deprioritized).
+  Judge prompt: All "4-5H" planning horizon references replaced with actual TIER_CONFIG hold times (T1=3H, T2=2H, T3=1.5H).
+  Judge prompt: HOLD TIME LIMITS section added — daemon hard limits + velocity exit rules explicitly stated.
+  Judge prompt: Stale hardcoded price levels (BTC@$66,985, LTC@$52.50, SOL@$82-$85, XRP@$1.41-$1.51) replaced with "[Use current chart data]".
+  SENTIMENT prompt: "4-5H" window updated to "1-3H" to match actual hold times.
+  `PIPELINE_VERSION = "SMT-v3.2.57-BlitzMode-VelocityExit-Conf85"`.
+- V3.2.56: Macro blackout exit + funding rate direction fix.
   `monitor_positions()` now closes UNPROFITABLE positions when a macro blackout window activates mid-position.
   Profitable positions ride with their existing SL — no forced exit if in profit.
   Full AI log sent with order_id on blackout-triggered closes.
@@ -455,9 +475,9 @@ Current: V3.2.56. Next change should be V3.2.57.
 - V3.2.16: BTC/ETH/BNB re-added; 7 pairs; Gemini chart context (1D+4H) for TP targeting.
 - V3.2.11: DOGE removed (erratic SL/orphan behavior).
 
-**CRITICAL RULE (V3.1.85+): The 80% confidence floor is ABSOLUTE.**
+**CRITICAL RULE (V3.2.57): The 85% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that
-lowers the trading threshold below 80%. Quality over quantity wins competitions.
+lowers the trading threshold below 85%. In 1-slot mode, every trade must use 35-50% sizing to justify slot occupancy.
 
 ## Claude Code Rules (MANDATORY)
 

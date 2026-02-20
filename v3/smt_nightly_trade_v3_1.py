@@ -1486,16 +1486,17 @@ COMPETITION_FALLBACK_SL = {
 }
 
 # V3.2.41: Per-pair TP ceiling — replaces flat 0.5% COMPETITION_FALLBACK_TP.
-# Based on 4-5H volatility profile per pair. Ceiling-only: if chart SR < ceiling, use chart SR.
+# Based on tier hold-window volatility profile per pair. Ceiling-only: if chart SR < ceiling, use chart SR.
 # These unlock the 48H resistance walk which has genuine 1-2% SR levels.
+# V3.2.57: Hold windows — T1=3H, T2=2H, T3=1.5H (velocity exit at 40M if no movement)
 PAIR_TP_CEILING = {
-    "BTC": 1.5,   # Tier 1. ~$67K range, VWAP mean-reversion. 4-5H = 1-1.5%.
-    "ETH": 1.5,   # Tier 1. ~$1950 range, support sweep entries. 4-5H = 1-1.5%.
-    "BNB": 1.0,   # Tier 2. Low beta, catalyst-driven. Conservative ceiling.
-    "LTC": 1.0,   # Tier 2. Conservative 1H S/R channel. 4-5H = 0.8-1%.
-    "XRP": 1.0,   # Tier 2. Range $1.41-$1.51. 1.0% avoids missing fill at range top.
-    "SOL": 2.0,   # Tier 3. High beta. MACD momentum. 4-5H = 1.5-2%.
-    "ADA": 1.0,   # Tier 3. BTC-correlated laggard. 4-5H = 0.8-1%.
+    "BTC": 1.5,   # Tier 1. 3H hold window. VWAP mean-reversion. 1-1.5%.
+    "ETH": 1.5,   # Tier 1. 3H hold window. Support sweep entries. 1-1.5%.
+    "BNB": 1.0,   # Tier 2. 2H hold window. Low beta, catalyst-driven.
+    "LTC": 1.0,   # Tier 2. 2H hold window. Conservative 1H S/R channel. 0.8-1%.
+    "XRP": 1.0,   # Tier 2. 2H hold window. Range-bound. 1.0% avoids missing fill at range top.
+    "SOL": 2.0,   # Tier 3. 1.5H hold window. High beta. MACD momentum. 1.5-2%.
+    "ADA": 1.0,   # Tier 3. 1.5H hold window. BTC-correlated laggard. 0.8-1%.
 }
 
 # V3.2.41: Per-pair max position size. Default: MAX_SINGLE_POSITION_PCT = 0.50.
@@ -1922,7 +1923,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.56-BlackoutClose-FundingFix"
+PIPELINE_VERSION = "SMT-v3.2.57-BlitzMode-VelocityExit-Conf85"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -2584,23 +2585,23 @@ class SentimentPersona:
         # V3.2.41: SENTIMENT = macro news analyst (qualitative only). Do NOT ask for price targets
         # or technical epoch strategies — those are JUDGE's job using live chart data.
         # SENTIMENT's edge: Gemini Search Grounding for real-time catalysts and macro context.
-        # V3.2.45: Dynamic date injected so search targets exact 4-5H window (not stale articles)
+        # V3.2.45: Dynamic date injected so search targets exact 1.5-3H window (not stale articles)
         _current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         combined_prompt = f"""You are the Macro News Analyst for {pair}/USDT crypto futures trading.
-Use your Google Search capability to research ONLY qualitative, news-driven factors for the NEXT 4-5 HOURS.
+Use your Google Search capability to research ONLY qualitative, news-driven factors for the NEXT 1-3 HOURS.
 
 RESEARCH TASK — search for these and report findings:
 
 1. CATALYSTS: Are there any active news events, protocol upgrades, ETF flow data, regulatory decisions,
    or macro events (Fed speeches, CPI data, job reports, Treasury auctions) that could move {pair} in
-   the next 4-5 hours? Search: "{pair} crypto news {_current_date}" and "crypto market catalyst {_current_date}".
+   the next 1-3 hours? Search: "{pair} crypto news {_current_date}" and "crypto market catalyst {_current_date}".
 
 2. MACRO BIAS: Based on the overall crypto market sentiment RIGHT NOW (not technicals):
    RISK_ON = buy-the-dip mentality, inflows, positive news flow
    RISK_OFF = flight to safety, sell-rallies mentality, fear/uncertainty
    NEUTRAL = no clear macro driver
 
-3. VOLATILITY RISK: Any scheduled events in the next 4-5H that could cause a sudden spike?
+3. VOLATILITY RISK: Any scheduled events in the next 1-3H that could cause a sudden spike?
    (e.g., Fed minutes, major token unlock, futures expiry, major economic data release)
    HIGH_RISK = yes, specific event known. NORMAL = no obvious scheduled event.
 
@@ -3402,7 +3403,7 @@ class JudgePersona:
             sentiment_macro_text = "\n".join(_s_lines)
 
         # V3.2.48: FUNDING RATE HOLD-COST — fetch per-pair funding rate and compute
-        # the exact drag at 20x leverage over the expected 4-5H holding period.
+        # the exact drag at 20x leverage over the expected 1.5-3H holding period.
         # WEEX charges funding every 8 hours — if next settlement is within hold window,
         # the fee eats into TP. Judge needs this to avoid marginally-profitable trades.
         funding_hold_cost_text = ""
@@ -3433,7 +3434,7 @@ class JudgePersona:
                 funding_hold_cost_text = (
                     f"  {pair} funding rate: {_pair_funding:+.6f} ({_drag_direction})\n"
                     f"  At 20x leverage: {_margin_drag_pct:.2f}% per 8H settlement — {_effect_label} for {_prelim_dir} position\n"
-                    f"  If holding 4-5H, next funding settlement likely occurs during hold window.\n"
+                    f"  If holding 1.5-3H, next funding settlement may occur during hold window.\n"
                     f"  {_funding_rule}"
                 )
                 print(f"  [JUDGE] {pair} funding: {_pair_funding:+.6f} → {_margin_drag_pct:.2f}% {_effect_label} for {_prelim_dir}")
@@ -3469,9 +3470,9 @@ class JudgePersona:
             macro_event_text = _macro_events[_today_str]
 
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
-Your job: analyze all signals and plan the SINGLE BEST action for {pair} over the NEXT 4-5 HOURS.
+Your job: analyze all signals and plan the SINGLE BEST action for {pair} over the NEXT 1.5-3 HOURS (tier-dependent — see HOLD TIME LIMITS below).
 STRATEGY: Per-pair medium-move targeting. TP targets are now 0.5-2.0% (pair-specific, based on 4H structure).
-Plan where price is heading in 4-5H, identify the optimal entry NOW, and set TP at the real structural level.
+Plan where price is heading WITHIN THE HOLD WINDOW, identify the optimal entry NOW, and set TP at the real structural level.
 Do NOT exit at 0.5% if the 4H structure supports 1.0-1.5% — let the trade run to the real target.
 
 === MARKET REGIME ===
@@ -3540,25 +3541,43 @@ Days remaining: {days_left}
 PnL: ${pnl:.0f} ({pnl_pct:+.1f}%)
 Available balance: ${balance:.0f}
 
-=== PER-PAIR STRATEGY GUIDE (V3.2.41) ===
+=== PER-PAIR STRATEGY GUIDE (V3.2.57) ===
 Use CHART STRUCTURE + PERSONA DATA + SENTIMENT MACRO to select the EPOCH STRATEGY below.
-Then plan the 4-5H move and set tp_price at the real structural level (NOT 0.5% by default).
+Then plan the move WITHIN YOUR TIER'S HOLD WINDOW (see HOLD TIME LIMITS) and set tp_price at the real structural level (NOT 0.5% by default).
+
+=== BLITZ MODE — FINAL 72H ===
+VELOCITY > PATIENCE. Competition ends in <72h. We need compounding cycles, not perfect positioning.
+
+PRIORITY ORDER: MOMENTUM_CROSS > CATALYST_DRIVE > CORRELATION_LAG > SUPPORT_SWEEP > RANGE_BOUNDARY > VWAP_REVERSION
+BETA BIAS: Prefer Tier 3 (SOL, ADA) for momentum. Only enter BTC/ETH if confidence >= 90%.
+STALE SIGNAL: If ADX < 20, return WAIT regardless of WHALE/FLOW signal. Flat markets waste our slot.
+RANGE/MEAN-REVERSION: RANGE_BOUNDARY and VWAP_REVERSION are slow strategies — only use if setup is perfect AND ADX < 15 AND FLOW confirms wall clearly. Otherwise WAIT.
+LIVE PRICES: Use CHART DATA provided in context for all price levels. Ignore any hardcoded example prices below.
+
+=== HOLD TIME LIMITS (V3.2.57 — HARD DAEMON LIMITS) ===
+The daemon WILL auto-close positions at these times regardless of your analysis:
+- Tier 1 (BTC, ETH): MAX 3H total | early exit at 1H if losing > -1%
+- Tier 2 (BNB, LTC, XRP): MAX 2H total | early exit at 45M if losing > -1%
+- Tier 3 (SOL, ADA): MAX 1.5H total | early exit at 30M if losing > -1%
+- Velocity exit: ANY pair closed at 40M if peak PnL never reached +0.15%
+Your TP target MUST be reachable within these windows. Do NOT pick a TP that requires 4+ hours of drift.
+If the nearest structural level is too far for the hold window, return WAIT — do not force a trade.
+=================================
 
 Strategies and conditions:
 - VWAP_REVERSION ({pair}=BTC): Price deviated >1% from VWAP/fair value. Target mean reversion.
-  BTC context: $66,985-$68,786 range. If BTC near range extreme + FLOW reversion pressure → LONG at bottom / SHORT at top.
+  [Use current chart data — see CHART CONTEXT section above]
 - SUPPORT_SWEEP ({pair}=ETH): False break below support then reclaim. Target recovery bounce.
-  ETH context: $1,935 key support, $2,000 psychological ceiling. Look for sweep below $1,935 then quick reclaim.
+  [Use current chart data — see CHART CONTEXT section above]
 - MOMENTUM_CROSS ({pair}=SOL,BNB): MACD bullish/bearish cross below/above zero. Target trend momentum.
-  SOL context: High beta $82-$85. $77-$78 demand zone. MACD cross below zero = LONG with 1.5-2% target.
+  [Use current chart data — see CHART CONTEXT section above]
   BNB context: CATALYST-DRIVEN only. Without Launchpool/Launchpad news, BNB should be WAIT.
 - RANGE_BOUNDARY ({pair}=XRP,LTC): Price at tested range boundary. Target continuation across range.
-  XRP context: $1.41-$1.51 range. Buy at $1.41-$1.43 (200 EMA support), sell at $1.445-$1.48 zone.
-  LTC context: Conservative 1H S/R. $52.50 support → $53.65 target. Slow but reliable.
+  [Use current chart data — see CHART CONTEXT section above]
 - CATALYST_DRIVE ({pair}=any): Active news catalyst. Target momentum continuation.
   Condition: SENTIMENT reports specific catalyst + FLOW volume spike >200% average → ride the move.
 - CORRELATION_LAG ({pair}=ADA): BTC made strong >0.5% candle. Enter ADA immediately.
-  ADA context: $0.27-$0.28 range. Enter within 30-90s of BTC breakout candle for correlation-lag fill.
+  [Use current chart data — see CHART CONTEXT section above]
 
 EPOCH STRATEGY SELECTION — match hard data to pattern:
 - If FLOW taker-buy ratio >65% + SENTIMENT RISK_ON → VWAP_REVERSION or MOMENTUM_CROSS
@@ -3594,14 +3613,15 @@ HOW TO DECIDE:
 - If WHALE and FLOW directly contradict (opposite directions, both >60%): WAIT.
 - If neither co-primary signal exceeds 60%: WAIT. No clear edge.
 
-TP TARGET (V3.2.41 — 4-5H STRUCTURAL TARGET, NOT 0.5% DEFAULT):
-Look at CHART STRUCTURE (4H/Daily levels) to plan where price will be in 4-5 HOURS.
+TP TARGET (V3.2.57 — STRUCTURAL TARGET WITHIN HOLD WINDOW, NOT 0.5% DEFAULT):
+Look at CHART STRUCTURE (4H/Daily levels) to plan where price will be WITHIN YOUR HOLD WINDOW:
+  T1 (BTC/ETH): up to 3H | T2 (BNB/LTC/XRP): up to 2H | T3 (SOL/ADA): up to 1.5H
 1. 4H structural S/R = primary reference (code now fetches 4H anchors separately — use those levels).
 2. Daily S/R = secondary for BTC/ETH/SOL (larger trend).
 3. FLOW walls = real-time confirmation of where resting orders cluster (ephemeral, secondary).
-Return "tp_price" = the 4H structural level you expect price to reach in the next 4-5H. NOT defaulting to 0.5%.
+Return "tp_price" = the structural level you expect price to reach WITHIN the hold window. NOT defaulting to 0.5%.
 Per-pair ceilings (applied by code after you return tp_price): BTC/ETH 1.5%, SOL 2.0%, XRP/BNB/LTC/ADA 1.0%.
-If no clear 4H structure visible, omit tp_price — code will use the chart SR walk result (NOT a 0.5% default).
+If no clear structure reachable within hold window, omit tp_price — code will use the chart SR walk result (NOT a 0.5% default).
 
 === HISTORICAL PAIR PERFORMANCE (from RL training data) ===
 {rl_performance}
@@ -3620,11 +3640,11 @@ TRADE HISTORY CONTEXT:
 {trade_history_summary}
 
 IMPORTANT: Say LONG or SHORT if WHALE + FLOW support it. WAIT is valid when signals are weak or contradictory.
-3 days left in competition — larger, well-planned trades beat 0.5% exits. Use the per-pair epoch strategy.
+<72 hours left in competition — BLITZ MODE. Larger, well-planned trades beat 0.5% exits. Use the per-pair epoch strategy. TP must be reachable within hold window.
 SHORT ASYMMETRY: In EXTREME FEAR (F&G < 15), require 2+ co-primary signals confirming SHORT before taking it (bounce risk is real). Otherwise treat LONG and SHORT equally — both directions are valid entries.
 
 Respond with JSON ONLY (no markdown, no backticks):
-{{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences: state epoch strategy selected, why WHALE+FLOW support it, and what 4-5H target you see", "tp_price": null or a number (4H structural level you expect price to reach — NOT defaulting to 0.5%)}}"""
+{{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences: state epoch strategy selected, why WHALE+FLOW support it, and what target you see within the hold window (T1=3H, T2=2H, T3=1.5H)", "tp_price": null or a number (structural level reachable within hold window — NOT defaulting to 0.5%)}}"""
 
         try:
             import time as _jtime2
