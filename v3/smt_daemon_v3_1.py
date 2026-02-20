@@ -949,6 +949,17 @@ def check_trading_signals():
                     _cycle_signals += 1
                     _cycle_above_80 += 1
 
+                # V3.2.59: SHORTS DISABLED — LONGs only.
+                # Shorts underperform in current market regime (extreme fear = bounce territory).
+                # TP/SL logic is symmetric but dip-bounce strategy fundamentally favors LONGs.
+                # Re-enable post-competition if market regime shifts to greed/euphoria.
+                if signal == "SHORT":
+                    logger.info(f"    -> SHORT disabled (LONG-only mode)")
+                    signal = "WAIT"
+                    confidence = 0
+                    decision["decision"] = "WAIT"
+                    decision["confidence"] = 0
+
                 # V3.1.97: REMOVED BTC fear shield, consecutive loss block.
                 # Ensemble already sees F&G + regime. 80% floor + chop filter are the only gates.
 

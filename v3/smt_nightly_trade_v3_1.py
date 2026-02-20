@@ -3627,11 +3627,16 @@ class JudgePersona:
             print(f"  [JUDGE] Event detection error: {_evt_err} — continuing without event data")
             macro_event_text = "Event detection unavailable."
 
+        _hold_windows = {"BTC": "3H", "ETH": "3H", "BNB": "2H", "LTC": "2H", "XRP": "2H", "SOL": "1.5H", "ADA": "1.5H"}
+        _tp_ceilings = {"BTC": "1.5%", "ETH": "1.5%", "BNB": "1.0%", "LTC": "1.0%", "XRP": "1.0%", "SOL": "2.0%", "ADA": "1.0%"}
+        _pair_hold = _hold_windows.get(pair, "2H")
+        _pair_tp_cap = _tp_ceilings.get(pair, "1.0%")
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
-Your job: analyze all signals and plan the SINGLE BEST action for {pair} over the NEXT 1.5-3 HOURS (tier-dependent — see HOLD TIME LIMITS below).
-STRATEGY: Per-pair medium-move targeting. TP targets are now 0.5-2.0% (pair-specific, based on 4H structure).
-Plan where price is heading WITHIN THE HOLD WINDOW, identify the optimal entry NOW, and set TP at the real structural level.
-Do NOT exit at 0.5% if the 4H structure supports 1.0-1.5% — let the trade run to the real target.
+LONGS ONLY — shorts are disabled.
+Your job: analyze all signals and decide the SINGLE BEST action for {pair} over the NEXT {_pair_hold} (hard limit — daemon kills the trade at this time).
+TP CEILING for {pair}: {_pair_tp_cap} (code enforces this — never target higher). Chart SR is primary; ceiling is a hard max.
+Plan where price is heading WITHIN {_pair_hold}, identify the optimal LONG entry NOW, and set TP at the real structural level up to {_pair_tp_cap}.
+CONFIDENCE FLOOR: Your output confidence MUST be >= 0.85 to trade. Below 85% = WAIT. 85-89% = standard sizing. 90%+ = maximum sizing.
 
 === MARKET REGIME ===
 Regime: {regime.get('regime', 'NEUTRAL')}
@@ -3703,18 +3708,17 @@ Available balance: ${balance:.0f}
 Use CHART STRUCTURE + PERSONA DATA + SENTIMENT MACRO to select the EPOCH STRATEGY below.
 Then plan the move WITHIN YOUR TIER'S HOLD WINDOW (see HOLD TIME LIMITS) and set tp_price at the real structural level (NOT 0.5% by default).
 
-=== BLITZ MODE — FINAL 72H ===
-VELOCITY > PATIENCE. Competition ends in <72h. We need compounding cycles, not perfect positioning.
+=== BLITZ MODE — FINAL 72H REMAINING ===
+EXECUTE NOW. <3 days left in competition. VELOCITY > PATIENCE. Every cycle without a trade is wasted capital.
+LONGS ONLY — shorts are disabled. Focus on dip-bounce LONG entries.
 
 PRIORITY ORDER: MOMENTUM_CROSS > CATALYST_DRIVE > CORRELATION_LAG > SUPPORT_SWEEP > RANGE_BOUNDARY > VWAP_REVERSION
 BETA BIAS: Prefer Tier 3 (SOL, ADA) for momentum — bigger moves in shorter time. BTC/ETH are fine at 85%+ if 3+ personas agree.
-LOW ADX NOTE (V3.2.59): ADX < 20 means range-bound — this is WHERE our dip-bounce strategy works best.
-  Do NOT force WAIT on low ADX. If multiple personas show accumulation in a range, that IS the dip entry.
-  Only WAIT if all personas are weak/neutral (<50%) in a low-ADX environment.
-RANGE/MEAN-REVERSION: RANGE_BOUNDARY and VWAP_REVERSION work well in low-ADX environments. Use if FLOW confirms wall.
+LOW ADX (V3.2.59): ADX < 20 = range-bound — dip-bounce works well here IF 2+ personas agree at 55%+ confidence each.
+  If all personas are below 50% confidence, WAIT regardless of ADX.
+  RANGE_BOUNDARY and VWAP_REVERSION strategies work in low-ADX — use if FLOW confirms wall.
 EXTREME FEAR DIP (V3.2.59): F&G < 15 + FLOW showing heavy bid accumulation = TEXTBOOK dip setup.
-  This is exactly what the bot was designed for. Lean INTO these setups, not away from them.
-  FLOW bid accumulation in extreme fear = smart money positioning for bounce. Trust it.
+  This is exactly what the bot was designed for. FLOW bid accumulation + extreme fear = smart money positioning for bounce. Trust it.
 LIVE PRICES: Use CHART DATA provided in context for all price levels. Ignore any hardcoded example prices below.
 
 === HOLD TIME LIMITS (V3.2.57 — HARD DAEMON LIMITS) ===
@@ -3809,23 +3813,25 @@ If no clear structure reachable within hold window, omit tp_price — code will 
 USE THIS AS CONTEXT ONLY — not a veto. Poor historical win rate = note it in reasoning, but trust the majority of personas.
 If a pair has >15% win rate, it has proven itself — trust stronger signals on it.
 
-FEAR & GREED (V3.2.59 — DIP-BOUNCE STRATEGY):
-- F&G < 15 (EXTREME FEAR): This is DIP TERRITORY. If FLOW shows bid accumulation (taker-buy ratio rising, bid walls building), this is the textbook contrarian entry this bot was built for. Favor LONG if FLOW confirms buying pressure. Allow SHORT only if WHALE+FLOW+SENTIMENT ALL confirm bearish with high confidence (>75% each).
-- F&G < 30 (FEAR): Favor LONG. Dip-bounce opportunities are frequent here. SHORT needs strong multi-persona confirmation.
-- F&G > 85 (EXTREME GREED): Slightly favor SHORT (contrarian top possible), but allow LONG if WHALE+FLOW+SENTIMENT confirm bullish.
-- F&G > 70 (GREED): Mild SHORT bias. LONG is fine if signals confirm.
-- F&G 30-70 (NEUTRAL ZONE): Use WHALE+FLOW signals normally, no directional bias.
-IMPORTANT: EXTREME FEAR + FLOW accumulation = our highest-conviction setup. Lean into it.
+FEAR & GREED (V3.2.59 — DIP-BOUNCE LONG-ONLY):
+- F&G < 15 (EXTREME FEAR): DIP TERRITORY — our highest-conviction LONG setup. FLOW bid accumulation + extreme fear = smart money positioning for bounce. Lean into it.
+- F&G < 30 (FEAR): Favor LONG. Dip-bounce opportunities are frequent here.
+- F&G 30-70 (NEUTRAL): Use WHALE+FLOW+TECHNICAL signals normally.
+- F&G > 70 (GREED): Be cautious — only LONG if 3+ personas strongly agree (risk of correction).
+- F&G > 85 (EXTREME GREED): WAIT preferred — tops are dangerous for LONGs. Only trade if FLOW+WHALE confirm continued momentum.
 
 TRADE HISTORY CONTEXT:
 {trade_history_summary}
 
-IMPORTANT: Count ALL 4 personas. If 3+ agree on direction, TRADE. WAIT only when signals genuinely conflict (no majority).
-<72 hours left in competition — BLITZ MODE. Every cycle without a trade is wasted capital rotation. If the setup is there, TAKE IT.
-SHORT ASYMMETRY: In EXTREME FEAR (F&G < 15), require 3+ personas confirming SHORT with high confidence (bounce risk is real). For LONG, 2 strong personas (65%+ each) + extreme fear bias can justify 85%+ confidence — this IS the dip strategy. IMPORTANT: Your confidence output MUST be >= 0.85 to trade. Below 85% = WAIT regardless of direction or F&G.
+DECISION RULES (V3.2.59 — FINAL):
+1. LONGS ONLY — never return SHORT (shorts are disabled).
+2. Count ALL 4 personas (WHALE, SENTIMENT, FLOW, TECHNICAL). If 3+ agree LONG at 55%+ each, TRADE. 2 strong personas (65%+ each) + extreme fear bias can also justify 85%+ confidence.
+3. Confidence MUST be >= 0.85 to trade. Below 85% = return WAIT. 85-89% = standard sizing. 90%+ = maximum sizing.
+4. If signals genuinely conflict (no majority direction), return WAIT — do not force a trade.
+5. BLITZ MODE: <3 days left. Every cycle without a trade is wasted capital. If the setup is there, TAKE IT.
 
 Respond with JSON ONLY (no markdown, no backticks):
-{{"decision": "LONG" or "SHORT" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences: state how many personas agree, which epoch strategy fits, and what target you see within the hold window (T1=3H, T2=2H, T3=1.5H)", "tp_price": null or a number (structural level reachable within hold window — NOT defaulting to 0.5%)}}"""
+{{"decision": "LONG" or "WAIT", "confidence": 0.0-0.95, "reasoning": "2-3 sentences: state how many personas agree, which strategy fits, and what target you see within {_pair_hold}", "tp_price": null or a number (structural level reachable within {_pair_hold}, capped at {_pair_tp_cap})}}"""
 
         try:
             import time as _jtime2
@@ -3861,11 +3867,9 @@ Respond with JSON ONLY (no markdown, no backticks):
             confidence = min(0.95, max(0.0, float(raw_conf))) if raw_conf is not None else 0.0
             reasoning = data.get("reasoning") or "Gemini Judge decision"
             
-            # V3.2.37: ANTI-WAIT removed — trust Gemini Judge. WAIT means WAIT.
-            raw_tp = data.get("tp_pct")
-            tp_pct = float(raw_tp) if raw_tp is not None else tier_config["tp_pct"]
-            raw_sl = data.get("sl_pct")
-            sl_pct = float(raw_sl) if raw_sl is not None else tier_config["sl_pct"]
+            # V3.2.59: tp_pct/sl_pct for logging only — actual TP/SL comes from chart SR + Gemini tp_price.
+            tp_pct = tier_config["tp_pct"]
+            sl_pct = tier_config["sl_pct"]
 
             # V3.2.16: Parse Gemini's structural tp_price (actual price target from chart context)
             gemini_tp_price = None
@@ -3880,9 +3884,7 @@ Respond with JSON ONLY (no markdown, no backticks):
                 except (ValueError, TypeError):
                     gemini_tp_price = None
 
-            # Clamp TP/SL to reasonable ranges (wider max for vol-adjusted)
-            tp_pct = max(1.5, min(10.0, tp_pct))
-            sl_pct = max(1.5, min(7.0, sl_pct))
+            # tp_pct/sl_pct from tier_config are already within reasonable ranges — no clamping needed.
 
             print(f"  [JUDGE] Gemini: {decision} ({confidence:.0%})")
             print(f"  [JUDGE] Reasoning: {reasoning}")
