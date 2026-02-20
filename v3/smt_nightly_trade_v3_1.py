@@ -1495,16 +1495,6 @@ def get_chart_context(symbol: str, tier: int = 1) -> str:
         _r_intra = requests.get(_url_intra, timeout=10)
         _candles_intra = _r_intra.json()
 
-        # V3.2.61 fix: if 30m fails (unsupported?), fall back to 15m
-        if not isinstance(_candles_intra, list) or len(_candles_intra) < 4:
-            if _gran == "30m":
-                print(f"  [CHART-CTX] {pair_label}: 30m not supported, falling back to 15m")
-                _gran = "15m"
-                _limit = 49  # 48 complete candles = 12h
-                _url_intra = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity={_gran}&limit={_limit}"
-                _r_intra = requests.get(_url_intra, timeout=10)
-                _candles_intra = _r_intra.json()
-
         if isinstance(_candles_intra, list) and len(_candles_intra) >= 4:
             # Skip [0] (current partial), use [1:] = complete candles (newest first from API)
             _complete = _candles_intra[1:]
