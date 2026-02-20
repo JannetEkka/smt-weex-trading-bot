@@ -6,36 +6,38 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.49** — all production code is in `v3/`.
+**Current version: V3.2.56** — all production code is in `v3/`.
 
 ## Architecture
 
 ```
 v3/                              # PRIMARY production folder
-├── smt_daemon_v3_1.py          # 24/7 daemon loop (~3620 lines)
-│   - check_trading_signals()    → Signal check cycle (every 10min)   [line 587]
-│   - monitor_positions()        → Position monitor cycle (every 2min) [line 1578]
-│   - regime_aware_exit_check()  → Regime-based exit logic             [line 3239]
-│   - gemini_portfolio_review()  → Gemini AI portfolio optimization    [line 2213] DISABLED V3.2.17
-│   - sync_tracker_with_weex()   → Reconcile local state vs WEEX      [line 2852]
-│   - quick_cleanup_check()      → Orphan order cleanup (every 30s)    [line 2714]
-│   - log_health()               → Health check (every 60s)            [line 2820]
-│   - _check_opposite_swap_gates() → V3.1.100 opposite swap TP gate   [line 2041]
-│   - _execute_deferred_flips()  → Deferred flip queue execution       [line 2098]
-│   - cleanup_dust_positions()   → Remove near-zero positions          [line 2179]
-│   - resolve_opposite_sides()   → Close older side when both exist    [line 3025]
-│   - get_market_regime_for_exit() → Market regime detection           [line 3163] DISABLED V3.2.17
-│   - _is_macro_blackout()       → V3.2.48 macro event blackout gate  [line 431]
-│   - _is_weekend_liquidity_mode() → V3.2.48 weekend/holiday filter   [line 460]
+├── smt_daemon_v3_1.py          # 24/7 daemon loop (~3660 lines)
+│   - check_trading_signals()    → Signal check cycle (every 10min)   [line 591]
+│   - monitor_positions()        → Position monitor cycle (every 2min) [line 1680]
+│   - regime_aware_exit_check()  → Regime-based exit logic             [line 3384]
+│   - gemini_portfolio_review()  → Gemini AI portfolio optimization    [line 2353] DISABLED V3.2.17
+│   - sync_tracker_with_weex()   → Reconcile local state vs WEEX      [line 2997]
+│   - quick_cleanup_check()      → Orphan order cleanup (every 30s)    [line 2854]
+│   - log_health()               → Health check (every 60s)            [line 2965]
+│   - _check_opposite_swap_gates() → V3.1.100 opposite swap TP gate   [line 2169]
+│   - _execute_deferred_flips()  → Deferred flip queue execution       [line 2238]
+│   - cleanup_dust_positions()   → Remove near-zero positions          [line 2319]
+│   - resolve_opposite_sides()   → Close older side when both exist    [line 3170]
+│   - get_market_regime_for_exit() → Market regime detection           [line 3308] DISABLED V3.2.17
+│   - _is_macro_blackout()       → V3.2.48 macro event blackout gate  [line 435]
+│   - _is_weekend_liquidity_mode() → V3.2.48 weekend/holiday filter   [line 464]
+│   - _move_sl_to_breakeven()    → V3.2.46 breakeven SL placement     [line 1621]
 │   - fill_rl_outcomes_inline()  → RL training data fill               [line 61]
 │
-├── smt_nightly_trade_v3_1.py   # Core trading logic (~5210 lines)
-│   - MultiPersonaAnalyzer       → 5-persona ensemble                  [line 3940]
-│   - place_order()              → WEEX order placement                [line 4109]
-│   - close_position_manually()  → Close + cancel orphan triggers      [line 5017]
-│   - get_recent_close_order_id() → Query WEEX for last filled close orderId [line 4876]
-│   - cancel_all_orders_for_symbol() → Kill all orders (regular + plan)[line 4831]
-│   - upload_ai_log_to_weex()    → Competition logging (REQUIRED)      [line 4157]
+├── smt_nightly_trade_v3_1.py   # Core trading logic (~5250 lines)
+│   - MultiPersonaAnalyzer       → 5-persona ensemble                  [line 3951]
+│   - place_order()              → WEEX order placement                [line 4120]
+│   - close_position_manually()  → Close + cancel orphan triggers      [line 5059]
+│   - get_recent_close_order_id() → Query WEEX for last filled close orderId [line 4893]
+│   - _fetch_plan_order_ids()    → Fetch TP/SL plan IDs at open (V3.2.55) [line 4989]
+│   - cancel_all_orders_for_symbol() → Kill all orders (regular + plan)[line 4848]
+│   - upload_ai_log_to_weex()    → Competition logging (REQUIRED)      [line 4168]
 │   - get_open_positions()       → WEEX positions API                  [line 2074]
 │   - get_balance()              → WEEX balance API                    [line 2017]
 │   - TRADING_PAIRS              → 7 pairs with tier/symbol config     [line 1911]
@@ -43,7 +45,7 @@ v3/                              # PRIMARY production folder
 │   - find_chart_based_tp_sl()   → Support/resistance TP/SL            [line 1105]
 │   - detect_sideways_market()   → Chop filter (logging only, V3.2.18) [line 672]
 │   - get_chart_context()        → Multi-TF Gemini chart context        [line 1352]
-│   - TradeTracker               → Local state management               [line 4554]
+│   - TradeTracker               → Local state management               [line 4569]
 │
 ├── watchdog.sh                 # Process watchdog — start this, NOT the daemon directly
 │                               # Restarts daemon on crash; hang detection (15min log staleness)
@@ -119,6 +121,7 @@ SIGNAL_CHECK_INTERVAL = 600          # 10min
 POSITION_MONITOR_INTERVAL = 120      # 2min
 MAX_TOTAL_POSITIONS = 1              # V3.2.46: 1-slot cross-margin defense — full account as buffer
 # CONFIDENCE_EXTRA_SLOT = 0.90      # V3.2.46: DISABLED — was V3.2.39 90%+ extra slot; now 1-slot hard cap
+TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected from 0.0006); 3.2% margin round-trip at 20x
 
 # Slot system (V3.2.46: 1-slot cross-margin strategy)
 # Pairs: BTC, ETH, BNB, LTC, XRP, SOL, ADA (7 pairs, BTC/ETH/BNB re-added V3.2.16)
@@ -152,7 +155,7 @@ MAX_TOTAL_POSITIONS = 1              # V3.2.46: 1-slot cross-margin defense — 
 #   force_stop: 1.0   → 60min+ cooldown after force stop
 #   early_exit: 0.5   → 30-60min cooldown after early exit
 #   tp_hit: 0.0       → immediate re-entry OK (trend confirmed)
-#   max_hold/profit_lock: 0.0  → no cooldown
+#   max_hold/profit_lock/peak_fade: 0.0  → no cooldown
 # Cross margin = shared collateral — revenge trading is account-ending.
 
 # TP/SL bounds (V3.2.41: per-pair ceiling + MAX_SL + 4H anchor; V3.2.46: SL cap instead of discard)
@@ -181,6 +184,24 @@ MAX_TOTAL_POSITIONS = 1              # V3.2.46: 1-slot cross-margin defense — 
 #   4H anchors can produce wide SLs; 1.5% = 30% margin loss at 20x (survivable)
 #   Hard liquidation at 20x requires ~4.5% adverse move; 1.5% is well clear
 
+# Breakeven SL + peak-fade (V3.2.46/V3.2.54)
+# BREAKEVEN_TRIGGER_PCT = 0.4   # Move SL to entry when trade reaches +0.4% profit
+#   Protects principal once a trade is in profit. Stored per-trade: sl_moved_to_breakeven=True
+# Peak-fade soft stop (fires ONLY when SL not yet at breakeven — mutually exclusive with BE-SL):
+# PEAK_FADE_MIN_PEAK   = {1: 0.30, 2: 0.45, 3: 0.45}   # Min peak% per tier to activate fade
+# PEAK_FADE_TRIGGER_PCT = {1: 0.15, 2: 0.25, 3: 0.25}   # Drop from peak to trigger soft exit
+#   T1 (BTC/ETH): tighter (majors have less wick noise). T2/T3 (altcoins): 2× breathing room.
+#   exit_reason "peak_fade_T{n}" → zero cooldown (profit was taken).
+
+# Emergency flip (V3.2.51)
+# EMERGENCY_FLIP_CONFIDENCE = 0.90  # At 90%+ opposite confidence, bypass the 20-min age gate
+#   TP proximity gate (>= 30% toward TP) is STILL enforced — never abandon a nearly-won trade.
+
+# Plan order IDs stored at open (V3.2.50/V3.2.55)
+# _fetch_plan_order_ids() fetches tp_plan_order_id/sl_plan_order_id immediately after placement.
+#   Uses 2s initial sleep + 2 retries (2s apart) to handle WEEX registration lag.
+#   Stored in trade state → used deterministically by daemon for AI log upload (no guesswork).
+
 # Chop filter (V3.2.18: NO PENALTIES — logging only)
 # detect_sideways_market(): ADX(14) + Bollinger Bands(40) on 5m candles
 # Chop data still computed and logged for diagnostics; no score penalties applied
@@ -190,16 +211,26 @@ MAX_TOTAL_POSITIONS = 1              # V3.2.46: 1-slot cross-margin defense — 
 # OPPOSITE_TP_PROGRESS_BLOCK = 30 # Block flip if position is >= 30% toward TP
 # DEFERRED_FLIP_MAX_AGE_MIN = 30  # Deferred signal expires after 30 minutes
 # When blocked, signal is queued. After old position closes, deferred flip auto-executes.
+# V3.2.51: Emergency flip bypasses age gate at 90%+ — TP proximity gate always preserved.
 
-# Macro defense (V3.2.48)
+# Macro defense (V3.2.48/V3.2.56)
 # MACRO_BLACKOUT_WINDOWS: list of (start_utc, end_utc, label) — skip ALL signal cycles in window
 #   Example: ("2026-02-20 13:15", "2026-02-20 14:00", "US Core PCE Price Index")
+# V3.2.56 BLACKOUT EXIT: monitor_positions() closes UNPROFITABLE positions when blackout activates.
+#   Profitable positions ride with existing SL — no forced exit if in profit.
 # Weekend liquidity mode: Sat/Sun → restrict to WEEKEND_ALLOWED_PAIRS = {BTC, ETH, SOL}
 #   Altcoins (BNB, LTC, XRP, ADA) have 20-25% lower weekend volume → wider spreads, fakeouts
 # Holiday thin liquidity: HOLIDAY_THIN_LIQUIDITY dict — bank holidays extend thin-book conditions
 #   before 12 UTC only (US session restores liquidity)
-# Funding hold-cost: per-pair funding rate × 20x = margin drag, passed to Judge as context
+# Funding hold-cost (V3.2.56 direction-aware): per-pair funding rate × 20x = margin drag
+#   Judge told "paying" or "receiving" based on position direction vs funding rate sign.
+#   Negative funding + LONG = bot RECEIVES; positive funding + LONG = bot PAYS. Passed as context.
 # Macro event context: date-sensitive intelligence (PCE, token unlocks, holidays) fed to Judge
+
+# Pre-cycle exit sweep (V3.2.52)
+# max_hold/force_exit/early_exit checked at START of check_trading_signals() BEFORE 7-pair analysis.
+# Positions closed with full AI log — fixes 6-min blind spot where expired trades weren't closed
+# until AFTER the entire Gemini analysis loop completed.
 
 # Signal persistence (V3.2.6)
 # signal_history tracked per-pair (persists across daemon restarts via trade_state JSON)
@@ -221,6 +252,7 @@ MAX_TOTAL_POSITIONS = 1              # V3.2.46: 1-slot cross-margin defense — 
 | SOL  | cmt_solusdt  | 3 | 3.0% | 1.8% | 1.5h | 30m  | Yes (V3.2.18) |
 | ADA  | cmt_adausdt  | 3 | 3.0% | 1.8% | 1.5h | 30m  | Yes (V3.2.18) |
 
+V3.2.56: **Macro blackout exit + funding rate direction fix** — current version.
 V3.2.49: **Final stretch hold times** — aggressive rotation for last 72h of competition.
 Previously: T1=24h/6h, T2=12h/4h, T3=8h/3h. Single-slot mode means stale positions block all capital.
 DOGE removed V3.2.11 (erratic SL/orphan behavior). BTC/ETH/BNB re-added V3.2.16.
@@ -237,9 +269,10 @@ Key endpoints:
 - `GET /capi/v2/account/allPosition` — open positions
 - `POST /capi/v2/order/placeOrder` — place order (type: 1=open long, 2=open short, 3=close long, 4=close short)
 - `POST /capi/v2/order/cancel` — cancel regular order
-- `GET /capi/v2/order/plan_orders` — list trigger orders (TP/SL)
+- `GET /capi/v2/order/plan_orders` — list trigger orders (TP/SL); used by `_fetch_plan_order_ids()`
 - `POST /capi/v2/order/cancel_plan` — cancel trigger order
 - `POST /capi/v2/order/uploadAiLog` — upload AI decision log
+- `GET /capi/v2/order/history` — filled order history; used by `get_recent_close_order_id()`
 
 ## 5-Persona System
 
@@ -247,7 +280,7 @@ Key endpoints:
 2. **SENTIMENT** — Gemini 2.5 Flash with Search Grounding. Macro news analyst role (V3.2.41): catalysts, macro_bias, volatility_risk, volatility_event, pair_specific_news — qualitative only, no price targets. V3.2.45: dynamic date injection in search queries + regex JSON parser immune to grounding citation injection.
 3. **FLOW** — WEEX order book + trades. Taker ratios, bid/ask depth, funding rates. V3.2.20: order book wall detection (depth limit=200) — nearest significant ask/bid wall passed to Judge as context.
 4. **TECHNICAL** — RSI(14), SMA 20/50, 5-candle momentum on 1h candles.
-5. **JUDGE** — Aggregates all votes with regime-aware weights. Final LONG/SHORT/WAIT. V3.2.16: receives Gemini chart context (1D + 4H structural levels). V3.2.17: receives signal cycle memory + live chop microstructure. V3.2.20: receives FLOW order book wall prices as additional TP context. V3.2.37: ANTI-WAIT removed — if Judge returns WAIT, it is WAIT with no overrides. V3.2.48: receives funding hold-cost (rate × 20x = margin drag) and macro event context (date-sensitive intelligence). V3.2.45: regex JSON extractor immune to grounding citation markers.
+5. **JUDGE** — Aggregates all votes with regime-aware weights. Final LONG/SHORT/WAIT. V3.2.16: receives Gemini chart context (1D + 4H structural levels). V3.2.17: receives signal cycle memory + live chop microstructure. V3.2.20: receives FLOW order book wall prices as additional TP context. V3.2.37: ANTI-WAIT removed — if Judge returns WAIT, it is WAIT with no overrides. V3.2.45: regex JSON extractor immune to grounding citation markers. V3.2.48: receives funding hold-cost and macro event context. V3.2.56: funding direction-aware — told "paying" or "receiving" based on position side vs rate sign (fixes bonus mislabeled as drag for LONGs on negative funding).
 
 Post-judge filters (V3.2.18): Freshness filter, Regime veto, Consecutive loss block.
 Chop filter kept for **logging only** — no score penalties applied as of V3.2.18.
@@ -337,20 +370,48 @@ python3 v3/cryptoracle_client.py
 15. **Gemini citation injection (V3.2.45)** — Gemini Search Grounding can inject `[1][2]` citation markers into JSON responses, breaking `json.loads()`. The regex JSON parser (`re.search(r'\{.*\}', re.DOTALL)`) handles this. Do not revert to naive JSON parsing.
 16. **Macro blackout bypass (V3.2.48)** — `_is_macro_blackout()` skips the entire signal cycle during high-impact data releases. Do not add "check anyway" logic — macro volatility can spike 1-3% in seconds, invalidating any signal computed pre-release.
 17. **Weekend thin liquidity (V3.2.48)** — Altcoins (BNB, LTC, XRP, ADA) restricted during Sat/Sun + bank holidays. Do not override — 20-25% lower volume means wider spreads and fakeout wicks.
+18. **Breakeven SL + peak-fade mutual exclusion (V3.2.46/V3.2.54)** — `_move_sl_to_breakeven()` fires at +0.4% gain. Peak-fade fires ONLY when `sl_moved_to_breakeven=False` — the two are mutually exclusive. Once BE-SL is placed, WEEX's SL handles the downside; peak-fade is disabled (gating: `not trade.get("sl_moved_to_breakeven", False)`). Do not remove this gate.
+19. **Emergency flip TP proximity gate preserved (V3.2.51)** — At 90%+ opposite confidence, the 20-min age gate is bypassed (EMERGENCY_FLIP_CONFIDENCE). The 30% TP proximity gate is ALWAYS enforced regardless of confidence — abandoning a 30%+ toward-TP trade costs real fees and foregone profit. Do not remove the TP proximity check for emergency flips.
+20. **Plan order ID registration lag (V3.2.55)** — WEEX registers TP/SL plan orders with a brief lag after placement. `_fetch_plan_order_ids()` uses 2s initial sleep + 2 retries (2s apart) on 404/empty response. Do not remove retries — the fallback `stored-ID=None` was eliminated in V3.2.55 to prevent AI log uploads with missing order IDs.
+21. **Pre-cycle exit sweep order (V3.2.52)** — Expired positions (max_hold/force_exit/early_exit) are closed at the START of `check_trading_signals()`, BEFORE the 7-pair Gemini analysis loop runs. Do not move this after the analysis — it fixes the 6-min blind spot where expired positions weren't closed until after a full analysis cycle.
+22. **Funding rate direction (V3.2.56)** — Judge prompt now specifies whether the bot is "paying" or "receiving" funding for each position. Negative funding + LONG = bot receives funding (a bonus, not a drag). Positive funding + LONG = bot pays. Was previously always labeled as "drag" regardless of direction, causing incorrect Judge reasoning on favorable funding positions.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.49. Next change should be V3.2.50.
+Current: V3.2.56. Next change should be V3.2.57.
 
 **Recent version history:**
-- V3.2.49: (**CURRENT**) Final stretch — aggressive hold times for last 72h of competition.
+- V3.2.56: (**CURRENT**) Macro blackout exit + funding rate direction fix.
+  `monitor_positions()` now closes UNPROFITABLE positions when a macro blackout window activates mid-position.
+  Profitable positions ride with their existing SL — no forced exit if in profit.
+  Full AI log sent with order_id on blackout-triggered closes.
+  Funding rate direction-aware: Judge now told "paying" or "receiving" based on position side vs rate sign.
+  Fixes LONG on negative funding being labeled as "drag" (it's actually a bonus).
+  `PIPELINE_VERSION = "SMT-v3.2.56-BlackoutClose-FundingFix"`.
+- V3.2.55: `_fetch_plan_order_ids()` retry loop — 2s initial sleep + up to 2 retries (2s apart) on HTTP 404 or empty plan-orders response.
+  Eliminates `stored-ID=None` fallback caused by WEEX TP/SL registration lag after placement.
+- V3.2.54: Tiered peak-fade soft stop — per-tier thresholds to match liquidity profile.
+  T1 (BTC/ETH): `PEAK_FADE_MIN_PEAK=0.30%`, `PEAK_FADE_TRIGGER=0.15%`.
+  T2/T3 (altcoins): `PEAK_FADE_MIN_PEAK=0.45%`, `PEAK_FADE_TRIGGER=0.25%`.
+  Altcoin wick noise requires 2× breathing room vs majors. `exit_reason` includes `peak_fade_T{n}` with tier+thresholds.
+- V3.2.53: Peak-fade soft stop (initial version) — `PEAK_FADE_MIN_PEAK=0.20%`, `PEAK_FADE_TRIGGER=0.12%`.
+  Fires when peak gain >= 0.20% and current <= peak - 0.12%. `peak_fade` exit reason = zero cooldown.
+  Only fires when BE-SL not yet placed (mutually exclusive with breakeven SL).
+- V3.2.52: Pre-cycle exit sweep — max_hold/force_exit/early_exit checked at START of `check_trading_signals()`.
+  Positions closed with full AI log BEFORE the 7-pair Gemini analysis loop. Fixes 6-min blind spot.
+- V3.2.51: Emergency flip — `EMERGENCY_FLIP_CONFIDENCE=0.90`. At 90%+ opposite confidence, the 20-min age gate is bypassed.
+  TP proximity gate (>= 30% toward TP) preserved regardless of confidence.
+  `EMERGENCY FLIP` tag in logs + AI log.
+- V3.2.50: `TAKER_FEE_RATE` corrected `0.0006→0.0008` (0.08%/side; 3.2% margin round-trip at 20x).
+  `_fetch_plan_order_ids()` stores `tp_plan_order_id`/`sl_plan_order_id` at trade open in trade state.
+  Daemon uses stored IDs for AI log upload — no sleep/guesswork.
+- V3.2.49: Final stretch — aggressive hold times for last 72h of competition.
   T1: 3h max hold / 1h early exit (was 24h/6h). T2: 2h / 45m (was 12h/4h). T3: 1.5h / 30m (was 8h/3h).
   Single-slot mode means stale position blocks ALL capital rotation — dip-bounce strategy = move happens in first 30-60min or thesis is dead.
   `sync_tracker_with_weex()` display now reads live TIER_CONFIG (was reading stale hold time from trade state).
-  `PIPELINE_VERSION = "SMT-v3.2.49-FinalStretch-TightenedHoldTimes-6h4h3h"`.
 - V3.2.48: Macro defense — blackout windows, weekend liquidity mode, funding hold-cost awareness.
   `MACRO_BLACKOUT_WINDOWS`: skip entire signal cycle during high-impact data releases (PCE 2026-02-20 13:15-14:00 UTC).
   Weekend mode: Sat/Sun → BTC/ETH/SOL only (altcoin books too thin). Emperor's Birthday (2026-02-23 < 12 UTC) → same restriction.
