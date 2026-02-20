@@ -1914,7 +1914,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.42-JudgeProgress-SyncOrderId"
+PIPELINE_VERSION = "SMT-v3.2.43-AiLogVerbose-WaitReasoning"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3805,12 +3805,18 @@ Respond with JSON ONLY (no markdown, no backticks):
         votes_str = ', '.join(vote_summary) if vote_summary else "No votes"
         
         # V3.1.39b: Log WAIT decisions to WEEX too (shows AI is analyzing even when not trading)
+        # V3.2.43: Include per-persona reasoning so SENTIMENT/JUDGE logic is visible
         try:
             upload_ai_log_to_weex(
                 stage="Gemini Judge: WAIT",
                 input_data={
                     "persona_votes": [
-                        {"persona": v["persona"], "signal": v["signal"], "confidence": v["confidence"]}
+                        {
+                            "persona": v["persona"],
+                            "signal": v["signal"],
+                            "confidence": v["confidence"],
+                            "reasoning": v.get("reasoning", "")[:300],
+                        }
                         for v in (persona_votes or [])
                     ],
                 },
@@ -3818,6 +3824,7 @@ Respond with JSON ONLY (no markdown, no backticks):
                     "decision": "WAIT",
                     "confidence": 0.0,
                     "judge_version": "gemini-judge",
+                    "reason": reason[:200] if reason else "",
                 },
                 explanation=f"AI Judge decided WAIT: {reason}. {votes_str}"
             )
@@ -4098,7 +4105,13 @@ def upload_ai_log_to_weex(stage: str, input_data: Dict, output_data: Dict,
         msg = result.get("msg", "")
         
         if code == "00000":
-            pass  # Success - silent (was flooding logs with [AI LOG OK] every call)
+            _oid_tag = f" | orderId={payload['orderId']}" if order_id else ""
+            _expl_preview = explanation[:120].replace("\n", " ") if explanation else ""
+            _out_preview = json.dumps(output_data)[:200] if output_data else ""
+            print(f"  [AI-LOG] SENT  stage='{stage}'{_oid_tag}", flush=True)
+            print(f"  [AI-LOG]       expl: {_expl_preview}", flush=True)
+            print(f"  [AI-LOG]       out:  {_out_preview}", flush=True)
+            print(f"  [AI-LOG]       WEEX: code={code} msg='{msg}' | ACCEPTED", flush=True)
         else:
             # FAILURE - log detailed error
             print(f"  [AI LOG FAIL] {stage}", flush=True)
@@ -5028,7 +5041,7 @@ def save_local_log(log_data: Dict, timestamp: str):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("SMT V3.2.42 - Multi-Persona Trading")
+    print("SMT V3.2.43 - Multi-Persona Trading")
     print("=" * 60)
     
     print("\nTier Configuration:")
