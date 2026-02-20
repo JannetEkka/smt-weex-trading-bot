@@ -5225,20 +5225,22 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
     except:
         pass
     
+    # V3.2.62: Fixed endpoint — /plan_orders returned 404; /currentPlan is the correct query endpoint
     try:
-        endpoint = "/capi/v2/order/plan_orders"
+        endpoint = "/capi/v2/order/currentPlan"
         if symbol:
             endpoint += f"?symbol={symbol}"
         r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=15)
-        orders = r.json() if isinstance(r.json(), list) else []
-        
+        resp = r.json()
+        orders = resp if isinstance(resp, list) else (resp.get("data") or [])
+
         for order in orders:
-            oid = order.get("order_id")
+            oid = order.get("order_id") or order.get("orderId")
             if oid:
                 cancel_endpoint = "/capi/v2/order/cancel_plan"
                 body = json.dumps({"order_id": oid})
-                requests.post(f"{WEEX_BASE_URL}{cancel_endpoint}", 
-                            headers=weex_headers("POST", cancel_endpoint, body), 
+                requests.post(f"{WEEX_BASE_URL}{cancel_endpoint}",
+                            headers=weex_headers("POST", cancel_endpoint, body),
                             data=body, timeout=15)
                 result["cancelled"].append(f"plan_{oid}")
     except:
@@ -5355,7 +5357,8 @@ def _fetch_plan_order_ids(symbol: str, expected_tp: float, expected_sl: float) -
     result = {"tp_plan_order_id": None, "sl_plan_order_id": None}
     pair = symbol.replace("cmt_", "").upper()
     try:
-        endpoint = f"/capi/v2/order/plan_orders?symbol={symbol}"
+        # V3.2.62: Fixed endpoint — /plan_orders returned 404; /currentPlan is the correct query endpoint
+        endpoint = f"/capi/v2/order/currentPlan?symbol={symbol}"
         orders = None
         _INITIAL_SLEEP = 2.0   # WEEX needs time to register preset plan orders
         _RETRY_SLEEP   = 2.0
