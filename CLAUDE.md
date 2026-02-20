@@ -6,42 +6,44 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.41** — all production code is in `v3/`.
+**Current version: V3.2.49** — all production code is in `v3/`.
 
 ## Architecture
 
 ```
 v3/                              # PRIMARY production folder
-├── smt_daemon_v3_1.py          # 24/7 daemon loop (~3421 lines)
-│   - check_trading_signals()    → Signal check cycle (every 10min)   [line 532]
-│   - monitor_positions()        → Position monitor cycle (every 2min) [line 1411]
-│   - regime_aware_exit_check()  → Regime-based exit logic             [line 3037]
-│   - gemini_portfolio_review()  → Gemini AI portfolio optimization    [line 2023] DISABLED V3.2.17
-│   - sync_tracker_with_weex()   → Reconcile local state vs WEEX      [line 2654]
-│   - quick_cleanup_check()      → Orphan order cleanup (every 30s)    [line 2522]
-│   - log_health()               → Health check (every 60s)            [line 2622]
-│   - _check_opposite_swap_gates() → V3.1.100 opposite swap TP gate   [line 1851]
-│   - _execute_deferred_flips()  → Deferred flip queue execution       [line 1908]
-│   - cleanup_dust_positions()   → Remove near-zero positions          [line 1989]
-│   - resolve_opposite_sides()   → Close older side when both exist    [line 2823]
-│   - get_market_regime_for_exit() → Market regime detection           [line 2961] DISABLED V3.2.17
+├── smt_daemon_v3_1.py          # 24/7 daemon loop (~3620 lines)
+│   - check_trading_signals()    → Signal check cycle (every 10min)   [line 587]
+│   - monitor_positions()        → Position monitor cycle (every 2min) [line 1578]
+│   - regime_aware_exit_check()  → Regime-based exit logic             [line 3239]
+│   - gemini_portfolio_review()  → Gemini AI portfolio optimization    [line 2213] DISABLED V3.2.17
+│   - sync_tracker_with_weex()   → Reconcile local state vs WEEX      [line 2852]
+│   - quick_cleanup_check()      → Orphan order cleanup (every 30s)    [line 2714]
+│   - log_health()               → Health check (every 60s)            [line 2820]
+│   - _check_opposite_swap_gates() → V3.1.100 opposite swap TP gate   [line 2041]
+│   - _execute_deferred_flips()  → Deferred flip queue execution       [line 2098]
+│   - cleanup_dust_positions()   → Remove near-zero positions          [line 2179]
+│   - resolve_opposite_sides()   → Close older side when both exist    [line 3025]
+│   - get_market_regime_for_exit() → Market regime detection           [line 3163] DISABLED V3.2.17
+│   - _is_macro_blackout()       → V3.2.48 macro event blackout gate  [line 431]
+│   - _is_weekend_liquidity_mode() → V3.2.48 weekend/holiday filter   [line 460]
 │   - fill_rl_outcomes_inline()  → RL training data fill               [line 61]
 │
-├── smt_nightly_trade_v3_1.py   # Core trading logic (~4880 lines)
-│   - MultiPersonaAnalyzer       → 5-persona ensemble                  [line 3682]
-│   - place_order()              → WEEX order placement                [line 3843]
-│   - close_position_manually()  → Close + cancel orphan triggers      [line 4689]
-│   - get_recent_close_order_id() → Query WEEX for last filled close orderId [line 4583]
-│   - cancel_all_orders_for_symbol() → Kill all orders (regular + plan)[line 4538]
-│   - upload_ai_log_to_weex()    → Competition logging (REQUIRED)      [line 3891]
-│   - get_open_positions()       → WEEX positions API                  [line 2002]
-│   - get_balance()              → WEEX balance API                    [line 1945]
-│   - TRADING_PAIRS              → 7 pairs with tier/symbol config     [line 1839]
-│   - TIER_CONFIG                → TP/SL/hold times per tier           [line 1831]
-│   - find_chart_based_tp_sl()   → Support/resistance TP/SL            [line 1104]
-│   - detect_sideways_market()   → Chop filter (logging only, V3.2.18) [line 671]
-│   - get_chart_context()        → Multi-TF Gemini chart context        [line 1304]
-│   - TradeTracker               → Local state management               [line 4261]
+├── smt_nightly_trade_v3_1.py   # Core trading logic (~5210 lines)
+│   - MultiPersonaAnalyzer       → 5-persona ensemble                  [line 3940]
+│   - place_order()              → WEEX order placement                [line 4109]
+│   - close_position_manually()  → Close + cancel orphan triggers      [line 5017]
+│   - get_recent_close_order_id() → Query WEEX for last filled close orderId [line 4876]
+│   - cancel_all_orders_for_symbol() → Kill all orders (regular + plan)[line 4831]
+│   - upload_ai_log_to_weex()    → Competition logging (REQUIRED)      [line 4157]
+│   - get_open_positions()       → WEEX positions API                  [line 2074]
+│   - get_balance()              → WEEX balance API                    [line 2017]
+│   - TRADING_PAIRS              → 7 pairs with tier/symbol config     [line 1911]
+│   - TIER_CONFIG                → TP/SL/hold times per tier           [line 1903]
+│   - find_chart_based_tp_sl()   → Support/resistance TP/SL            [line 1105]
+│   - detect_sideways_market()   → Chop filter (logging only, V3.2.18) [line 672]
+│   - get_chart_context()        → Multi-TF Gemini chart context        [line 1352]
+│   - TradeTracker               → Local state management               [line 4554]
 │
 ├── watchdog.sh                 # Process watchdog — start this, NOT the daemon directly
 │                               # Restarts daemon on crash; hang detection (15min log staleness)
@@ -115,37 +117,45 @@ MIN_CONFIDENCE_TO_TRADE = 0.80      # 80% HARD FLOOR - NO exceptions (V3.1.85)
 GLOBAL_TRADE_COOLDOWN = 900          # 15min between trades
 SIGNAL_CHECK_INTERVAL = 600          # 10min
 POSITION_MONITOR_INTERVAL = 120      # 2min
-MAX_TOTAL_POSITIONS = 4              # 4 flat slots hard cap (V3.2.38: cap restored; was removed in V3.2.25)
-CONFIDENCE_EXTRA_SLOT = 0.90         # V3.2.39: signals >=90% can open 5th slot when all 4 full
+MAX_TOTAL_POSITIONS = 1              # V3.2.46: 1-slot cross-margin defense — full account as buffer
+# CONFIDENCE_EXTRA_SLOT = 0.90      # V3.2.46: DISABLED — was V3.2.39 90%+ extra slot; now 1-slot hard cap
 
-# Slot system (V3.2.39: 4-slot hard cap + extra slot for 90%+ signals)
+# Slot system (V3.2.46: 1-slot cross-margin strategy)
 # Pairs: BTC, ETH, BNB, LTC, XRP, SOL, ADA (7 pairs, BTC/ETH/BNB re-added V3.2.16)
 # Shorts: ALL pairs as of V3.2.18 (was LTC-only)
 # If no signals reach 80%, ALL pairs show WAIT — this is expected, not a bug.
 # Existing position + same direction signal = WAIT (already have that side).
-
-# Slot overflow (V3.2.39):
-# confidence < 90% with full slots → SLOTS FULL, skip
-# confidence >= 90% with full slots → open 5th slot directly
-# can_open_new = not low_equity_mode AND available_slots > 0  (base check)
-# per-signal: can_open_new OR (not low_equity_mode AND confidence >= CONFIDENCE_EXTRA_SLOT)
-# No slot swap (removed V3.2.22); resolve_opposite_sides() runs at cycle end
+# V3.2.46: Cross margin = shared collateral. One 20x trade at a time.
+#   Full account acts as buffer — no concurrent positions to cascade liquidations.
+#   can_open_new = not low_equity_mode AND available_slots > 0
 
 # Regime exit thresholds (V3.2.17: get_market_regime_for_exit() DISABLED)
 # Regime fight: 35% margin loss | Hard stop: 45% margin loss
 # NOTE: regime-based auto-exits are disabled in V3.2.17 — SL handles exits
 
-# Position sizing (V3.2.25: available-based; V3.2.26: $1000 floor)
+# Position sizing (V3.2.46: confidence-scaled for 1-slot cross-margin)
 # sizing_base = available (free margin from API)
 # sizing_base = min(sizing_base, balance * 2.5)   # cap at 2.5× balance
 # sizing_base = max(sizing_base, 1000.0)           # floor at $1000 always
-# base_size = sizing_base * 0.25 (confidence tiers: 1.0x / 1.25x / 1.5x)
-# Per-slot cap REMOVED (V3.2.25) — sizing_base is already free available margin
-# Margin guard: skip trades if available margin < $1000 (V3.2.26, was balance×0.15 ≈ $150)
+# V3.2.46: Confidence-scaled sizing (replaces flat 0.25 multiplier):
+#   80-84% confidence: sizing_base * 0.20  (conservative)
+#   85-89% confidence: sizing_base * 0.35  (standard)
+#   90%+   confidence: sizing_base * 0.50  (maximum conviction)
+# SOL capped at 30% of sizing_base via PAIR_MAX_POSITION_PCT (high beta risk control)
+# Margin guard: skip trades if available margin < $1000 (V3.2.26)
 # Sizing cache: 60s TTL; invalidated immediately after each trade (V3.2.28)
 # Cycle housekeeping (V3.2.25): dust + orphan sweep at START of every signal cycle
 
-# TP/SL bounds (V3.2.24: no TP floor; V3.2.28: bad-TP discard; V3.2.29: walk list; V3.2.36: viable min; V3.2.41: per-pair ceiling + MAX_SL + 4H anchor)
+# Circuit breaker (V3.2.46: post-loss cooldowns for cross-margin safety)
+# COOLDOWN_MULTIPLIERS × base hours (T1=2h, T2=1.5h, T3=1h):
+#   sl_hit: 1.0      → 60min+ cooldown after SL hit
+#   force_stop: 1.0   → 60min+ cooldown after force stop
+#   early_exit: 0.5   → 30-60min cooldown after early exit
+#   tp_hit: 0.0       → immediate re-entry OK (trend confirmed)
+#   max_hold/profit_lock: 0.0  → no cooldown
+# Cross margin = shared collateral — revenge trading is account-ending.
+
+# TP/SL bounds (V3.2.41: per-pair ceiling + MAX_SL + 4H anchor; V3.2.46: SL cap instead of discard)
 # MIN_TP_PCT removed (V3.2.24) — chart SR is the TP, whatever distance that is
 # MIN_VIABLE_TP_PCT = 0.40% (V3.2.41, was 0.20% in V3.2.36) — SKIP SR levels < 0.40% from entry
 #   NOT a floor (old behavior); SR candidates too close are skipped entirely.
@@ -167,7 +177,7 @@ CONFIDENCE_EXTRA_SLOT = 0.90         # V3.2.39: signals >=90% can open 5th slot 
 # TP caps are ceiling-only; only apply when tp_pct > cap threshold (never raise a low TP)
 # SL method: lowest wick in last 12H (1H grid) + last 3 4H candles
 # MIN_SL_PCT = 1.0%  (floor — SL must be at least 1% from entry)
-# MAX_SL_PCT = 1.5%  (V3.2.41 CEILING — discard trade if chart structure requires SL > 1.5%)
+# MAX_SL_PCT = 1.5%  (V3.2.41 ceiling; V3.2.46: CAP instead of discard)
 #   4H anchors can produce wide SLs; 1.5% = 30% margin loss at 20x (survivable)
 #   Hard liquidation at 20x requires ~4.5% adverse move; 1.5% is well clear
 
@@ -181,6 +191,16 @@ CONFIDENCE_EXTRA_SLOT = 0.90         # V3.2.39: signals >=90% can open 5th slot 
 # DEFERRED_FLIP_MAX_AGE_MIN = 30  # Deferred signal expires after 30 minutes
 # When blocked, signal is queued. After old position closes, deferred flip auto-executes.
 
+# Macro defense (V3.2.48)
+# MACRO_BLACKOUT_WINDOWS: list of (start_utc, end_utc, label) — skip ALL signal cycles in window
+#   Example: ("2026-02-20 13:15", "2026-02-20 14:00", "US Core PCE Price Index")
+# Weekend liquidity mode: Sat/Sun → restrict to WEEKEND_ALLOWED_PAIRS = {BTC, ETH, SOL}
+#   Altcoins (BNB, LTC, XRP, ADA) have 20-25% lower weekend volume → wider spreads, fakeouts
+# Holiday thin liquidity: HOLIDAY_THIN_LIQUIDITY dict — bank holidays extend thin-book conditions
+#   before 12 UTC only (US session restores liquidity)
+# Funding hold-cost: per-pair funding rate × 20x = margin drag, passed to Judge as context
+# Macro event context: date-sensitive intelligence (PCE, token unlocks, holidays) fed to Judge
+
 # Signal persistence (V3.2.6)
 # signal_history tracked per-pair (persists across daemon restarts via trade_state JSON)
 # 2-cycle persistence: confidence minimum drops to 80% if same signal fires 2+ consecutive cycles
@@ -189,21 +209,23 @@ CONFIDENCE_EXTRA_SLOT = 0.90         # V3.2.39: signals >=90% can open 5th slot 
 
 ## Trading Pairs & Tiers
 
-**Active pairs (V3.2.16+): BTC, ETH, BNB, LTC, XRP, SOL, ADA — 4 flat slots**
+**Active pairs (V3.2.16+): BTC, ETH, BNB, LTC, XRP, SOL, ADA — 1 slot (V3.2.46 cross-margin)**
 
-| Pair | Symbol | Tier | TP (fallback) | SL (fallback) | Max Hold | Shorts? |
-|------|--------|------|---------------|---------------|----------|---------|
-| BTC  | cmt_btcusdt  | 1 | 3.0% | 1.5% | 24h | Yes (V3.2.18) |
-| ETH  | cmt_ethusdt  | 1 | 3.0% | 1.5% | 24h | Yes (V3.2.18) |
-| BNB  | cmt_bnbusdt  | 2 | 3.5% | 1.5% | 12h | Yes (V3.2.18) |
-| LTC  | cmt_ltcusdt  | 2 | 3.5% | 1.5% | 12h | Yes |
-| XRP  | cmt_xrpusdt  | 2 | 3.5% | 1.5% | 12h | Yes (V3.2.18) |
-| SOL  | cmt_solusdt  | 3 | 3.0% | 1.8% | 8h  | Yes (V3.2.18) |
-| ADA  | cmt_adausdt  | 3 | 3.0% | 1.8% | 8h  | Yes (V3.2.18) |
+| Pair | Symbol | Tier | TP (fallback) | SL (fallback) | Max Hold | Early Exit | Shorts? |
+|------|--------|------|---------------|---------------|----------|------------|---------|
+| BTC  | cmt_btcusdt  | 1 | 3.0% | 1.5% | 3h  | 1h   | Yes (V3.2.18) |
+| ETH  | cmt_ethusdt  | 1 | 3.0% | 1.5% | 3h  | 1h   | Yes (V3.2.18) |
+| BNB  | cmt_bnbusdt  | 2 | 3.5% | 1.5% | 2h  | 45m  | Yes (V3.2.18) |
+| LTC  | cmt_ltcusdt  | 2 | 3.5% | 1.5% | 2h  | 45m  | Yes |
+| XRP  | cmt_xrpusdt  | 2 | 3.5% | 1.5% | 2h  | 45m  | Yes (V3.2.18) |
+| SOL  | cmt_solusdt  | 3 | 3.0% | 1.8% | 1.5h | 30m  | Yes (V3.2.18) |
+| ADA  | cmt_adausdt  | 3 | 3.0% | 1.8% | 1.5h | 30m  | Yes (V3.2.18) |
 
+V3.2.49: **Final stretch hold times** — aggressive rotation for last 72h of competition.
+Previously: T1=24h/6h, T2=12h/4h, T3=8h/3h. Single-slot mode means stale positions block all capital.
 DOGE removed V3.2.11 (erratic SL/orphan behavior). BTC/ETH/BNB re-added V3.2.16.
 TP/SL above are **fallback values only** — chart-based SR (find_chart_based_tp_sl) is primary.
-Chart TP/SL uses real support/resistance levels with no ceiling.
+Chart TP/SL uses real support/resistance levels; PAIR_TP_CEILING caps per pair.
 
 ## WEEX API
 
@@ -222,10 +244,10 @@ Key endpoints:
 ## 5-Persona System
 
 1. **WHALE** — On-chain wallet tracking (Etherscan + Cryptoracle). CEX inflow/outflow signals. Cryptoracle provides community sentiment, prediction market, sentiment momentum Z-score. V3.2.20: BTC and ETH always run Etherscan on-chain flow regardless of `has_whale_data` flag (dual source: Etherscan + Cryptoracle combined).
-2. **SENTIMENT** — Gemini 2.5 Flash with Search Grounding. Real-time news analysis.
+2. **SENTIMENT** — Gemini 2.5 Flash with Search Grounding. Macro news analyst role (V3.2.41): catalysts, macro_bias, volatility_risk, volatility_event, pair_specific_news — qualitative only, no price targets. V3.2.45: dynamic date injection in search queries + regex JSON parser immune to grounding citation injection.
 3. **FLOW** — WEEX order book + trades. Taker ratios, bid/ask depth, funding rates. V3.2.20: order book wall detection (depth limit=200) — nearest significant ask/bid wall passed to Judge as context.
 4. **TECHNICAL** — RSI(14), SMA 20/50, 5-candle momentum on 1h candles.
-5. **JUDGE** — Aggregates all votes with regime-aware weights. Final LONG/SHORT/WAIT. V3.2.16: receives Gemini chart context (1D + 4H structural levels). V3.2.17: receives signal cycle memory + live chop microstructure. V3.2.20: receives FLOW order book wall prices as additional TP context. V3.2.37: ANTI-WAIT removed — if Judge returns WAIT, it is WAIT with no overrides.
+5. **JUDGE** — Aggregates all votes with regime-aware weights. Final LONG/SHORT/WAIT. V3.2.16: receives Gemini chart context (1D + 4H structural levels). V3.2.17: receives signal cycle memory + live chop microstructure. V3.2.20: receives FLOW order book wall prices as additional TP context. V3.2.37: ANTI-WAIT removed — if Judge returns WAIT, it is WAIT with no overrides. V3.2.48: receives funding hold-cost (rate × 20x = margin drag) and macro event context (date-sensitive intelligence). V3.2.45: regex JSON extractor immune to grounding citation markers.
 
 Post-judge filters (V3.2.18): Freshness filter, Regime veto, Consecutive loss block.
 Chop filter kept for **logging only** — no score penalties applied as of V3.2.18.
@@ -311,55 +333,66 @@ python3 v3/cryptoracle_client.py
 11. **Watchdog hang detection** — If daemon logs go stale for 15min, watchdog force-kills and restarts. This is intentional; don't disable it.
 12. **Gemini portfolio review disabled** — `gemini_portfolio_review()` is disabled in V3.2.17. Do not re-enable without testing.
 13. **ANTI-WAIT removed (V3.2.37)** — Do NOT re-add post-Judge direction overrides. Gemini's WAIT reasoning text often contains direction keywords (e.g. "WHALE (LONG 63%)" explaining why it's waiting), which caused the keyword-scanning fallback to flip WAIT→LONG on genuinely mixed signals. Trust the Judge.
-14. **Slot cap (V3.2.39)** — 4-slot hard cap is the base; confidence >= 90% opens a 5th slot when all 4 are full. Do NOT re-add unlimited no-cap behavior from V3.2.25 — the 90% gate is the only approved exception.
+14. **1-slot cross-margin (V3.2.46)** — MAX_TOTAL_POSITIONS = 1. Full account is buffer for one 20x trade. Do NOT re-add multi-slot behavior — concurrent positions create cascading liquidation risk under cross margin. Circuit breaker enforces 60min+ cooldown after losses.
+15. **Gemini citation injection (V3.2.45)** — Gemini Search Grounding can inject `[1][2]` citation markers into JSON responses, breaking `json.loads()`. The regex JSON parser (`re.search(r'\{.*\}', re.DOTALL)`) handles this. Do not revert to naive JSON parsing.
+16. **Macro blackout bypass (V3.2.48)** — `_is_macro_blackout()` skips the entire signal cycle during high-impact data releases. Do not add "check anyway" logic — macro volatility can spike 1-3% in seconds, invalidating any signal computed pre-release.
+17. **Weekend thin liquidity (V3.2.48)** — Altcoins (BNB, LTC, XRP, ADA) restricted during Sat/Sun + bank holidays. Do not override — 20-25% lower volume means wider spreads and fakeout wicks.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.41. Next change should be V3.2.42.
+Current: V3.2.49. Next change should be V3.2.50.
 
 **Recent version history:**
-- V3.2.41: (**CURRENT**) Larger gains strategy — per-pair TP ceilings, 4H anchor, SL ceiling, 4-5H planning horizon.
+- V3.2.49: (**CURRENT**) Final stretch — aggressive hold times for last 72h of competition.
+  T1: 3h max hold / 1h early exit (was 24h/6h). T2: 2h / 45m (was 12h/4h). T3: 1.5h / 30m (was 8h/3h).
+  Single-slot mode means stale position blocks ALL capital rotation — dip-bounce strategy = move happens in first 30-60min or thesis is dead.
+  `sync_tracker_with_weex()` display now reads live TIER_CONFIG (was reading stale hold time from trade state).
+  `PIPELINE_VERSION = "SMT-v3.2.49-FinalStretch-TightenedHoldTimes-6h4h3h"`.
+- V3.2.48: Macro defense — blackout windows, weekend liquidity mode, funding hold-cost awareness.
+  `MACRO_BLACKOUT_WINDOWS`: skip entire signal cycle during high-impact data releases (PCE 2026-02-20 13:15-14:00 UTC).
+  Weekend mode: Sat/Sun → BTC/ETH/SOL only (altcoin books too thin). Emperor's Birthday (2026-02-23 < 12 UTC) → same restriction.
+  Funding hold-cost: per-pair funding rate × 20x = margin drag passed to Judge as context section.
+  Macro event context: date-sensitive intelligence (PCE, ZRO unlock, holiday) fed to Judge prompt.
+  Fixed `get_recent_close_order_id()` — was using wrong endpoint (HTTP 404). Now uses `/capi/v2/order/history`.
+- V3.2.47: Fix slot recheck bug — was opening 2+ trades with 1-slot cap. Decrements `available_slots` after each successful trade; stops executing if all slots filled.
+- V3.2.46: Cross margin defense — 1-slot strategy + confidence-scaled sizing + circuit breaker.
+  `MAX_TOTAL_POSITIONS = 1` (was 4). Full account is buffer for one 20x trade — no concurrent positions.
+  `CONFIDENCE_EXTRA_SLOT` (90% extra slot) disabled — 1-slot hard cap is absolute.
+  Confidence-scaled sizing: 80-84% → 20% of sizing_base, 85-89% → 35%, 90%+ → 50%.
+  Circuit breaker: `COOLDOWN_MULTIPLIERS` — 60min+ cooldown after SL/force stop (was 0.0 = immediate re-entry).
+  `MAX_SL_PCT` behavior changed: cap instead of discard (was discard in V3.2.41 — fixes XRP LONG trade rejections).
+- V3.2.45: Regex JSON parser for SENTIMENT+JUDGE — `re.search(r'\{.*\}', re.DOTALL)` immune to Gemini grounding citation injection `[1][2]`. Dynamic date injected in SENTIMENT search queries. No-citation prompt directive added.
+- V3.2.44: Full Gemini response visibility — removed all truncation ([:200] on SENTIMENT, [:600] on JUDGE reasoning, [:200] on Judge prompt persona summary). `market_context` no longer capped.
+- V3.2.43: Per-persona reasoning visibility — SENTIMENT/JUDGE reasoning now included in AI log uploads for WAIT decisions too.
+- V3.2.42: Judge progress prints (`[JUDGE] Calling Gemini / responded in Xs`). `sync_tracker_with_weex()` AI log now sends order_id via `get_recent_close_order_id()`.
+- V3.2.41: Larger gains strategy — per-pair TP ceilings, 4H anchor, SL ceiling, 4-5H planning horizon.
   `PAIR_TP_CEILING` dict replaces flat 0.5% `COMPETITION_FALLBACK_TP`: BTC/ETH→1.5%, SOL→2.0%, XRP/BNB/LTC/ADA→1.0%.
   `PAIR_MAX_POSITION_PCT["SOL"] = 0.30` caps SOL at 30% of sizing_base (high beta risk control).
-  `MAX_SL_PCT = 1.5%` ceiling added to `find_chart_based_tp_sl()` — discards trades where 4H structure requires SL > 1.5%.
+  `MAX_SL_PCT = 1.5%` ceiling added to `find_chart_based_tp_sl()`.
   `MIN_VIABLE_TP_PCT` raised from 0.20% → 0.40% — filters micro-bounce SR levels, forces anchor to 4H/48H structure.
   4H candle anchor added: `limit=9` in 4H fetch; `_tp_high_4h`/`_tp_low_4h` from `candles_4h[1:3]` tried between 2H anchor and 48H walk.
-  Judge prompt: per-pair epoch strategy guide (VWAP_REVERSION/SUPPORT_SWEEP/MOMENTUM_CROSS/RANGE_BOUNDARY/CATALYST_DRIVE/CORRELATION_LAG), 4-5H planning horizon, SENTIMENT macro section, TP target updated to 4H structural level.
-  SENTIMENT persona prompt: macro news analyst role using Google Search grounding for catalysts/macro_bias/volatility_risk — qualitative only, no price targets. New JSON fields: macro_bias, catalyst, volatility_risk, volatility_event, pair_specific_news passed to Judge as SENTIMENT MACRO REPORT section.
-  Daemon: 1.5s settle delay before `get_recent_close_order_id()` call (better auto-TP/SL order ID capture).
-  `PIPELINE_VERSION = "SMT-v3.2.41-LargerGains-PerPairTP-SLCeiling-4HPlanning"`. Daemon banner updated.
-- V3.2.40: Close order ID wiring for AI log uploads. New `get_recent_close_order_id(symbol)` function (line 4583) queries WEEX filled orders endpoint (`/capi/v2/order/orders?symbol=X&status=2`) for the most recent close order (type 3=close long, 4=close short), enabling AI logs to include `orderId` for TP/SL auto-executions by WEEX. `[AI-LOG]` diagnostic tags added inside the function for lookup visibility. `PIPELINE_VERSION = "SMT-v3.2.40-CloseOrderId-AiLogFix"`. Runner partial close operations (`execute_runner_partial_close`) now capture `close_order_id` in `output_data`. Graceful failure — AI log upload succeeds even when orderId lookup fails (returns None). Daemon banner not yet bumped (still reads V3.2.39 at line 3257).
-- V3.2.39: 90%+ confidence opens 5th slot when all 4 are full. Base 4-slot hard cap unchanged — only signals with confidence >= 90% bypass it. `CONFIDENCE_EXTRA_SLOT = 0.90` constant added. Per-signal check: `can_open_new OR (not low_equity_mode AND confidence >= 0.90)`. `_has_regular_slots` updated to match. Logs `90%+ EXTRA SLOT: X% >= 90%` when extra slot is used. Banner updated.
-- V3.2.38: Restore 4-slot hard cap removed in V3.2.25. `can_open_new = not low_equity_mode and available_slots > 0` — when all 4 slots are filled, ALL new signals skip regardless of confidence. `_has_regular_slots` now checks `available_slots > 0` (was hardcoded True). Banner log updated: "2/4 slots" instead of "2 positions (no slot cap)". Stale "85%+ opens 5th slot" text removed.
-- V3.2.37: ANTI-WAIT removed — trust Gemini Judge completely. Removed persona-consensus override (2+ personas agree at >=70% → force direction) and keyword-fallback override (count bullish/bearish words in Judge's reasoning). Layer 2 (keyword) was worst offender: Gemini's WAIT reasoning often contained direction words causing spurious flips. WAIT = WAIT.
-- V3.2.36: `MIN_VIABLE_TP_PCT = 0.20` added to `find_chart_based_tp_sl()` — skip SR levels < 0.20% from entry (entry IS the resistance, no bounce room). Effective TP range: [0.20%, 0.50%]. NOT a floor (old V3.2.23) — candidates are skipped, not raised. Also fixed UnboundLocalErrors from V3.2.35 (`trades_executed` init moved before if/else; removed inner `import traceback` shadowing module-level import).
-- V3.2.35: Opposite signal = close existing position first, then open new direction. Replaced SL-tighten + dual-open logic that put both LONG and SHORT open simultaneously on same pair. New behavior: `close_position_manually()` → remove from tracker → upload AI log → open new direction via normal execute_trade path.
-- V3.2.34: Judge receives WHALE dual-source data for BTC/ETH as a dedicated prompt section — Etherscan on-chain whale flow (net_flow, inflow, outflow, wallet count) and Cryptoracle (net_sentiment, momentum_zscore, sentiment_price_gap, trend) shown separately so Judge can weigh them independently. BTC also shows prediction market (CO-P-01-01). SIGNAL RELIABILITY guideline updated to explain dual-source nature. Non-BTC/ETH pairs unchanged.
-- V3.2.33: Revert V3.2.32 — SHORT TP back to `min(lows_1h[1:3])` (deepest wick). The deepest wick IS the real support; when it's within 0.5% of entry the cap doesn't apply and TP lands at the actual chart level. max (nearest wick) was picking meaningless noise wicks closer to entry.
-- V3.2.32: SHORT TP anchor changed from `min(lows_1h[1:3])` → `max(lows_1h[1:3])`. Reverted in V3.2.33.
-- V3.2.31: Extended 1H candle lookback from 12H (13 candles) to 48H (49 candles) for resistance/support walk. When entry is near recent highs, the 12H pool had only 1-2 candidates above entry and both failed the haircut, discarding high-confidence signals. Competition TP cap (0.5%) applies on top regardless of how far out the level is.
-- V3.2.30: WEEX TP/SL confirmation logging — after each trade, query WEEX plan orders and compare actual stored trigger prices vs what was sent. Logs `[WEEX-CONFIRM]` with delta % and *** MISMATCH *** flag for any discrepancy > 0.1%.
-- V3.2.29: Walk full resistance list (ascending LONG / descending SHORT) before discarding — if nearest SR is too close after haircut, try next candidate. COMPETITION_FALLBACK_TP promoted from fallback to universal 0.5% MAX TP ceiling on ALL trades (replaces extreme-fear-only and XRP caps). If chart SR finds no valid TP → trade discarded (no fallback %). TP caps are ceiling-only: never raise a low TP below 0.5%.
-- V3.2.28: Bad-TP trades discarded — if TP lands at/below entry (haircut + slippage means entry is at resistance), skip the trade entirely. Sizing cache invalidated after each trade so next order sees updated available margin.
-- V3.2.27: 12H SR haircut validity check — haircut must still clear entry; final TP direction guard before place_order() (prevents WEEX 40015 rejection).
-- V3.2.26: Margin guard threshold fixed at $1000 (was balance×0.15 ≈ $150 — too low, produced tiny rejected orders); sizing base floor fixed at $1000 (same reason).
-- V3.2.25: No hard slot cap — margin guard is the natural limiter; cycle housekeeping (dust + orphan sweep) runs at START of every signal cycle; sizing base changed from equity to available free margin, floored at $1000; per-slot cap removed; resolve_opposite_sides() moved to end of cycle.
-- V3.2.24: MIN_TP_PCT=0.3% floor removed — chart SR is the TP, no artificial minimum. Flooring to 0.3% was placing TP beyond real resistance so price rejected and TP never filled.
-- V3.2.23: Banner cleanup (removed stale slot swap lines); FLOW persona calls regime before data fetches so [REGIME] prints before [FLOW] Depth (not mid-block)
-- V3.2.22: Slot swap removed — confidence>=85% opens 5th slot directly (no closing existing positions); opposite sides close immediately (no 15-min wait gate)
-- V3.2.21: resolve_opposite_sides() closes OLDER position, not losing side — newer position represents current signal; ctime fallback to PnL-based close if timestamps unavailable
-- V3.2.20: 12H SR fallback TP scan when 2H anchor is at/below entry; WHALE always uses Etherscan for BTC/ETH (dual source); FLOW order book wall detection (depth limit=200, top-15 levels, 1.5× avg threshold) fed to Judge as context (not hard TP override)
-- V3.2.19: Fee bleed tracking — [FEE] Open per trade, Gross/Fees(R-T)/Net at close
-- V3.2.18: CHOP filter penalties removed (logging only); shorts allowed for ALL pairs; 80% floor + 0.5% TP protection; trust the signals
-- V3.2.17: Stale position auto-close removed; extreme fear TP cap bug fixed (TypeError silently skipped cap); Gemini portfolio review disabled
-- V3.2.16: BTC/ETH/BNB re-added; 7 pairs; 4 flat slots; Gemini chart context (1D+4H) for TP targeting; XRP TP cap only applies without structural target
-- V3.2.15: (previous stable)
-- V3.2.14: Flat slot cap — no equity scaling; LTC/XRP/SOL/ADA only; 3 slots
-- V3.2.12: TP anchor 6H→2H; extreme fear TP cap extended to LONG signals; XRP/ADA 2-3% TP reduced to 0.5% cap
-- V3.2.11: DOGE removed (erratic SL/orphan behavior); capitulation swap threshold -0.25%→-0.10%
+  Judge prompt: per-pair epoch strategy guide, 4-5H planning horizon, SENTIMENT macro section, TP target updated to 4H structural level.
+  SENTIMENT persona: macro news analyst role using Google Search grounding — qualitative only, no price targets.
+- V3.2.40: Close order ID wiring for AI log uploads. `get_recent_close_order_id(symbol)` queries WEEX for most recent filled close order, enabling AI logs to include `orderId` for TP/SL auto-executions.
+- V3.2.39: 90%+ confidence opens 5th slot when all 4 are full. (Superseded by V3.2.46 — now 1-slot hard cap.)
+- V3.2.38: Restore 4-slot hard cap removed in V3.2.25. (Superseded by V3.2.46.)
+- V3.2.37: ANTI-WAIT removed — trust Gemini Judge completely. WAIT = WAIT, no overrides.
+- V3.2.36: `MIN_VIABLE_TP_PCT = 0.20` — skip SR levels < 0.20% from entry. Fixed UnboundLocalErrors from V3.2.35.
+- V3.2.35: Opposite signal = close existing position first, then open new direction. No more dual LONG+SHORT on same pair.
+- V3.2.34: Judge receives WHALE dual-source data (Etherscan + Cryptoracle) separately for BTC/ETH.
+- V3.2.33: SHORT TP back to `min(lows_1h[1:3])` (deepest wick = real support). Reverts V3.2.32.
+- V3.2.31: 48H SR lookback (was 12H). 0.5% TP cap universal ceiling on ALL trades.
+- V3.2.29: Walk SR list before discard. No-SR = no trade (no fallback %).
+- V3.2.28: Bad-TP trades discarded. Sizing cache reset after each trade.
+- V3.2.25: Sizing from available free margin. Dust + orphan sweep every cycle.
+- V3.2.24: MIN_TP_PCT=0.3% floor removed — chart SR is the TP.
+- V3.2.18: CHOP penalties removed | Shorts ALL pairs | Trust 80% floor + TP protection.
+- V3.2.17: Gemini portfolio review disabled. Regime-based auto-exits disabled.
+- V3.2.16: BTC/ETH/BNB re-added; 7 pairs; Gemini chart context (1D+4H) for TP targeting.
+- V3.2.11: DOGE removed (erratic SL/orphan behavior).
 
 **CRITICAL RULE (V3.1.85+): The 80% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that
