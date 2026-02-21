@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.73-DipRecovery-FlowSeed-ConfDecay-VelPreSweep-RangeWiden"
+PIPELINE_VERSION = "SMT-v3.2.74-FlowContraExit-RangeRevert-BannerCleanup"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4519,9 +4519,17 @@ class MultiPersonaAnalyzer:
                 flow_vote["confidence"] = _boost
                 flow_vote["reasoning"] = flow_vote.get("reasoning", "") + f" [FLIP {_flow_prev}->{_flow_dir} = DIP/PEAK SIGNAL, boosted]"
             else:
-                # Mid-range flip: ambiguous. Don't penalize, don't boost.
+                # Non-boosted flip: log actual reason (not always "mid-range")
                 _rp_str = f"{_range_pos_flow:.0f}%" if _range_pos_flow is not None else "unknown"
-                print(f"  [FLOW] FLIP {_flow_prev}->{_flow_dir} at range {_rp_str} — neutral (mid-range, no boost/discount)")
+                if _range_pos_flow is None:
+                    _flip_label = "unknown range"
+                elif _flow_dir == "SHORT" and _range_pos_flow < 55:
+                    _flip_label = f"at {_rp_str} — not in peak territory for SHORT boost"
+                elif _flow_dir == "LONG" and _range_pos_flow > 45:
+                    _flip_label = f"at {_rp_str} — not in dip territory for LONG boost"
+                else:
+                    _flip_label = f"mid-range ({_rp_str})"
+                print(f"  [FLOW] FLIP {_flow_prev}->{_flow_dir} at range {_rp_str} — neutral ({_flip_label}, no boost/discount)")
         _prev_flow_direction[_flow_sym] = _flow_dir
 
         votes.append(flow_vote)
@@ -4884,13 +4892,13 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     if _range_pos is not None:
         _RANGE_LONG_BLOCK = 55   # Block LONGs above 55% of 12H range
         _RANGE_SHORT_BLOCK = 45  # Block SHORTs below 45% of 12H range
-        _DIP_OVERRIDE_THRESH = 45  # V3.2.73: was 30, widened to 45 — below midpoint = dip real enough to override 12H
-        _PEAK_OVERRIDE_THRESH = 55  # V3.2.73: was 70, widened to 55 — above midpoint = peak real enough to override 12H
+        _DIP_OVERRIDE_THRESH = 30   # V3.2.74: reverted to 30 (V3.2.73 widened to 45, too loose — any sub-midpoint overrode gate)
+        _PEAK_OVERRIDE_THRESH = 70  # V3.2.74: reverted to 70 (V3.2.73 widened to 55, too loose — any above-midpoint overrode gate)
 
         if signal == "LONG" and _range_pos >= _RANGE_LONG_BLOCK:
             # Check 2H override: if TECHNICAL sees bottom of 2H range, the dip is real
             if _range_pos_2h is not None and _range_pos_2h < _DIP_OVERRIDE_THRESH:
-                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block LONG, but 2H range {_range_pos_2h:.0f}% confirms dip — OVERRIDE (V3.2.73)")
+                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block LONG, but 2H range {_range_pos_2h:.0f}% confirms dip — OVERRIDE (V3.2.74)")
             else:
                 _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (>={_RANGE_LONG_BLOCK}%){f', 2H={_range_pos_2h:.0f}%' if _range_pos_2h is not None else ''} — too high for LONG dip-bounce entry"
                 print(f"  [RANGE-GATE] {_reason}")
@@ -4898,7 +4906,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         elif signal == "SHORT" and _range_pos <= _RANGE_SHORT_BLOCK:
             # Check 2H override: if TECHNICAL sees top of 2H range, the peak is real
             if _range_pos_2h is not None and _range_pos_2h > _PEAK_OVERRIDE_THRESH:
-                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block SHORT, but 2H range {_range_pos_2h:.0f}% confirms peak — OVERRIDE (V3.2.73)")
+                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block SHORT, but 2H range {_range_pos_2h:.0f}% confirms peak — OVERRIDE (V3.2.74)")
             else:
                 _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (<={_RANGE_SHORT_BLOCK}%){f', 2H={_range_pos_2h:.0f}%' if _range_pos_2h is not None else ''} — too low for SHORT entry"
                 print(f"  [RANGE-GATE] {_reason}")
