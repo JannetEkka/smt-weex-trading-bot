@@ -1681,6 +1681,45 @@ def check_trading_signals():
                     )
                     continue
 
+                # V3.2.88: MOMENTUM CONFIRMATION GATE — don't enter against active price momentum.
+                # Trust persona DIRECTION (they analyze on hours-to-days timeframes).
+                # But confirm TIMING: recent candles should show price starting to move in our direction.
+                # "Enter later when slight shift in candle" — momentum must be turning, not still opposing.
+                # Fetch last 6 5m candles (30 min). Check 15-min momentum (last 3 candles).
+                _mom_signal = opportunity["decision"]["decision"]
+                _mom_blocked = False
+                try:
+                    _mom_symbol = TRADING_PAIRS[opportunity['pair']]['symbol']
+                    _mom_url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={_mom_symbol}&granularity=5m&limit=6"
+                    _mom_r = requests.get(_mom_url, timeout=8)
+                    _mom_candles = _mom_r.json()
+                    if isinstance(_mom_candles, list) and len(_mom_candles) >= 4:
+                        # WEEX candles newest first: [0]=latest, [3]=30min ago
+                        _mom_now = float(_mom_candles[0][4])   # latest close
+                        _mom_30m = float(_mom_candles[3][4])   # 15-20min ago close
+                        _mom_15m_pct = ((_mom_now - _mom_30m) / _mom_30m) * 100
+                        _MOM_GATE_THRESH = 0.15  # 0.15% opposing momentum = block
+                        # LONG blocked if price is still falling sharply (15m momentum < -0.15%)
+                        if _mom_signal == "LONG" and _mom_15m_pct < -_MOM_GATE_THRESH:
+                            _mom_blocked = True
+                            logger.info(f"  MOMENTUM GATE: {opportunity['pair']} LONG blocked — 15m momentum {_mom_15m_pct:+.3f}% (still falling, need > -{_MOM_GATE_THRESH}%)")
+                        # SHORT blocked if price is still rising sharply (15m momentum > +0.15%)
+                        elif _mom_signal == "SHORT" and _mom_15m_pct > _MOM_GATE_THRESH:
+                            _mom_blocked = True
+                            logger.info(f"  MOMENTUM GATE: {opportunity['pair']} SHORT blocked — 15m momentum {_mom_15m_pct:+.3f}% (still rising, need < +{_MOM_GATE_THRESH}%)")
+                        else:
+                            logger.info(f"  MOMENTUM GATE: {opportunity['pair']} {_mom_signal} — 15m momentum {_mom_15m_pct:+.3f}% confirms (or neutral)")
+                except Exception as _mom_err:
+                    logger.debug(f"  MOMENTUM GATE: {opportunity['pair']} check failed ({_mom_err}), allowing trade")
+                if _mom_blocked:
+                    upload_ai_log_to_weex(
+                        stage=f"Momentum Gate: {opportunity['pair']} {_mom_signal} blocked",
+                        input_data={"pair": opportunity["pair"], "signal": _mom_signal, "mom_15m": _mom_15m_pct},
+                        output_data={"action": "MOMENTUM_GATE_BLOCKED"},
+                        explanation=f"V3.2.88 Momentum gate blocked {opportunity['pair']} {_mom_signal}. 15m price momentum ({_mom_15m_pct:+.3f}%) still opposing trade direction. Personas trust direction, but timing needs momentum confirmation. Wait for candle shift."[:1000]
+                    )
+                    continue
+
                 # V3.1.75: REGIME VETO + F&G SANITY CHECK
                 # Rule 1: F&G < 15 = CAPITULATION = LONG ONLY (no shorts into bounces)
                 # Rule 2: F&G > 85 = EUPHORIA = SHORT ONLY (no longs into tops)
@@ -1919,28 +1958,27 @@ def check_trading_signals():
 # ============================================================
 # V3.2.46: BREAKEVEN TRAILING STOP
 # ============================================================
-BREAKEVEN_TRIGGER_PCT = 0.4  # Move SL to entry when trade reaches +0.4%
-# V3.2.54: Tiered peak-fade soft stop — per-tier params to match liquidity profile
-# T1 (BTC/ETH): deep liquidity → tighter fade; floor exit 0.15% → 3.0% gross ROE (break-even at fees)
-# T2 (BNB/LTC/XRP): high-beta altcoin → needs room; floor exit 0.20% → 4.0% gross - 3.2% fees = +0.8%
-# T3 (SOL/ADA): most volatile → widest gate; same 0.45/0.25 as T2 (prevents whipsaw wicks)
-# Gate: SL not yet moved to breakeven (WEEX BE-SL covers the >= 0.40% case).
+BREAKEVEN_TRIGGER_PCT = 0.8  # V3.2.88: 0.8% (was 0.4%). Swing trades need room to breathe before locking BE.
+# V3.2.88: Widened peak-fade for swing trades — proportional to longer hold times.
+# T1 (BTC/ETH): 8h hold → wider fade thresholds to let trades develop
+# T2 (BNB/LTC/XRP): 6h hold → altcoins need more room for normal swings
+# T3 (SOL/ADA): 4h hold → volatile but still needs swing-level breathing room
+# Gate: SL not yet moved to breakeven (WEEX BE-SL covers the >= 0.80% case).
 # exit_reason "peak_fade" → COOLDOWN_MULTIPLIERS["profit_lock"] = 0.0 → zero cooldown.
-PEAK_FADE_MIN_PEAK   = {1: 0.30, 2: 0.45, 3: 0.45}  # Min peak% per tier to activate fade
-PEAK_FADE_TRIGGER_PCT = {1: 0.15, 2: 0.25, 3: 0.25}  # Drop threshold per tier (current <= peak - trigger)
-# V3.2.67: Tiered velocity exit — matches actual hold times per tier.
-# Charts show 0.5-1% dip-bounces happening over 60-120 min windows.
-# 40 min was killing trades before the bounce could play out (4/7 velocity exits last session).
-# T1 (BTC/ETH): 3h hold → 75 min velocity exit (25% of hold)
-# T2 (BNB/LTC/XRP): 2h hold → 60 min velocity exit (50% of hold)
-# T3 (SOL/ADA): 1.5h hold → 50 min velocity exit (56% of hold)
-VELOCITY_EXIT_MINUTES = {1: 75, 2: 60, 3: 50}  # Per-tier velocity exit (was flat 40)
-VELOCITY_MIN_PEAK_PCT = 0.10    # V3.2.67: Lowered from 0.15% → 0.10%. If peak < 0.10% in full velocity window, truly dead.
+PEAK_FADE_MIN_PEAK   = {1: 0.80, 2: 1.00, 3: 1.00}  # Min peak% per tier to activate fade
+PEAK_FADE_TRIGGER_PCT = {1: 0.40, 2: 0.50, 3: 0.50}  # Drop threshold per tier (current <= peak - trigger)
+# V3.2.88: Velocity exit widened for swing trade hold times.
+# Swing trades need hours, not minutes, to play out the thesis.
+# T1 (BTC/ETH): 8h hold → 3h velocity exit (38% of hold)
+# T2 (BNB/LTC/XRP): 6h hold → 2h velocity exit (33% of hold)
+# T3 (SOL/ADA): 4h hold → 1.5h velocity exit (38% of hold)
+VELOCITY_EXIT_MINUTES = {1: 180, 2: 120, 3: 90}  # V3.2.88: swing-level velocity (was 75/60/50)
+VELOCITY_MIN_PEAK_PCT = 0.15    # V3.2.88: Raised from 0.10% → 0.15%. Swing trades should show some move in 2-3 hours.
 # V3.2.76: Near-TP grace — skip max_hold exit if trade is >= 60% toward TP.
 # Trade is actively approaching target; killing it wastes the move and fees paid to get here.
 # Grace period: 15 minutes past max_hold. If still not TP'd after grace, exit normally.
 NEAR_TP_GRACE_PCT = 0.60          # TP progress threshold (60% of distance to TP)
-NEAR_TP_GRACE_MINUTES = 15        # Extra time granted when near TP
+NEAR_TP_GRACE_MINUTES = 30        # V3.2.88: 30min grace (was 15). Swing trades need more time near TP.
 
 def _move_sl_to_breakeven(symbol: str, side: str, entry_price: float, tp_price: float, size: float) -> bool:
     """V3.2.46: Cancel existing SL and replace with breakeven SL at entry price.
@@ -2348,21 +2386,13 @@ def monitor_positions():
                         except Exception as _fc_err:
                             logger.debug(f"  [FLOW-CONTRA] {symbol}: check failed: {_fc_err}")
 
-                # V3.2.68: 8-EMA SNAP-BACK EXIT — mean-reversion exit for dip-bounce trades.
-                # The natural dip-bounce exit is when price snaps back to the short-term mean.
-                # 8-period EMA on 5m candles = 40 min of data = matches the dip-bounce timeframe.
-                # Logic: if trade is profitable (peak >= 0.20%) AND price crosses back through the 8-EMA
-                # in the direction of mean reversion → exit. This catches the natural bounce completion
-                # instead of waiting for a fixed TP that may be too far.
-                # Only fires when: (1) trade is >= 10 min old, (2) peak was meaningful (>= 0.20%),
-                # (3) NOT already covered by breakeven SL (BE-SL handles the >= 0.40% case).
-                # V3.2.72: (4) trade must have GIVEN BACK >= 50% of peak profit (real reversal, not EMA convergence).
-                # Without this, trending trades get killed when the 8-EMA catches up to price in a steady move.
-                # LTC SHORT V3.2.71 bug: exited at +0.24% while price was actively declining — EMA converged
-                # to within $0.006 of price, triggering "snap-back" on noise, not an actual reversal.
-                # Zero cooldown (profit was taken).
-                EMA_SNAPBACK_GIVEBACK_PCT = 0.50  # Must give back 50% of peak before snapback fires
-                if not should_exit and not trade.get("sl_moved_to_breakeven", False):
+                # V3.2.88: 8-EMA SNAP-BACK EXIT — DISABLED for swing trading.
+                # The 8-EMA on 5m candles is a scalp tool (40 min of data). In swing trades (4-8H holds),
+                # the EMA constantly converges to price and triggers false "snap-back" exits during normal
+                # consolidation within a larger move. LTC SHORT V3.2.71 bug was the canonical example.
+                # Breakeven SL + peak-fade handle swing exits. EMA snapback is not compatible.
+                EMA_SNAPBACK_GIVEBACK_PCT = 0.50  # Kept for reference
+                if False and not should_exit and not trade.get("sl_moved_to_breakeven", False):  # V3.2.88: DISABLED
                     _ema_age_min = hours_open * 60
                     _giveback_ok = peak_pnl_pct > 0 and pnl_pct <= peak_pnl_pct * (1.0 - EMA_SNAPBACK_GIVEBACK_PCT)
                     if _ema_age_min >= 10 and peak_pnl_pct >= 0.20 and pnl_pct > 0 and _giveback_ok:
@@ -4081,10 +4111,10 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.87 - REMOVE STALE CONF COMPARISON")
+    logger.info("SMT Daemon V3.2.88 - LONG TERM PIVOT + MOMENTUM CONFIRMATION")
     logger.info("=" * 60)
     # --- Tier table ---
-    logger.info("TIER CONFIG:")
+    logger.info("TIER CONFIG (V3.2.88 SWING TRADE):")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
         pairs = [p for p, info in TRADING_PAIRS.items() if info["tier"] == tier]
@@ -4094,11 +4124,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.88: LONG TERM PIVOT. Personas analyze hours-to-days; execution now matches. Hold: T1=8H T2=6H T3=4H. Momentum confirmation gate blocks entry against active price movement. TECHNICAL momentum conflict = hard BLOCK (was cap). EMA snapback DISABLED. BE trigger 0.8%% (was 0.4%%). Peak-fade/velocity widened for swing.")
     logger.info("  V3.2.87: REMOVE STALE CONF COMPARISON. Old 'existing conf > new conf = hold' blocked flips when market reversed. Swap gates (age/TP proximity/range/SR pre-check) are the real guards now.")
     logger.info("  V3.2.86: OPPOSITE SWAP SR PRE-CHECK. Chart SR pre-checked before closing existing position for opposite swap. If replacement has no valid TP, keep existing position (prevents close-for-nothing disaster).")
     logger.info("  V3.2.85: PNL LEVERAGE FIX + PER-CYCLE FLOW SEED. (1) PnL was margin not notional (missing ×20) — broke BE-SL detection, display, AI logs. (2) FLOW seed refresh every signal cycle (positions + RL), not just daemon startup.")
     logger.info("  V3.2.84: THESIS EXIT SAME-DIRECTION FIX + BLACKLIST EXEMPT. (1) Judge LONG 89%% + already have LONG = thesis CONFIRMED, not degraded. (2) Zero-cooldown exits (thesis/velocity/flow_contra) exempt from 2h loss blacklist.")
-    logger.info("  V3.2.83: FLOW SEED FROM RL DATA — 3-tier seed: positions → RL data → signal_history.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup

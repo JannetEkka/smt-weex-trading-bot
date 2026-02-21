@@ -2021,9 +2021,12 @@ def _exponential_backoff(attempt: int, base_delay: float = 2.0, max_delay: float
 # Dip-bounce strategy = move happens in first 30-60min or thesis is dead.
 # More at-bats = more compounding opportunities in remaining 72h.
 TIER_CONFIG = {
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.01, "time_limit": 180, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 3, "early_exit_hours": 1, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.035, "trailing_stop": 0.012, "time_limit": 120, "tp_pct": 3.5, "sl_pct": 1.5, "max_hold_hours": 2, "early_exit_hours": 0.75, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.03, "trailing_stop": 0.015, "time_limit": 90, "tp_pct": 3.0, "sl_pct": 1.8, "max_hold_hours": 1.5, "early_exit_hours": 0.5, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    # V3.2.88: LONG TERM PIVOT — hold times aligned with persona analysis timeframes.
+    # Personas analyze on hours-to-days horizons (WHALE: on-chain flows, SENTIMENT: news catalysts).
+    # Old scalp hold times (1.5-3H) killed trades before the thesis could play out.
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.01, "time_limit": 480, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 8, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.035, "trailing_stop": 0.012, "time_limit": 360, "tp_pct": 3.5, "sl_pct": 1.5, "max_hold_hours": 6, "early_exit_hours": 1.5, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.03, "trailing_stop": 0.015, "time_limit": 240, "tp_pct": 3.0, "sl_pct": 1.8, "max_hold_hours": 4, "early_exit_hours": 1, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
 }
 # V3.1.78: Tier reassignment based on actual ATR/volatility analysis
 # BTC T1→T2 (2.28% actual SL, +52% stretch - behaves mid-cap)
@@ -2042,7 +2045,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.87-RemoveStaleConfComparison"
+PIPELINE_VERSION = "SMT-v3.2.88-LongTermPivot"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3496,20 +3499,18 @@ class TechnicalPersona:
                 base_conf -= 0.05  # Counter-trend = slight penalty (not blocked)
                 reasoning += f"; counter-trend ({trend_bias})"
 
-            # V3.2.77: MOMENTUM CONFLICT CAP — when mean-reversion signals say SHORT
-            # but 1h momentum is strongly positive (genuine uptrend), cap confidence.
-            # TECHNICAL's mean-reversion framework is wrong in trending markets:
-            # overbought RSI + positive momentum = trend strength, not reversal.
-            # Cap at 0.65 → TECHNICAL can't single-handedly push Judge to 85%.
-            # Other personas (FLOW, WHALE) must confirm for a trade.
-            _MOMENTUM_CONFLICT_CAP = 0.65
+            # V3.2.88: MOMENTUM CONFLICT → HARD BLOCK (was cap at 0.65 in V3.2.77).
+            # If 1h momentum is strongly opposing the signal direction, TECHNICAL returns NEUTRAL.
+            # In swing trading, entering against confirmed hourly momentum is a losing play.
+            # The direction thesis may be correct long-term, but timing is wrong — wait for momentum to turn.
+            # Judge sees NEUTRAL from TECHNICAL → harder to reach 85% → trade waits for confirmation.
             _MOMENTUM_TREND_THRESH = 0.20  # 1h momentum threshold for "confirmed trend"
             if direction == "SHORT" and momentum_1h > _MOMENTUM_TREND_THRESH:
-                base_conf = min(base_conf, _MOMENTUM_CONFLICT_CAP)
-                reasoning += f"; MOMENTUM CONFLICT: 1h mom {momentum_1h:+.2f}% contradicts SHORT (capped {_MOMENTUM_CONFLICT_CAP:.0%})"
+                reasoning += f"; MOMENTUM BLOCK: 1h mom {momentum_1h:+.2f}% contradicts SHORT — returning NEUTRAL (wait for momentum to turn)"
+                return {"persona": self.name, "signal": "NEUTRAL", "confidence": 0.40, "reasoning": reasoning}
             elif direction == "LONG" and momentum_1h < -_MOMENTUM_TREND_THRESH:
-                base_conf = min(base_conf, _MOMENTUM_CONFLICT_CAP)
-                reasoning += f"; MOMENTUM CONFLICT: 1h mom {momentum_1h:+.2f}% contradicts LONG (capped {_MOMENTUM_CONFLICT_CAP:.0%})"
+                reasoning += f"; MOMENTUM BLOCK: 1h mom {momentum_1h:+.2f}% contradicts LONG — returning NEUTRAL (wait for momentum to turn)"
+                return {"persona": self.name, "signal": "NEUTRAL", "confidence": 0.40, "reasoning": reasoning}
 
             return {
                 "persona": self.name,
@@ -3919,7 +3920,7 @@ class JudgePersona:
         # fewer raw inputs for Flash to juggle. detect_macro_events() is called in
         # MultiPersonaAnalyzer.analyze() before SENTIMENT runs.
 
-        _hold_windows = {"BTC": "3H", "ETH": "3H", "BNB": "2H", "LTC": "2H", "XRP": "2H", "SOL": "1.5H", "ADA": "1.5H"}
+        _hold_windows = {"BTC": "8H", "ETH": "8H", "BNB": "6H", "LTC": "6H", "XRP": "6H", "SOL": "4H", "ADA": "4H"}
         _pair_hold = _hold_windows.get(pair, "2H")
         _pair_tp_cap = f"{PAIR_TP_CEILING.get(pair, 1.0):.1f}%"  # V3.2.61: read from actual config
         prompt = f"""You are the AI Judge for a crypto futures trading bot. Real money. Be disciplined.
@@ -3956,24 +3957,27 @@ NOTE: Each entry shows the pair, direction, confidence, how many consecutive 10-
 - If THIS PAIR has no history = first time seeing a signal for it. Treat normally.
 - Other pairs' history gives you cross-market context (is everything flipping? broad trend shift?).
 
-=== DIP/PEAK DETECTION PROTOCOL (V3.2.68) ===
-THIS IS A DIP-BOUNCE STRATEGY. The key signal pattern is:
-  Cycle N: FLOW shows SHORT (selling pressure = dip forming)
-  Cycle N+1: FLOW FLIPS to LONG (buying returns = dip BOTTOM)
-  → THIS IS THE ENTRY. The FLOW flip from SHORT→LONG IS the dip bounce signal.
-  → Vice versa for peaks: FLOW flips LONG→SHORT = peak reversal = SHORT entry.
+=== SWING TRADE STRATEGY (V3.2.88) ===
+THIS IS A SWING TRADE STRATEGY. Personas analyze on HOURS-TO-DAYS timeframes.
+WHALE tracks on-chain flows and community sentiment (multi-hour to multi-day signals).
+SENTIMENT tracks news catalysts and macro events (hours to days impact).
+FLOW tracks real-time orderbook pressure (confirms timing).
+TECHNICAL tracks RSI, momentum, VWAP (confirms trend direction).
 
-CRITICAL: When you see FLOW reasoning contains "[FLIP SHORT→LONG = DIP/PEAK SIGNAL, boosted]":
-  - This means FLOW just flipped direction AND price is in dip territory (bottom of range).
-  - TRUST FLOW. This is the highest-conviction entry signal. Do NOT return WAIT.
-  - FLOW flip + price at bottom of range + TECHNICAL showing oversold = MAXIMUM confidence entry.
-  - The old rule "direction flip = noise" is WRONG for dip-bounce trading. The flip IS the trade.
+THE STRATEGY: Trust persona DIRECTION signals. They identify WHERE price is heading over hours.
+But DON'T rush the ENTRY. Wait for momentum confirmation — price should be starting to move
+in the signal direction, not still moving against it.
+
+FLOW FLIP CONTEXT: A FLOW flip (direction change) shows orderbook pressure shifting.
+In swing trading, a flip is a POTENTIAL turning point — but needs momentum confirmation.
+If FLOW flips LONG but 1h momentum is still negative, the turn hasn't happened yet → WAIT.
+If FLOW flips LONG AND momentum is turning positive, the swing is starting → ENTER.
 
 === MICROSTRUCTURE / CHOP DETECTION (5m candles) ===
 {chop_context_text if chop_context_text else "Chop data unavailable."}
 USE THIS AS CONTEXT — not a hard veto. This tells you if the pair is currently ranging or trending at the micro level.
 - HIGH chop + weak signals = strong WAIT. Market is going nowhere.
-- MEDIUM chop + strong WHALE+FLOW = proceed cautiously. The dip-bounce strategy works in ranges IF the signal is strong.
+- MEDIUM chop + strong WHALE+FLOW = proceed cautiously. Swing trades work in ranges IF the signal is strong.
 - LOW chop (trending) = normal trading. Trust your signals.
 - If ADX is rising and recent consistency is higher than full consistency, the market is BREAKING OUT of a range — good entry opportunity.
 
@@ -4014,31 +4018,32 @@ Available balance: ${balance:.0f}
 Use CHART STRUCTURE + PERSONA DATA + SENTIMENT MACRO to select the EPOCH STRATEGY below.
 Then plan the move WITHIN YOUR TIER'S HOLD WINDOW (see HOLD TIME LIMITS) and set tp_price at the real structural level (NOT 0.5% by default).
 
-=== BLITZ MODE — FINAL 72H REMAINING ===
-EXECUTE NOW. <3 days left in competition. VELOCITY > PATIENCE. Every cycle without a trade is wasted capital.
-BOTH DIRECTIONS: LONG and SHORT are both valid. Pick the direction with strongest persona consensus.
-SHORT SETUPS: FLOW extreme selling + TECHNICAL SHORT (RSI overbought, price at top of range) = valid SHORT entry. Shorts target support levels.
-LONG SETUPS: FLOW strong buying + dip-bounce at support = valid LONG entry. Longs target resistance levels.
+=== FINAL STRETCH — COMPETITION ENDS FEB 23 ===
+TRADE WITH CONVICTION but PATIENCE ON ENTRY. <3 days left. Pick the direction with strongest persona consensus.
+BOTH DIRECTIONS: LONG and SHORT are both valid — trust the personas.
+SHORT SETUPS: FLOW extreme selling + TECHNICAL SHORT + momentum confirms = valid SHORT. Target structural support.
+LONG SETUPS: FLOW strong buying + TECHNICAL confirms + momentum turning up = valid LONG. Target structural resistance.
+TIMING MATTERS: A late entry that catches the move beats an early entry that eats the SL. Wait for momentum to confirm direction.
 
 PRIORITY ORDER: MOMENTUM_CROSS > CATALYST_DRIVE > CORRELATION_LAG > SUPPORT_SWEEP > RANGE_BOUNDARY > VWAP_REVERSION
 BETA BIAS: Prefer Tier 3 (SOL, ADA) for momentum — bigger moves in shorter time. BTC/ETH are fine at 85%+ if 3+ personas agree.
-LOW ADX (V3.2.59): ADX < 20 = range-bound — dip-bounce works well here IF 2+ personas agree at 55%+ confidence each.
+LOW ADX (V3.2.59): ADX < 20 = range-bound — range strategies work here IF 2+ personas agree at 55%+ confidence each.
   If all personas are below 50% confidence, WAIT regardless of ADX.
   RANGE_BOUNDARY and VWAP_REVERSION strategies work in low-ADX — use if FLOW confirms wall.
 EXTREME FEAR (V3.2.62): F&G < 15 — market is panicking. Two valid plays:
-  1. DIP-BOUNCE LONG: FLOW confirms strong buying (>= 70% LONG) = smart money accumulation. Enter long.
+  1. ACCUMULATION LONG: FLOW confirms strong buying (>= 70% LONG) + momentum turning = smart money accumulation. Enter long.
   2. CONTINUATION SHORT: FLOW confirms extreme selling (>= 70% SHORT) + TECHNICAL SHORT = panic hasn't bottomed. Enter short.
   FLOW at 50-60% in extreme fear = noise in EITHER direction. Require strong FLOW confirmation.
   Do NOT use F&G alone to boost confidence above what the persona votes justify.
 LIVE PRICES: Use CHART DATA provided in context for all price levels. Ignore any hardcoded example prices below.
 
-=== HOLD TIME LIMITS (V3.2.57 — HARD DAEMON LIMITS) ===
+=== HOLD TIME LIMITS (V3.2.88 — SWING TRADE WINDOWS) ===
 The daemon WILL auto-close positions at these times regardless of your analysis:
-- Tier 1 (BTC, ETH): MAX 3H total | early exit at 1H if losing > -1%
-- Tier 2 (BNB, LTC, XRP): MAX 2H total | early exit at 45M if losing > -1%
-- Tier 3 (SOL, ADA): MAX 1.5H total | early exit at 30M if losing > -1%
-- Velocity exit: ANY pair closed at 40M if peak PnL never reached +0.15%
-Your TP target MUST be reachable within these windows. Do NOT pick a TP that requires 4+ hours of drift.
+- Tier 1 (BTC, ETH): MAX 8H total | early exit at 2H if losing > -1%
+- Tier 2 (BNB, LTC, XRP): MAX 6H total | early exit at 1.5H if losing > -1%
+- Tier 3 (SOL, ADA): MAX 4H total | early exit at 1H if losing > -1%
+- Velocity exit: T1=3H, T2=2H, T3=1.5H if peak PnL never reached +0.15%
+Your TP target MUST be reachable within these windows. These are SWING windows — use structural 4H/Daily levels.
 If the nearest structural level is too far for the hold window, return WAIT — do not force a trade.
 =================================
 
@@ -4092,7 +4097,7 @@ SIGNAL RELIABILITY (V3.2.59 — ALL PERSONAS MATTER):
     4. TECHNICAL (RSI/SMA/momentum) -- trend confirmation. In fear markets (F&G < 30), discount if it conflicts
        with FLOW, as SMA signals lag. But when TECHNICAL aligns with FLOW + SENTIMENT, it strengthens conviction.
 
-HOW TO DECIDE (V3.2.68 — DIP-AWARE MAJORITY VOTE):
+HOW TO DECIDE (V3.2.88 — SWING TRADE MAJORITY VOTE):
 Count how many personas agree on direction. F&G is CONTEXT, not a vote — never use it to inflate confidence.
 - 3+ personas agree LONG at 60%+ each: 85-90% confidence. This is the strong setup.
 - 3+ personas agree but some weakly (50-60%): 80-85% confidence. Borderline — only trade if no conflicting strong signal.
@@ -4110,15 +4115,20 @@ Count how many personas agree on direction. F&G is CONTEXT, not a vote — never
 - No persona exceeds 50% confidence: WAIT (no conviction anywhere).
 CONFIDENCE 90%+ REQUIRES: 3+ personas at 65%+ each, all agreeing. Never give 90% with only 2 weak agreements.
 
-=== DIP-BOUNCE SPECIAL RULE (V3.2.68) ===
-WHALE and SENTIMENT are structurally blind to real-time dips. WHALE reflects backward-looking community fear. SENTIMENT scans qualitative news, not price action. Requiring 3+ personas for 85% is IMPOSSIBLE on dips because only FLOW and TECHNICAL can see them.
-THEREFORE: When ALL of these conditions are true:
-  1. FLOW >= 65% AND shows a direction FLIP (see signal history ★ FLIPPED tag or reasoning "[FLIP ... DIP/PEAK SIGNAL]")
-  2. TECHNICAL >= 50% in the same direction (5m RSI confirms oversold/overbought)
-  3. Price is in the lower 45% of 12H range (for LONG) or upper 55% (for SHORT) — shown in chart context
-  4. WHALE and SENTIMENT are NEUTRAL (not actively opposing)
-→ 2-PERSONA AGREEMENT IS SUFFICIENT FOR 85% CONFIDENCE. Output 85-90%.
-This is the dip-bounce pattern. FLOW flip + TECHNICAL oversold + price at range extreme = the trade. WHALE/SENTIMENT neutrality is EXPECTED, not a contra-indicator.
+=== MOMENTUM CONFIRMATION RULE (V3.2.88) ===
+CRITICAL: Direction and timing are SEPARATE decisions.
+Personas tell you DIRECTION (where price is heading over hours). Good — trust them.
+But TIMING requires momentum confirmation — price should be STARTING to move in the signal direction.
+
+CHECK BEFORE ENTERING:
+  1. Is 1H momentum aligned with the trade direction? (LONG needs positive or turning-positive momentum, SHORT needs negative or turning-negative)
+  2. Is TECHNICAL returning a directional signal (not NEUTRAL from momentum block)?
+  3. If TECHNICAL is NEUTRAL due to momentum conflict, that means 1h momentum OPPOSES the trade — return WAIT.
+     The thesis may be right, but now is not the time. Wait for the next cycle when momentum may confirm.
+
+CONFIDENCE RULE: If TECHNICAL returns NEUTRAL (momentum block), treat it as OPPOSING the trade.
+  This means you need 3 of the remaining personas (WHALE + SENTIMENT + FLOW) all agreeing strongly for 85%.
+  If only 2 of 3 agree, WAIT — the momentum hasn't turned yet.
 
 === CONTINUATION HOLD / THESIS CHECK (V3.2.74) ===
 When CURRENT POSITIONS shows an OPEN position on THIS pair in the SAME direction as your signal:
@@ -4137,9 +4147,9 @@ VOLATILITY RISK (from SENTIMENT):
 - Only favor WAIT on HIGH_RISK if signals are genuinely weak/conflicting (no majority agreement).
 - Do NOT impose an arbitrary 85% confidence gate for HIGH_RISK — the confidence should reflect actual signal quality.
 
-TP TARGET (V3.2.57 — STRUCTURAL TARGET WITHIN HOLD WINDOW, NOT 0.5% DEFAULT):
+TP TARGET (V3.2.88 — STRUCTURAL TARGET WITHIN SWING WINDOW):
 Look at CHART STRUCTURE (4H/Daily levels) to plan where price will be WITHIN YOUR HOLD WINDOW:
-  T1 (BTC/ETH): up to 3H | T2 (BNB/LTC/XRP): up to 2H | T3 (SOL/ADA): up to 1.5H
+  T1 (BTC/ETH): up to 8H | T2 (BNB/LTC/XRP): up to 6H | T3 (SOL/ADA): up to 4H
 1. 4H structural S/R = primary reference (code now fetches 4H anchors separately — use those levels).
 2. Daily S/R = secondary for BTC/ETH/SOL (larger trend).
 3. FLOW walls = real-time confirmation of where resting orders cluster (ephemeral, secondary).
@@ -4154,7 +4164,7 @@ If a pair has >15% win rate, it has proven itself — trust stronger signals on 
 
 FEAR & GREED (V3.2.62 — BIDIRECTIONAL):
 CRITICAL: F&G is CONTEXT, not a persona. It does NOT count as a vote. Do NOT boost confidence just because F&G is low/high.
-- F&G < 15 (EXTREME FEAR): Two valid plays — dip-bounce LONG (if FLOW >= 70% LONG) OR continuation SHORT (if FLOW >= 70% SHORT + TECHNICAL SHORT).
+- F&G < 15 (EXTREME FEAR): Two valid plays — accumulation LONG (if FLOW >= 70% LONG + momentum turning) OR continuation SHORT (if FLOW >= 70% SHORT + TECHNICAL SHORT).
   FLOW at 50-60% in extreme fear = noise. Require FLOW >= 70% in EITHER direction for a valid trade.
   If FLOW is weak/neutral, WAIT — extreme fear with no flow confirmation = dangerous in both directions.
 - F&G < 30 (FEAR): Favor direction with strongest FLOW + persona agreement. Do not override weak signals with "fear = buy."
