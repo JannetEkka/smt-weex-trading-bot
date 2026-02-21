@@ -4147,10 +4147,10 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.91 - FLIP BOOST VOL NOISE GATE")
+    logger.info("SMT Daemon V3.2.92 - FEE-AWARE R:R GUARD")
     logger.info("=" * 60)
     # --- Tier table ---
-    logger.info("TIER CONFIG (V3.2.91 SWING TRADE):")
+    logger.info("TIER CONFIG (V3.2.92 SWING TRADE):")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
         pairs = [p for p, info in TRADING_PAIRS.items() if info["tier"] == tier]
@@ -4160,11 +4160,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.91: FLIP BOOST VOL NOISE GATE. FLOW flip boost blocked when volume floor fired (minority side < 3%%). XRP: taker ratio 271.40 (noise) boosted FLOW 70%%→85%%, inflating Judge to 88%%. Noise flips are noise — no boost.")
-    logger.info("  V3.2.90: FIX OPPOSITE SWAP SR PRE-CHECK. (1) find_chart_based_tp_sl missing from imports → NameError since V3.2.86. (2) SR pre-check errors now BLOCK swap.")
-    logger.info("  V3.2.89: SWING TRADE GUARDS. TP ceilings raised. R:R guard 0.33→0.67. TP haircut 0.90→0.95. Momentum gate: 1h+15m. FLOW flip boost needs 65%% base.")
+    logger.info("  V3.2.92: FEE-AWARE R:R GUARD. R:R now subtracts 0.16%% round-trip fees from TP and adds to SL. BNB 0.78%%/1.01%% looked 0.77:1 raw but was 0.53:1 after fees. Min TP ~0.94%% at 1.0%% SL, ~1.27%% at 1.5%% SL.")
+    logger.info("  V3.2.91: FLIP BOOST VOL NOISE GATE. FLOW flip boost blocked when volume floor fired (minority side < 3%%).")
+    logger.info("  V3.2.90: FIX OPPOSITE SWAP SR PRE-CHECK. find_chart_based_tp_sl missing from imports. Error handler now BLOCKs swap.")
+    logger.info("  V3.2.89: SWING TRADE GUARDS. TP ceilings raised. R:R guard 0.33→0.67. TP haircut 0.90→0.95. Momentum gate: 1h+15m.")
     logger.info("  V3.2.88: LONG TERM PIVOT. Hold: T1=8H T2=6H T3=4H. Momentum gate. TECHNICAL momentum = BLOCK. EMA snapback DISABLED.")
-    logger.info("  V3.2.87: REMOVE STALE CONF COMPARISON. Swap gates (age/TP/range/SR) are the real guards now.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup

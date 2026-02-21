@@ -2045,7 +2045,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.91-FlipBoostVolNoiseGate"
+PIPELINE_VERSION = "SMT-v3.2.92-FeeAwareRR"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -5120,17 +5120,20 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         print(f"  [FEE-FLOOR] {_reason}")
         return {"executed": False, "reason": _reason}
 
-    # V3.2.89: R:R guard raised 0.33→0.67 for swing trades.
-    # With raised TP ceilings (1.5-2.0%) and MAX_SL 1.5%, structural TPs now pass.
-    # 0.67:1 R:R = TP must be >= 1.0% when SL = 1.5%. Break-even win rate ~60%.
-    # ADA V3.2.88 bug: 0.80% TP / 1.50% SL = 0.53:1 → would now be REJECTED (correct).
+    # V3.2.92: Fee-aware R:R guard. Round-trip taker fees (0.16%) eat TP profit and widen SL loss.
+    # BNB V3.2.91 bug: TP 0.78% / SL 1.01% = raw R:R 0.77:1 (passed 0.67 min), but after fees:
+    #   net TP = 0.78% - 0.16% = 0.62%, net SL = 1.01% + 0.16% = 1.17%, true R:R = 0.53:1.
+    # On tight TPs (< 1.0%), fees are 20%+ of profit — the R:R guard MUST account for this.
     MIN_RR_RATIO = 0.67
-    _rr_ratio = tp_pct_raw / sl_pct_raw if sl_pct_raw > 0 else 0
+    _ROUND_TRIP_FEE_PCT = 0.16  # 0.08%/side × 2 sides (V3.2.50: corrected taker fee rate)
+    _tp_after_fees = tp_pct_raw - _ROUND_TRIP_FEE_PCT
+    _sl_after_fees = sl_pct_raw + _ROUND_TRIP_FEE_PCT
+    _rr_ratio = _tp_after_fees / _sl_after_fees if _sl_after_fees > 0 else 0
     if _rr_ratio < MIN_RR_RATIO:
-        _reason = f"R:R {_rr_ratio:.2f}:1 below minimum {MIN_RR_RATIO}:1 (TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}%)"
+        _reason = f"R:R {_rr_ratio:.2f}:1 below minimum {MIN_RR_RATIO}:1 (TP {tp_pct_raw:.2f}% - fees → {_tp_after_fees:.2f}% / SL {sl_pct_raw:.2f}% + fees → {_sl_after_fees:.2f}%)"
         print(f"  [R:R GUARD] {_reason}")
         return {"executed": False, "reason": _reason}
-    print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | R:R {_rr_ratio:.1f}:1 | Method: {chart_sr['method']}")
+    print(f"  [FINAL] TP: ${tp_price:.4f} ({tp_pct_raw:.2f}%) | SL: ${sl_price:.4f} ({sl_pct_raw:.2f}%) | R:R {_rr_ratio:.1f}:1 (fee-adj) | Method: {chart_sr['method']}")
 
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
     # Orphan TP/SL triggers from previous trades block leverage changes on WEEX.
