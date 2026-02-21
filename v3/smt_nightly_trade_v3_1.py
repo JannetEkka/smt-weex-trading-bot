@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.74-FlowContraExit-RangeRevert-BannerCleanup"
+PIPELINE_VERSION = "SMT-v3.2.74-FlowContra-CatalystDrive-ContinuationHold-RangeRevert"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4052,6 +4052,11 @@ Count how many personas agree on direction. F&G is CONTEXT, not a vote — never
 - 2 personas agree LONG strongly (70%+ each) + other 2 neutral: 80-85% confidence. Requires FLOW to be one of the two.
 - FLOW strong (>70%) + SENTIMENT has specific catalyst + same direction: 85%+ even if WHALE disagrees.
   WHALE community sentiment lags price action — a catalyst-driven move with FLOW confirmation is more reliable.
+- CATALYST DRIVE RULE: SENTIMENT has a NAMED catalyst (not just "neutral macro" — an actual event: ETF inflow, partnership,
+  protocol upgrade, institutional adoption, regulatory decision) + FLOW >= 60% same direction: 85%+ confidence.
+  This is distinct from DIP CATCH. The catalyst creates the move; FLOW confirms smart money is acting on it.
+  TECHNICAL and WHALE are optional — catalysts bypass the 3-persona requirement because news moves markets before
+  indicators react. If WHALE or TECHNICAL actively OPPOSE (>70% opposite), cap at 85%.
 - WHALE strong (>70%) + FLOW strong (>70%) + same direction: 85-90%. This is the gold standard.
 - ANY strong persona (>70%) in the OPPOSITE direction of your trade: cap confidence at 85% max.
 - FLOW and WHALE both strong (>70%) in OPPOSITE directions: WAIT (genuine conflict).
@@ -4067,6 +4072,17 @@ THEREFORE: When ALL of these conditions are true:
   4. WHALE and SENTIMENT are NEUTRAL (not actively opposing)
 → 2-PERSONA AGREEMENT IS SUFFICIENT FOR 85% CONFIDENCE. Output 85-90%.
 This is the dip-bounce pattern. FLOW flip + TECHNICAL oversold + price at range extreme = the trade. WHALE/SENTIMENT neutrality is EXPECTED, not a contra-indicator.
+
+=== CONTINUATION HOLD / THESIS CHECK (V3.2.74) ===
+When CURRENT POSITIONS shows an OPEN position on THIS pair in the SAME direction as your signal:
+  → This is a CONTINUATION HOLD. The code will NOT open a duplicate — but your confidence score tells the daemon
+    whether the thesis is still alive. If you return the SAME direction at 85%+, the position stays. Good.
+  → If signals have DEGRADED (e.g., FLOW flipped opposite, TECHNICAL reversed, catalyst faded):
+    return WAIT or the OPPOSITE direction. The daemon uses this to decide exits.
+  → Be honest: do NOT inflate confidence just because a position is already open. Re-evaluate fresh.
+When CURRENT POSITIONS shows an OPEN position in the OPPOSITE direction:
+  → The daemon has opposite-swap logic. Your job is still to call the best signal. If the opposite direction
+    is genuinely stronger now, call it — the daemon handles the flip mechanics.
 
 VOLATILITY RISK (from SENTIMENT):
 - HIGH_RISK means a scheduled event COULD cause volatility. It does NOT mean "don't trade."
