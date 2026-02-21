@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.89** — all production code is in `v3/`.
+**Current version: V3.2.90** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -471,16 +471,23 @@ python3 v3/cryptoracle_client.py
 48. **FLOW flip boost minimum confidence gate (V3.2.89)** — FLOW flip boost (+15%, cap 0.95) previously applied to any FLOW signal at a range extreme. SOL: taker ratio 0.84 (mild selling) → FLOW ~80% → boosted to 95% SHORT. That's extreme-conviction labeling from moderate data. New: FLOW base must be >= 65% before boost applies. Below 65%, the flip is logged but no boost. Do not lower below 65% — that's barely above neutral and doesn't justify a +15% boost.
 49. **Execution sort by persona agreement (V3.2.89)** — Old sort: confidence desc, then tier desc (T3>T2>T1). When BNB (88%, 3 personas agreeing) and ADA (88%, 2 personas + WHALE opposing) tied on confidence, ADA was executed first because T3>T2. ADA had worse R:R and weaker consensus. New: confidence desc, then persona agreement count desc. At equal confidence, prefer trades with more personas agreeing. Do not re-add tier bias — it was a scalp-era preference for volatile alts that made sense for quick bounces but not for swing trades.
 50. **TP_HAIRCUT for swing trades (V3.2.89)** — TP_HAIRCUT changed 0.90→0.95. In scalp mode, targeting 90% of SR made sense (price rarely reaches exact SR on quick bounces). In swing mode with 4-8H holds, price has time to test the actual SR level. 95% captures nearly the full move. Do not lower back to 0.90 — that shaves 5% off every TP unnecessarily for swing timeframes.
+51. **Opposite swap SR pre-check was silently broken (V3.2.90)** — `find_chart_based_tp_sl` was never added to the daemon's import list when V3.2.86 introduced the SR pre-check. Every opposite swap since V3.2.86 hit a `NameError`, fell through to "proceeding cautiously" (no block), and the safety net was dead. ETH SHORT at +$16.33 was closed for a LONG swap, the SR pre-check NameError fell through, then the range gate blocked the LONG replacement — lost profit + zero positions. Two fixes: (1) added `find_chart_based_tp_sl` to daemon imports, (2) changed the except handler from fallthrough to `continue` (BLOCK swap). The error handler MUST block — "proceed cautiously" on an error means the safety net doesn't exist. Do not change the except handler back to fallthrough.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.89. Next change should be V3.2.90.
+Current: V3.2.90. Next change should be V3.2.91.
 
 **Recent version history (last 5):**
-- V3.2.89: (**CURRENT**) SWING TRADE GUARDS.
+- V3.2.90: (**CURRENT**) FIX OPPOSITE SWAP SR PRE-CHECK.
+  (1) `find_chart_based_tp_sl` was missing from daemon imports since V3.2.86 → NameError on every SR
+  pre-check (the feature was silently broken since introduction). (2) SR pre-check error handler changed
+  from "proceed cautiously" (fallthrough) to BLOCK (continue). Bug: ETH SHORT at +$16.33 was closed for
+  LONG swap, SR pre-check NameError fell through, range gate blocked LONG replacement → lost profit + zero positions.
+  `PIPELINE_VERSION = "SMT-v3.2.90-FixOppositeSRPrecheck"`.
+- V3.2.89: SWING TRADE GUARDS.
   TP ceilings raised from scalp-era 0.50-0.80% to swing-level 1.5-2.0% (ADA bug: 0.80% TP / 1.50% SL = 0.53:1 R:R).
   R:R guard raised 0.33→0.67. TP haircut 0.90→0.95. Momentum gate: dual 1h+15m check (blocks entry when
   both oppose). FLOW flip boost gate: requires 65% base confidence before +15% boost (SOL 0.84 taker ratio
@@ -498,9 +505,6 @@ Current: V3.2.89. Next change should be V3.2.90.
 - V3.2.86: OPPOSITE SWAP SR PRE-CHECK.
   Chart SR pre-checked before closing existing position. If no valid TP for replacement, keep existing.
   `PIPELINE_VERSION = "SMT-v3.2.86-OppositeSRPrecheck"`.
-- V3.2.85: PNL LEVERAGE FIX + PER-CYCLE FLOW SEED.
-  (1) PnL was margin not notional (missing ×20). (2) FLOW seed refresh every signal cycle.
-  `PIPELINE_VERSION = "SMT-v3.2.85-PnLLeverageFix"`.
 
 **CRITICAL RULE (V3.2.57): The 85% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that

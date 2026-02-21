@@ -260,6 +260,7 @@ try:
 
         # Trading
         execute_trade,
+        find_chart_based_tp_sl,  # V3.2.90: needed for opposite swap SR pre-check (was missing → NameError)
 
         # V3.2.73: FLOW direction seed on startup
         _prev_flow_direction,
@@ -1837,7 +1838,12 @@ def check_trading_signals():
                                     else:
                                         logger.info(f"  [OPPOSITE] CHART SR PRE-CHECK: {signal} TP {_precheck_sr.get('tp_pct'):.2f}% OK — safe to close {opp_side} and open {signal}")
                             except Exception as _sr_pre_err:
-                                logger.warning(f"  [OPPOSITE] CHART SR PRE-CHECK error ({_sr_pre_err}) — proceeding cautiously")
+                                # V3.2.90: BLOCK on error, don't proceed. Closing a profitable position
+                                # without verified replacement TP = guaranteed loss with nothing to show.
+                                # ETH V3.2.89 bug: find_chart_based_tp_sl not imported → NameError →
+                                # "proceeding cautiously" → closed +$16 SHORT → range gate blocked LONG → zero positions.
+                                logger.warning(f"  [OPPOSITE] CHART SR PRE-CHECK error ({_sr_pre_err}) — BLOCKING swap (safe default: keep existing position)")
+                                continue
 
                         if opp_pos:
                             opp_size = float(opp_pos.get("size", 0))
@@ -4141,10 +4147,10 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.89 - SWING TRADE GUARDS")
+    logger.info("SMT Daemon V3.2.90 - FIX OPPOSITE SWAP SR PRE-CHECK")
     logger.info("=" * 60)
     # --- Tier table ---
-    logger.info("TIER CONFIG (V3.2.89 SWING TRADE):")
+    logger.info("TIER CONFIG (V3.2.90 SWING TRADE):")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
         pairs = [p for p, info in TRADING_PAIRS.items() if info["tier"] == tier]
@@ -4154,11 +4160,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.90: FIX OPPOSITE SWAP SR PRE-CHECK. (1) find_chart_based_tp_sl was missing from daemon imports → NameError on every SR pre-check since V3.2.86. (2) SR pre-check errors now BLOCK swap (was 'proceed cautiously' → closed profitable ETH SHORT, replacement blocked by range gate).")
     logger.info("  V3.2.89: SWING TRADE GUARDS. TP ceilings raised (BTC/ETH 2.0%%, SOL 2.0%%, alts 1.5%% — was 0.50-0.80%%). R:R guard 0.33→0.67. TP haircut 0.90→0.95. Momentum gate: 1h+15m dual check. FLOW flip boost needs 65%% base. Execution sort: persona count tiebreak (was tier).")
     logger.info("  V3.2.88: LONG TERM PIVOT. Hold: T1=8H T2=6H T3=4H. Momentum gate. TECHNICAL momentum = BLOCK. EMA snapback DISABLED. BE 0.8%%. Peak-fade/velocity widened.")
     logger.info("  V3.2.87: REMOVE STALE CONF COMPARISON. Swap gates (age/TP/range/SR) are the real guards now.")
     logger.info("  V3.2.86: OPPOSITE SWAP SR PRE-CHECK. Chart SR pre-checked before closing existing position for opposite swap.")
-    logger.info("  V3.2.85: PNL LEVERAGE FIX + PER-CYCLE FLOW SEED. (1) PnL was margin not notional (missing ×20). (2) FLOW seed refresh every signal cycle.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup

@@ -2045,7 +2045,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.89-SwingTradeGuards"
+PIPELINE_VERSION = "SMT-v3.2.90-FixOppositeSRPrecheck"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4996,7 +4996,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
             if _range_pos_2h is not None and _range_pos_2h < _DIP_OVERRIDE_THRESH:
                 print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block LONG, but 2H range {_range_pos_2h:.0f}% confirms dip — OVERRIDE (V3.2.74)")
             else:
-                _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (>={_RANGE_LONG_BLOCK}%){f', 2H={_range_pos_2h:.0f}%' if _range_pos_2h is not None else ''} — too high for LONG dip-bounce entry"
+                _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (>={_RANGE_LONG_BLOCK}%){f', 2H={_range_pos_2h:.0f}%' if _range_pos_2h is not None else ''} — too high for LONG entry"
                 print(f"  [RANGE-GATE] {_reason}")
                 return {"executed": False, "reason": _reason}
         elif signal == "SHORT" and _range_pos <= _RANGE_SHORT_BLOCK:
@@ -5064,9 +5064,8 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         mtf_label = "GEMINI" if _gemini_tp_used else ("MTF" if chart_sr["method"] == "chart_mtf" else "1H")
         print(f"  [TP/SL] CHART-BASED [{mtf_label}]: TP {tp_pct_raw:.2f}% SL {sl_pct_raw:.2f}% (Tier {tier})")
 
-        # V3.2.41: Per-pair TP ceiling — replaces flat 0.5% COMPETITION_FALLBACK_TP.
-        # BTC/ETH: 1.5%, SOL: 2.0%, XRP/BNB/LTC/ADA: 1.0%. Ceiling-only (never raises a low TP).
-        # Falls back to tier-based 0.5% for pairs not in PAIR_TP_CEILING (defensive).
+        # V3.2.89: Per-pair TP ceiling for swing trades. BTC/ETH/SOL: 2.0%, alts: 1.5%.
+        # Ceiling-only (never raises a low TP). Falls back to COMPETITION_FALLBACK_TP for unlisted pairs.
         _tp_cap = PAIR_TP_CEILING.get(pair, COMPETITION_FALLBACK_TP.get(tier, 0.5))
         if tp_pct_raw > _tp_cap:
             print(f"  [TP/SL] Per-pair TP ceiling ({pair}): {tp_pct_raw:.2f}% → {_tp_cap:.2f}%")
