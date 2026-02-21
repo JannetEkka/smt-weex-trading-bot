@@ -1916,6 +1916,7 @@ MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
 MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.2.57: 85% floor (was 80%). In 1-slot mode, 80-84% trades at 20% sizing block the slot from better signals. 85%+ = all trades at 35-50% sizing minimum.
 CHOP_FALLBACK_CONFIDENCE = 0.85  # V3.2.59: Aligned with MIN_CONFIDENCE_TO_TRADE (was 0.80, creating gate bypass)
+ADX_FLOOR_GATE = 10  # V3.2.67: ADX < 10 = market is flatline, force WAIT. Prevents velocity-exit bleed in zero-trend environments.
 
 # V3.1.92: Equity-based sizing with liquidation safety floors
 _sizing_equity_cache = {"sizing_base": 0, "equity": 0, "available": 0, "ts": 0}
@@ -2030,7 +2031,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.66-RevertV65-RangeGate-GeminiTPFix"
+PIPELINE_VERSION = "SMT-v3.2.67-ADXFloorGate-NoFlatlineTrades"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4373,6 +4374,21 @@ class MultiPersonaAnalyzer:
                 final['chop_pre_penalty_confidence'] = final.get('confidence', 0)
                 final['chop_detected'] = True
                 final['chop_severity'] = severity
+
+            # V3.2.67: ADX FLOOR GATE — block trades in flatline markets (ADX < 10)
+            # When ADX is this low, the market has zero trend. Persona consensus still fires
+            # (FLOW/TECHNICAL can agree on a direction) but price doesn't actually move,
+            # resulting in guaranteed velocity exits and pure fee bleed.
+            # ADX 10-15 = weak but possible; ADX < 10 = flatline, don't trade.
+            adx_value = chop.get("adx", 25.0)
+            if adx_value < ADX_FLOOR_GATE:
+                print(f"  [ADX_GATE] BLOCKED: ADX={adx_value:.1f} < {ADX_FLOOR_GATE} — flatline market, forcing WAIT (V3.2.67)")
+                final['adx_gate_blocked'] = True
+                final['adx_gate_original_decision'] = final['decision']
+                final['adx_gate_original_confidence'] = final.get('confidence', 0)
+                final['decision'] = 'WAIT'
+                final['confidence'] = 0
+                final['can_trade'] = False
         else:
             final['chop_data'] = None
 

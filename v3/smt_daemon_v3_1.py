@@ -235,7 +235,7 @@ try:
         # Config
         TEST_MODE, TRADING_PAIRS, MAX_LEVERAGE, STARTING_BALANCE,
         PIPELINE_VERSION, MODEL_NAME, get_max_positions_for_equity,
-        MIN_CONFIDENCE_TO_TRADE,  # Added for trade filtering
+        MIN_CONFIDENCE_TO_TRADE, ADX_FLOOR_GATE,  # Added for trade filtering
         TIER_CONFIG, get_tier_for_symbol, get_tier_config,
         RUNNER_CONFIG, get_runner_config,
         
@@ -770,9 +770,13 @@ def check_trading_signals():
         logger.info(f"F&G: {_fg_value} ({_fg_label}) | Positions open: {weex_position_count}/{effective_max_positions} slots")
 
         # V3.2.48: Weekend/holiday liquidity mode — restrict to deep-book pairs only
-        _thin_liquidity, _thin_reason = _is_weekend_liquidity_mode()
-        if _thin_liquidity:
-            logger.info(f"[WEEKEND MODE] {_thin_reason} — restricting to {', '.join(sorted(WEEKEND_ALLOWED_PAIRS))} only (thin altcoin books)")
+        # V3.2.67: DISABLED — competition final stretch, all 7 pairs active regardless of day.
+        # Altcoins are moving; restricting to BTC/ETH/SOL costs opportunities.
+        _thin_liquidity = False
+        _thin_reason = ""
+        # _thin_liquidity, _thin_reason = _is_weekend_liquidity_mode()
+        # if _thin_liquidity:
+        #     logger.info(f"[WEEKEND MODE] {_thin_reason} — restricting to {', '.join(sorted(WEEKEND_ALLOWED_PAIRS))} only (thin altcoin books)")
 
         # V3.2.52: PRE-CYCLE EXIT SWEEP — close expired positions BEFORE the 7-pair
         # Gemini analysis starts. Signal check blocks for ~6 minutes; without this,
@@ -937,7 +941,13 @@ def check_trading_signals():
                 logger.info(f"  {pair} (T{tier}): {signal} ({confidence:.0%}){status_str}")
 
                 # V3.1.88: Log WHY signal is WAIT (from analyzer) for observability
-                if signal == "WAIT" and confidence == 0:
+                if decision.get("adx_gate_blocked"):
+                    _cycle_wait += 1
+                    _adx_orig = decision.get("adx_gate_original_decision", "?")
+                    _adx_conf = decision.get("adx_gate_original_confidence", 0)
+                    _adx_val = decision.get("chop_data", {}).get("adx", 0)
+                    logger.info(f"    -> ADX GATE: was {_adx_orig} {_adx_conf:.0%} but ADX={_adx_val:.1f} < {ADX_FLOOR_GATE} (flatline)")
+                elif signal == "WAIT" and confidence == 0:
                     _cycle_wait += 1
                     _raw_reason = decision.get("reasoning", "")[:80]
                     if _raw_reason:
@@ -976,6 +986,10 @@ def check_trading_signals():
                 if decision.get("chop_blocked"):
                     _raw_dir = decision.get("chop_original_decision")
                     _raw_conf = decision.get("chop_pre_penalty_confidence", 0.0)
+                elif decision.get("adx_gate_blocked"):
+                    # V3.2.67: ADX gate blocked — preserve original signal for persistence tracking
+                    _raw_dir = decision.get("adx_gate_original_decision")
+                    _raw_conf = decision.get("adx_gate_original_confidence", 0.0)
                 elif signal in ("LONG", "SHORT") and confidence >= MIN_CONFIDENCE_TO_TRADE:
                     _raw_dir = signal
                     _raw_conf = confidence
@@ -3778,6 +3792,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.67: ADX FLOOR GATE (ADX<10=WAIT, prevents velocity-exit bleed in flatline markets). Weekend restriction DISABLED (all 7 pairs active). Signal persistence tracks ADX-gated signals.")
     logger.info("  V3.2.63: 1D candle granularity FIX (1Dutc→1d — was rejected by WEEX API, breaking ALL chart context). 4H fallback when 1D unavailable. datetime.utcfromtimestamp→fromtimestamp(tz=utc). Judge now gets daily+4H S/R levels again.")
     logger.info("  V3.2.62: Chart context FIX — 12H price action fetch now INDEPENDENT of 1D/4H (was silently failing when 1D/4H returned errors). 30m→15m fallback for T2 if WEEX rejects 30m granularity. Fixed datetime.datetime bug (was datetime.utcfromtimestamp). Judge TP ceiling prompt now reads PAIR_TP_CEILING dynamically.")
     logger.info("  V3.2.61: 12H price action candles fed to Judge (T1=1h/12, T2=30m/24, T3=15m/48 — entry timing + range position). TP ceilings raised (BTC/ETH=1.0%%, SOL=1.5%%, others=0.80%%), R:R guard restored (min 0.5:1), Gemini TP override blocked when chart SR returns tp_not_found.")
