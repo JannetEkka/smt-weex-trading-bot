@@ -1140,13 +1140,13 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         "levels": {"resistances": [], "supports": [], "htf_resistances": [], "htf_supports": []}
     }
 
-    # V3.2.66: Restore MIN_VIABLE_TP_PCT=0.40 — skip SR levels too close to entry.
-    # V3.2.65 disabled this (set to 0.0) which allowed 0.37% TPs that can't clear fees profitably.
-    # This is NOT a floor — it's a skip threshold. The walk continues to find the next SR level.
+    # V3.2.67: Lowered MIN_VIABLE_TP_PCT 0.40→0.30. Fee floor is 0.16% (0.08%×2 sides).
+    # 0.30% TP at 20x = 6% ROE gross - 3.2% fees = 2.8% net ROE. Still profitable.
+    # 0.40% was discarding viable close S/R levels, forcing walk to distant 4H/48H anchors.
     MIN_SL_PCT = 1.0          # SL must be at least 1.0% from entry (20x = 20% margin loss min)
     MAX_SL_PCT = 1.5          # V3.2.41: SL ceiling — cap if 4H structure requires SL > 1.5%.
                               # 1.5% SL = 30% margin loss at 20x (survivable). Liquidation at ~4.5%.
-    MIN_VIABLE_TP_PCT = 0.40  # V3.2.66: Restored from V3.2.41. Skip SR < 0.40% from entry.
+    MIN_VIABLE_TP_PCT = 0.30  # V3.2.67: Lowered from 0.40%. Allows closer S/R targets in tight ranges.
 
     try:
         # === 1H candles — primary source for both TP and SL ===
@@ -1591,18 +1591,19 @@ COMPETITION_FALLBACK_SL = {
     3: 1.5,   # Tier 3: 1.8% → 1.5%
 }
 
-# V3.2.66: Restore per-pair TP ceilings from V3.2.60 (pre-V3.2.65).
-# V3.2.65 flattened all to 0.5% which produced sub-fee TPs (0.37% BTC).
-# These ceilings are realistic for hold windows (T1=3H, T2=2H, T3=1.5H).
+# V3.2.67: TP ceilings tightened to match ACTUAL observed swing sizes.
+# Charts show: BTC 0.74%, ETH 0.61%, BNB 0.64%, LTC 0.91%, XRP 0.99%, SOL 0.96%, ADA 1.06%
+# Old 0.8-1.5% ceilings meant TPs were set BEYOND the swing — guaranteed to never hit.
+# New ceilings = ~75-80% of observed swing. Capture the bulk, don't wait for the exact tail.
 # Ceiling-only: if chart SR < ceiling, use chart SR. Never raises a low TP.
 PAIR_TP_CEILING = {
-    "BTC": 1.0,    # Tier 1. 3H hold. R:R 0.67:1 vs 1.5% SL.
-    "ETH": 1.0,    # Tier 1. 3H hold. Same as BTC.
-    "BNB": 0.80,   # Tier 2. 2H hold. Lower beta.
-    "LTC": 0.80,   # Tier 2. 2H hold. Conservative.
-    "XRP": 0.80,   # Tier 2. 2H hold. Range-bound.
-    "SOL": 1.5,    # Tier 3. High beta, room to run.
-    "ADA": 0.80,   # Tier 3. BTC-correlated.
+    "BTC": 0.60,   # Swing 0.74%. Capture 0.60% of the bounce, bank fast.
+    "ETH": 0.50,   # Swing 0.61%. 4 V-bounces missed with old 1.0% ceiling.
+    "BNB": 0.50,   # Swing 0.64%. Tight range, take what the market gives.
+    "LTC": 0.70,   # Swing 0.91%. More room, wider target OK.
+    "XRP": 0.75,   # Swing 0.99%. Biggest altcoin swings.
+    "SOL": 0.75,   # Swing 0.96%. High beta but realistic ceiling.
+    "ADA": 0.80,   # Swing 1.06%. Most volatile, keep some room.
 }
 
 # V3.2.41: Per-pair max position size. Default: MAX_SINGLE_POSITION_PCT = 0.50.
@@ -2031,7 +2032,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.67-VelocityTiered-AllPairs-ADXSoft"
+PIPELINE_VERSION = "SMT-v3.2.67-TightTP-VelocityTiered-AllPairs"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
