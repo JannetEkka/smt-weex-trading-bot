@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.83-FlowSeedFromRL"
+PIPELINE_VERSION = "SMT-v3.2.84-ThesisExitSameDirFix"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4243,12 +4243,21 @@ Respond with JSON ONLY (no markdown, no backticks):
                     [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
             
             # Safety: block if already have same direction
+            # V3.2.84: Preserve raw Judge decision so thesis exit knows this is confirmation, not degradation
             if decision == "LONG" and has_long:
-                return self._wait_decision(f"Gemini says LONG but already have LONG on {pair}", persona_votes,
+                _wd = self._wait_decision(f"Gemini says LONG but already have LONG on {pair}", persona_votes,
                     [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
+                _wd["same_direction_hold"] = True
+                _wd["judge_raw_decision"] = decision
+                _wd["judge_raw_confidence"] = confidence
+                return _wd
             if decision == "SHORT" and has_short:
-                return self._wait_decision(f"Gemini says SHORT but already have SHORT on {pair}", persona_votes,
+                _wd = self._wait_decision(f"Gemini says SHORT but already have SHORT on {pair}", persona_votes,
                     [f"{v['persona']}={v['signal']}({v['confidence']:.0%})" for v in persona_votes])
+                _wd["same_direction_hold"] = True
+                _wd["judge_raw_decision"] = decision
+                _wd["judge_raw_confidence"] = confidence
+                return _wd
             
             # V3.1.63/V3.1.80: Minimum confidence floor (SNIPER) with fallback support
             # 75-79%: Pass through as fallback candidate (only used if chop filter frees a slot)
