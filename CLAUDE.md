@@ -8,6 +8,37 @@ Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall
 
 **Current version: V3.2.92** — all production code is in `v3/`.
 
+## How the Bot Works (V3.2.92 Summary)
+
+**Every 10 minutes**, the daemon runs a signal cycle across 7 pairs (BTC, ETH, BNB, LTC, XRP, SOL, ADA):
+
+1. **Pre-cycle sweep** — Closes any expired positions (max_hold, force_exit) BEFORE analysis starts.
+2. **Chart context** — Fetches 12H range position, 2H/4H structural support/resistance levels per pair.
+3. **5-persona ensemble** — Each pair gets analyzed by 4 personas + 1 Judge:
+   - **WHALE**: On-chain flows (Etherscan) + community sentiment (Cryptoracle). Hours-old data.
+   - **SENTIMENT**: Gemini 2.5 Flash with Search Grounding. Macro news, catalysts, event scanner.
+   - **FLOW**: Real-time WEEX order book — taker buy/sell ratio, bid/ask depth, funding rate. Only persona with live data.
+   - **TECHNICAL**: 5m RSI, 30m/1h momentum, 2H range position, VWAP, volume spikes. Returns NEUTRAL (hard block) when 1h momentum contradicts its signal.
+   - **JUDGE**: Gemini aggregates all 4 votes, chart context, chop data, funding cost. Returns LONG/SHORT/WAIT with confidence.
+4. **Post-Judge filters** — ADX gate (flatline block), freshness filter, consecutive loss block, thesis exit for held positions.
+5. **Execution gates** (must ALL pass for a trade to open):
+   - Judge confidence >= 85%
+   - FLOW gate: FLOW >= 60% in same direction as trade
+   - Momentum gate: 1h AND 15m momentum must not both oppose the trade direction
+   - Range gate: LONGs blocked at >= 55% of 12H range (unless 2H < 30% = dip override), SHORTs at <= 45%
+   - Chart SR: Must find valid TP from structural support/resistance (no fallback %)
+   - Fee-aware R:R >= 0.67:1 after subtracting 0.16% round-trip fees
+   - Available slot (max 2 positions, cross-margin)
+6. **Position monitoring** (every 2 minutes):
+   - Breakeven SL: move SL to entry when trade reaches +0.8% profit
+   - Peak-fade exit: close if price peaked then reversed significantly (when BE-SL not yet placed)
+   - Velocity exit: close if trade never moved after 90-180 min (dead thesis)
+   - FLOW contra exit: close if FLOW shows extreme opposite while position is underwater
+   - Thesis degradation: if Judge returns WAIT on re-evaluation, close stale unprofitable position
+7. **Safety nets** — Opposite swap pre-checks (range + chart SR), orphan order cleanup every 30s, macro blackout windows, weekend liquidity restrictions.
+
+**Key principle: The bot is SELECTIVE.** In extreme fear markets (F&G < 15), most cycles produce 0 trades. A 7-pair WAIT cycle is expected behavior, not a bug. The guards exist to prevent fee-destroying churn.
+
 ## Architecture
 
 ```
@@ -77,7 +108,7 @@ Key insight: **Personas give DIRECTION correctly (hours-ahead analysis) but TIMI
 
 - **Hold times: T1=8H, T2=6H, T3=4H.** These are swing windows, not scalp windows. Chart SR targets structural 4H/Daily levels.
 - **TP targets structural levels.** Chart SR walks 2H→4H→48H resistance/support. Per-pair TP ceilings: BTC/ETH/SOL 2.0%, alts 1.5%. TP_HAIRCUT = 0.95 (target 95% of SR distance).
-- **R:R must be ≥ 0.67:1.** MIN_RR_RATIO = 0.67 → TP must be ≥ 1.0% when SL is 1.5%. Trades with worse R:R are rejected.
+- **R:R must be ≥ 0.67:1 (fee-adjusted).** MIN_RR_RATIO = 0.67, applied AFTER subtracting 0.16% round-trip taker fees. Effective minimum TP: ~0.94% at 1.0% SL, ~1.27% at 1.5% SL (V3.2.92).
 - **Momentum confirmation gate.** Daemon checks 1h AND 15m momentum before entry. If 1h opposes AND 15m hasn't turned → BLOCK. If 1h opposes but 15m is turning → ALLOW (the turn is starting).
 - **TECHNICAL momentum conflict = HARD BLOCK.** If 1h momentum opposes TECHNICAL's signal at > 0.20%, TECHNICAL returns NEUTRAL (not capped at 65%). Judge sees fewer agreeing personas.
 - **The chop filter exists for logging only (V3.2.18).** Chop penalties have been removed — the 85% confidence floor (V3.2.57) + 0.50% minimum TP handle signal quality.
@@ -163,10 +194,10 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 # TP/SL bounds (V3.2.41: per-pair ceiling + MAX_SL + 4H anchor; V3.2.46: SL cap instead of discard)
 # MIN_TP_PCT removed (V3.2.24) — chart SR is the TP, whatever distance that is
 # MIN_VIABLE_TP_PCT = 0.50% (V3.2.70, was 0.30% in V3.2.67) — SKIP SR levels < 0.50% from entry
-#   Aligned with MIN_RR_RATIO(0.33) × MAX_SL_PCT(1.5%) = 0.50%. Ensures any selected TP can pass R:R.
 #   Forces TP walk past 2H micro-bounce levels to 4H structural anchor where real resistance lives.
 #   In chop, 2H levels are 0.30-0.45% (noise); 4H levels are 0.50-1.0% (structural).
-#   Effective TP range after all guards: [0.40%, per-pair ceiling]
+#   Note: the fee-aware R:R guard (V3.2.92) sets a higher effective floor (~0.94% at 1.0% SL).
+#   MIN_VIABLE_TP_PCT catches the chart SR scan; the R:R guard catches the final trade viability.
 # PAIR_TP_CEILING (V3.2.89) — per-pair TP max for SWING TRADES:
 #   BTC=2.0%, ETH=2.0%, SOL=2.0%, BNB=1.5%, LTC=1.5%, XRP=1.5%, ADA=1.5%
 #   V3.2.89: raised from scalp-era 0.50-0.80%. Old ceilings destroyed R:R (ADA: 0.80% TP / 1.50% SL = 0.53:1).
@@ -187,6 +218,13 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 # MAX_SL_PCT = 1.5%  (V3.2.41 ceiling; V3.2.46: CAP instead of discard)
 #   4H anchors can produce wide SLs; 1.5% = 30% margin loss at 20x (survivable)
 #   Hard liquidation at 20x requires ~4.5% adverse move; 1.5% is well clear
+#
+# Fee-aware R:R guard (V3.2.92):
+# R:R = (tp_pct - 0.16) / (sl_pct + 0.16) must be >= MIN_RR_RATIO (0.67)
+# _ROUND_TRIP_FEE_PCT = 0.16  (0.08%/side × 2 sides, V3.2.50 corrected rate)
+# On tight TPs (< 1.0%), fees eat 20%+ of profit — raw R:R is misleading.
+# Effective minimum TP: ~0.94% at 1.0% SL, ~1.27% at 1.5% SL.
+# BNB V3.2.91 bug: 0.78% TP / 1.01% SL = 0.77:1 raw → 0.53:1 after fees (rejected by V3.2.92).
 
 # Breakeven SL + peak-fade (V3.2.88/V3.2.46)
 # BREAKEVEN_TRIGGER_PCT = 0.8   # V3.2.88: Move SL to entry when trade reaches +0.8% profit (was 0.4%)
@@ -212,15 +250,15 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 #
 # Near-TP grace (V3.2.76): max_hold exit skipped when trade >= 60% toward TP
 # NEAR_TP_GRACE_PCT = 0.60       # TP progress threshold
-# NEAR_TP_GRACE_MINUTES = 15     # Extra time granted past max_hold
+# NEAR_TP_GRACE_MINUTES = 30     # V3.2.88: Extra time granted past max_hold (was 15)
 # Prevents killing trades that are actively approaching their target.
 # After grace expires, max_hold fires normally. Applied in both monitor_positions + pre-cycle sweep.
 #
 # Judge thesis degradation exit (V3.2.76): closes stale positions when Judge says WAIT
 # Runs in check_trading_signals() after Judge evaluates each pair.
 # If Judge returns WAIT for a pair we're holding:
-#   Gate 1: trade age > early_exit_hours (T1=1h, T2=45m, T3=30m)
-#   Gate 2: PnL < BREAKEVEN_TRIGGER_PCT (0.4%) — if above, BE-SL handles it
+#   Gate 1: trade age > early_exit_hours (T1=2h, T2=1.5h, T3=1h) — V3.2.88 swing values
+#   Gate 2: PnL < BREAKEVEN_TRIGGER_PCT (0.8%) — if above, BE-SL handles it (V3.2.88)
 #   Gate 3: BE-SL not placed (WEEX SL handles those)
 # Uses structured decision enum ONLY — NO string parsing (avoids ANTI-WAIT V3.2.37 disaster).
 # exit_reason "thesis_degraded" → zero cooldown (thesis dead, free slot immediately)
@@ -251,15 +289,16 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 #   _technical_range_pos_cache stores 2H range from TECHNICAL persona.
 #   Fixes: BNB 90% blocked at 12H=77%/2H=11%, SOL 85% blocked at 12H=57%/2H=7%.
 
-# TP haircut (V3.2.68): TP_HAIRCUT = 0.90
-# All SR-based TPs target 90% of distance from entry to S/R level
-# Price typically reverses before reaching exact S/R → 90% captures the move
+# TP haircut (V3.2.89): TP_HAIRCUT = 0.95 (was 0.90 in V3.2.68)
+# All SR-based TPs target 95% of distance from entry to S/R level
+# In swing mode (4-8H holds), price has time to test the actual SR level. 95% captures nearly the full move.
 
 # FLOW flip boost (V3.2.68): replaces V3.2.1 flip discount
 # SHORT→LONG flip at range < 45% = +15% boost (cap 0.95). Dip signal.
 # LONG→SHORT flip at range > 55% = +15% boost (cap 0.95). Peak signal.
 # Mid-range flips (45-55%) = neutral (no penalty, no boost).
-# Replaces blanket 50% discount that killed confidence at dip bottoms.
+# V3.2.89: FLOW base must be >= 65% before boost applies (prevents moderate signals inflating).
+# V3.2.91: Boost BLOCKED when volume floor fired (vol_noise=True). Noise flips are noise.
 
 # Emergency flip (V3.2.51)
 # EMERGENCY_FLIP_CONFIDENCE = 0.90  # At 90%+ opposite confidence, bypass the 20-min age gate
