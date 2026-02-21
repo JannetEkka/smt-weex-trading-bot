@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.77** — all production code is in `v3/`.
+**Current version: V3.2.78** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -456,27 +456,27 @@ python3 v3/cryptoracle_client.py
 37. **Near-TP grace for max_hold (V3.2.76)** — `NEAR_TP_GRACE_PCT = 0.60`, `NEAR_TP_GRACE_MINUTES = 15`. If trade is >= 60% toward TP when max_hold fires, grant 15-min grace. Applied in both `monitor_positions()` and pre-cycle sweep. Do not remove — killing a trade at 60%+ toward TP wastes the move and all fees paid. After grace expires, max_hold fires normally (no infinite grace).
 38. **Judge thesis degradation exit (V3.2.76)** — When Judge returns WAIT (structured enum, not string parse) for a pair with an open position, and trade is past `early_exit_hours` AND PnL < 0.4% AND no BE-SL placed → close with `thesis_degraded`. Uses ONLY the structured `decision` field — NO reasoning text parsing. This is the OPPOSITE of ANTI-WAIT (V3.2.37): ANTI-WAIT parsed reasoning to override WAIT into a trade; thesis exit RESPECTS WAIT to inform an exit. Do not add string parsing of Judge reasoning — that was the ANTI-WAIT disaster. Zero cooldown (slot freed immediately for better opportunity).
 39. **TECHNICAL momentum conflict (V3.2.77)** — When TECHNICAL's mean-reversion signals (RSI overbought, top of range, above VWAP) say SHORT but 1h momentum > 0.20% (confirmed uptrend), confidence is capped at 65%. Also, 30m momentum and 15m velocity signals are gated: only treated as reversal when 1h momentum disagrees. When both timeframes agree (e.g. 30m +0.39% AND 1h +0.58%), that's a trend, not a spike to fade — those signals become NEUTRAL. Do not remove the 1h momentum gate — without it, TECHNICAL stacks 5 SHORT signals (RSI + momentum + velocity + range + VWAP) to 85% in every uptrend, causing the bot to short into bounces. The 0.20% threshold for the conflict cap is intentionally high enough to avoid triggering on noise but low enough to catch real trends. Do not lower the cap below 0.65 — at lower values, TECHNICAL becomes irrelevant even in genuine reversals.
+40. **Opposite swap range pre-check (V3.2.78)** — Before closing an existing position for an opposite swap, the range gate is pre-checked. If the replacement trade would be blocked (e.g. LONG at 91% of 12H range with 2H=88%), the existing position is kept instead. Without this, the bot closes the existing position (taking a loss), then the replacement is blocked by the range gate, leaving zero positions and a realized loss with nothing to show for it. Uses the same 12H 55/45 gate with 2H 30/70 override thresholds as `execute_trade()`. Do not move the pre-check after the close — the whole point is to avoid closing when the replacement can't open.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.77. Next change should be V3.2.78.
+Current: V3.2.78. Next change should be V3.2.79.
 
 **Recent version history (last 5):**
-- V3.2.77: (**CURRENT**) TECHNICAL MOMENTUM CONFLICT FIX.
-  (1) Momentum/velocity signal gating: 30m momentum and 15m velocity signals now gated on
-  1h momentum alignment. Only treat positive momentum as SHORT reversal when 1h momentum
-  disagrees (near-zero or negative = genuine spike). When both timeframes agree (both positive),
-  it's a trend, not a spike to fade — signals become NEUTRAL instead of SHORT.
-  (2) Momentum conflict confidence cap: when TECHNICAL's mean-reversion signals (RSI, range,
-  VWAP) say SHORT but 1h momentum > 0.20% (confirmed uptrend), cap confidence at 65%.
-  Prevents TECHNICAL from single-handedly pushing Judge to 85% against a trend.
-  Same in reverse for LONG against downtrend.
-  Fixes: SOL SHORT entered at $84.68 into a clear uptrend (RSI + momentum + velocity all
-  stacked to SHORT 85%, but price was trending up — moved to $84.86+). With this fix,
-  TECHNICAL would have been SHORT 65%, insufficient to drive Judge without FLOW confirmation.
+- V3.2.78: (**CURRENT**) OPPOSITE SWAP RANGE PRE-CHECK.
+  Range gate checked BEFORE closing existing position for opposite swap. If the replacement
+  trade would be blocked by the range gate (e.g. LONG at 91% of 12H range, 2H=88%), the bot
+  keeps the existing position instead of closing it and getting nothing in return.
+  Fixes: SOL SHORT closed at -$75 loss to flip to LONG, but LONG was blocked by range gate
+  (price at top of range = not a dip). Bot ended up with no position AND took the loss.
+  With this fix, the bot would keep the SHORT and let it play out.
+  Uses same thresholds as execute_trade(): 12H 55/45 gate with 2H 30/70 override.
+  `PIPELINE_VERSION = "SMT-v3.2.78-OppositeRangePrecheck"`.
+- V3.2.77: TECHNICAL MOMENTUM CONFLICT FIX.
+  Momentum/velocity signals gated on 1h momentum. Conflict cap at 65%.
   `PIPELINE_VERSION = "SMT-v3.2.77-TechMomentumConflict"`.
 - V3.2.76: NEAR-TP GRACE + THESIS EXIT.
   (1) Near-TP grace: max_hold skipped if trade >= 60% toward TP (15min grace).
@@ -486,8 +486,6 @@ Current: V3.2.77. Next change should be V3.2.78.
   `PIPELINE_VERSION = "SMT-v3.2.75-RemoveDynamicBlackout"`.
 - V3.2.74: FLOW CONTRA + CATALYST DRIVE + CONTINUATION HOLD.
   `PIPELINE_VERSION = "SMT-v3.2.74-FlowContra-CatalystDrive-ContinuationHold-RangeRevert"`.
-- V3.2.73: DIP RECOVERY + FLOW SEED + CONF DECAY + VEL PRE-SWEEP.
-  `PIPELINE_VERSION = "SMT-v3.2.73-DipRecovery-FlowSeed-ConfDecay-VelPreSweep"`.
 
 **CRITICAL RULE (V3.2.57): The 85% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that

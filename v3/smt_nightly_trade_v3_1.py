@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.77-TechMomentumConflict"
+PIPELINE_VERSION = "SMT-v3.2.78-OppositeRangePrecheck"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
