@@ -653,6 +653,36 @@ def check_trading_signals():
                 except Exception as _oe:
                     logger.debug(f"  [ORPHAN] Sweep error {_base_sym}: {_oe}")
 
+        # V3.2.85: Per-cycle FLOW seed refresh — sync _prev_flow_direction with reality every cycle.
+        # Positions = ground truth (traded side). RL data fills gaps for pairs without positions.
+        # Without this, _prev_flow_direction can go stale across restarts or after positions close.
+        try:
+            for _at_key, _at_data in tracker.active_trades.items():
+                if isinstance(_at_data, dict) and _at_data.get("side") in ("LONG", "SHORT"):
+                    _at_sym = _at_key.split(":")[0] if ":" in _at_key else _at_key
+                    _prev_flow_direction[_at_sym] = _at_data["side"]
+            # RL data: fill pairs without active positions (last known FLOW direction)
+            import glob as _glob_mod
+            _rl_files = sorted(_glob_mod.glob(os.path.join(os.path.dirname(__file__), "rl_training_data", "exp_*.jsonl")))
+            if _rl_files:
+                for _rl_file in _rl_files[-2:]:
+                    try:
+                        with open(_rl_file, 'r') as _rf:
+                            _rl_lines = _rf.readlines()
+                        for _rl_line in _rl_lines[-30:]:
+                            try:
+                                _rl_entry = json.loads(_rl_line)
+                                _rl_sym = _rl_entry.get("symbol", "")
+                                _rl_flow_sig = _rl_entry.get("state", {}).get("flow_sig", 0.0)
+                                if _rl_sym and _rl_flow_sig != 0.0 and _rl_sym not in _prev_flow_direction:
+                                    _prev_flow_direction[_rl_sym] = "LONG" if _rl_flow_sig > 0 else "SHORT"
+                            except (json.JSONDecodeError, KeyError):
+                                continue
+                    except Exception:
+                        continue
+        except Exception as _seed_err:
+            logger.debug(f"FLOW seed refresh error: {_seed_err}")
+
         # V3.1.19: LIQUIDATION PROTECTION
         # Safety thresholds based on ACTUAL equity from WEEX
         CRITICAL_EQUITY = 150.0  # Below this = EMERGENCY MODE (close all)
@@ -4049,7 +4079,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.85: PNL LEVERAGE FIX. PnL calculation was using margin (position_usdt) instead of notional (margin × 20). Broke breakeven SL detection (always classified as BE-SL), display, and AI logs. Two lines fixed: monitor_positions + sync/cleanup.")
+    logger.info("  V3.2.85: PNL LEVERAGE FIX + PER-CYCLE FLOW SEED. (1) PnL was margin not notional (missing ×20) — broke BE-SL detection, display, AI logs. (2) FLOW seed refresh every signal cycle (positions + RL), not just daemon startup.")
     logger.info("  V3.2.84: THESIS EXIT SAME-DIRECTION FIX + BLACKLIST EXEMPT. (1) Judge LONG 89%% + already have LONG = thesis CONFIRMED, not degraded. (2) Zero-cooldown exits (thesis/velocity/flow_contra) exempt from 2h loss blacklist.")
     logger.info("  V3.2.83: FLOW SEED FROM RL DATA — 3-tier seed: positions → RL data → signal_history.")
     logger.info("  V3.2.82: FLOW SEED FROM POSITIONS — Active positions as primary seed source.")
