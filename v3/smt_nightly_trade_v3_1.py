@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.79-OrphanVerifyLoop"
+PIPELINE_VERSION = "SMT-v3.2.79-OrphanVerifyLoop-CancelFix"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -5105,7 +5105,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
                         print(f"  [PRE-TRADE] {_pair_clean}: ORPHAN plan_id={_void} trigger=${_vtrigger} type={_vtype}")
                         try:
                             _cancel_ep = "/capi/v2/order/cancel_plan"
-                            _cancel_body = json.dumps({"order_id": str(_void)})
+                            _cancel_body = json.dumps({"orderId": str(_void)})
                             requests.post(f"{WEEX_BASE_URL}{_cancel_ep}",
                                           headers=weex_headers("POST", _cancel_ep, _cancel_body),
                                           data=_cancel_body, timeout=10)
@@ -5577,8 +5577,8 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
             _size = order.get("size") or order.get("filled_qty") or "?"
             if oid:
                 print(f"  [CANCEL] {_pair_tag}: regular order_id={oid} type={_type} price={_price} size={_size} status={_status}", flush=True)
-                cancel_endpoint = "/capi/v2/order/cancel"
-                body = json.dumps({"order_id": str(oid)})
+                cancel_endpoint = "/capi/v2/order/cancel_order"
+                body = json.dumps({"orderId": str(oid)})
                 try:
                     _cr = requests.post(f"{WEEX_BASE_URL}{cancel_endpoint}",
                                 headers=weex_headers("POST", cancel_endpoint, body),
@@ -5612,7 +5612,7 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
             if oid:
                 print(f"  [CANCEL] {_pair_tag}: plan order_id={oid} trigger=${_trigger} type={_type} size={_size} status={_status}", flush=True)
                 cancel_endpoint = "/capi/v2/order/cancel_plan"
-                body = json.dumps({"order_id": str(oid)})
+                body = json.dumps({"orderId": str(oid)})
                 try:
                     _cr = requests.post(f"{WEEX_BASE_URL}{cancel_endpoint}",
                                 headers=weex_headers("POST", cancel_endpoint, body),
