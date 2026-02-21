@@ -349,6 +349,7 @@ class DaemonState:
         self.trades_closed = 0
         self.early_exits = 0
         self.runners_triggered = 0  # V3.1.2: Track runner partial closes
+        self.thesis_exits = 0  # V3.2.80: Count thesis exits this session
         self.errors = 0
 
         self.is_running = True
@@ -363,6 +364,7 @@ class DaemonState:
             "trades_closed": self.trades_closed,
             "early_exits": self.early_exits,
             "runners_triggered": self.runners_triggered,
+            "thesis_exits": self.thesis_exits,
             "errors": self.errors,
         }
 
@@ -1389,7 +1391,10 @@ def check_trading_signals():
                                         explanation=f"Judge re-evaluated {_td_sym_clean} and returned WAIT — thesis degraded. {_td_side} held {_td_age_h:.1f}h, PnL {_td_pnl:+.2f}%. Reason: {_td_judge_reason}"[:1000],
                                         order_id=int(_td_oid) if _td_oid and str(_td_oid).isdigit() else None,
                                     )
-                                    logger.info(f"  [THESIS EXIT] {_td_sym_clean} {_td_side} closed. Slot freed.")
+                                    state.thesis_exits += 1
+                                    tracker.record_thesis_exit(pair=pair, side=_td_side, pnl_pct=_td_pnl, age_h=_td_age_h, reason=_td_judge_reason)
+                                    _te_24h = len(tracker.thesis_exits)
+                                    logger.info(f"  [THESIS EXIT] {_td_sym_clean} {_td_side} closed. Slot freed. (24h count: {_te_24h})")
                                     # Refresh position state
                                     open_positions = get_open_positions()
                                     weex_position_count = len(open_positions)
@@ -3363,11 +3368,13 @@ def log_health():
     uptime_str = str(uptime).split('.')[0]
     active = len(tracker.get_active_symbols())
 
+    _te_24h = len(tracker.thesis_exits)
     logger.info(
         f"HEALTH | Up: {uptime_str} | "
         f"Signals: {state.signals_checked} | "
         f"Trades: {state.trades_opened}/{state.trades_closed} | "
-        f"Active: {active}"
+        f"Active: {active} | "
+        f"ThesisExits(24h): {_te_24h}"
     )
 
     # V3.1.82: Mark again after health log (belt and suspenders)

@@ -5290,6 +5290,7 @@ class TradeTracker:
         self.force_stop_blacklist: Dict = {}  # V3.1.81: symbol -> blacklist_until timestamp (hard block after force_stop)
         self.recent_force_stops: Dict = {}  # V3.1.81: symbol -> list of {time, direction, pnl} for consecutive loss tracking
         self.signal_history: Dict = {}  # V3.2.6: per-pair signal persistence, survives daemon restarts
+        self.thesis_exits: List = []  # V3.2.80: thesis exit tracker (persisted, 24h rolling window)
         self.load_state()
     
     def load_state(self):
@@ -5308,6 +5309,12 @@ class TradeTracker:
                         pair: sh for pair, sh in data.get("signal_history", {}).items()
                         if sh.get("last_seen", "") >= _cutoff
                     }
+                    # V3.2.80: Load thesis_exits, prune entries older than 24h
+                    _te_cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+                    self.thesis_exits = [
+                        te for te in data.get("thesis_exits", [])
+                        if te.get("time", "") >= _te_cutoff
+                    ]
         except:
             pass
     
@@ -5320,8 +5327,24 @@ class TradeTracker:
                 "force_stop_blacklist": self.force_stop_blacklist,
                 "recent_force_stops": self.recent_force_stops,
                 "signal_history": self.signal_history,  # V3.2.6: persist across restarts
+                "thesis_exits": self.thesis_exits,  # V3.2.80: rolling 24h thesis exit log
             }, f, indent=2, default=str)
     
+    def record_thesis_exit(self, pair: str, side: str, pnl_pct: float, age_h: float, reason: str):
+        """V3.2.80: Record a thesis exit for 24h rolling stats."""
+        self.thesis_exits.append({
+            "time": datetime.now(timezone.utc).isoformat(),
+            "pair": pair,
+            "side": side,
+            "pnl_pct": round(pnl_pct, 2),
+            "age_h": round(age_h, 2),
+            "reason": reason[:200],
+        })
+        # Prune entries older than 24h
+        _te_cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        self.thesis_exits = [te for te in self.thesis_exits if te.get("time", "") >= _te_cutoff]
+        self.save_state()
+
     def add_trade(self, symbol: str, trade_data: Dict):
         self.active_trades[symbol] = {
             "opened_at": datetime.now(timezone.utc).isoformat(),
