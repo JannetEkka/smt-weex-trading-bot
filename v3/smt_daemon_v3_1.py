@@ -1795,6 +1795,29 @@ def check_trading_signals():
                                 logger.warning(f"  [OPPOSITE] RANGE GATE PRE-CHECK: {signal} would be blocked (12H={_rg_pos_12h:.0f}%, 2H={_rg_2h_str}) — keeping {opp_side} position instead of closing for nothing")
                                 continue
 
+                            # V3.2.86: PRE-CHECK chart SR BEFORE closing existing position.
+                            # If find_chart_based_tp_sl() can't find a valid TP for the replacement
+                            # direction, the trade will be discarded AFTER we've already closed the
+                            # existing position — resulting in: realized loss, no replacement, blacklist.
+                            # Pre-check: call SR with current price. If tp_not_found or no valid TP, skip.
+                            try:
+                                _precheck_price = get_price(sym)
+                                if _precheck_price > 0:
+                                    _precheck_sr = find_chart_based_tp_sl(sym, signal, _precheck_price)
+                                    _sr_has_tp = (
+                                        _precheck_sr.get("tp_pct") is not None
+                                        and _precheck_sr.get("tp_pct", 0) > 0
+                                        and not _precheck_sr.get("tp_not_found", False)
+                                        and _precheck_sr.get("method") != "fallback"
+                                    )
+                                    if not _sr_has_tp:
+                                        logger.warning(f"  [OPPOSITE] CHART SR PRE-CHECK: {signal} has no valid TP (tp_not_found={_precheck_sr.get('tp_not_found')}, method={_precheck_sr.get('method')}) — keeping {opp_side} position instead of closing for nothing")
+                                        continue
+                                    else:
+                                        logger.info(f"  [OPPOSITE] CHART SR PRE-CHECK: {signal} TP {_precheck_sr.get('tp_pct'):.2f}% OK — safe to close {opp_side} and open {signal}")
+                            except Exception as _sr_pre_err:
+                                logger.warning(f"  [OPPOSITE] CHART SR PRE-CHECK error ({_sr_pre_err}) — proceeding cautiously")
+
                         if opp_pos:
                             opp_size = float(opp_pos.get("size", 0))
                             opp_entry = float(opp_pos.get("entry_price", 0))
@@ -4106,7 +4129,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.84 - THESIS EXIT SAME-DIRECTION FIX")
+    logger.info("SMT Daemon V3.2.86 - OPPOSITE SWAP SR PRE-CHECK")
     logger.info("=" * 60)
     # --- Tier table ---
     logger.info("TIER CONFIG:")
@@ -4119,11 +4142,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.86: OPPOSITE SWAP SR PRE-CHECK. Chart SR pre-checked before closing existing position for opposite swap. If replacement has no valid TP, keep existing position (prevents close-for-nothing disaster).")
     logger.info("  V3.2.85: PNL LEVERAGE FIX + PER-CYCLE FLOW SEED. (1) PnL was margin not notional (missing ×20) — broke BE-SL detection, display, AI logs. (2) FLOW seed refresh every signal cycle (positions + RL), not just daemon startup.")
     logger.info("  V3.2.84: THESIS EXIT SAME-DIRECTION FIX + BLACKLIST EXEMPT. (1) Judge LONG 89%% + already have LONG = thesis CONFIRMED, not degraded. (2) Zero-cooldown exits (thesis/velocity/flow_contra) exempt from 2h loss blacklist.")
     logger.info("  V3.2.83: FLOW SEED FROM RL DATA — 3-tier seed: positions → RL data → signal_history.")
     logger.info("  V3.2.82: FLOW SEED FROM POSITIONS — Active positions as primary seed source.")
-    logger.info("  V3.2.81: TAKER VOLUME FLOOR + FLOW STABILITY — Minority < 3%% = noise. Fresh flips need 2 cycles.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
