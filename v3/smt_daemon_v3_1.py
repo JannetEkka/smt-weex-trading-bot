@@ -261,9 +261,6 @@ try:
         # Trading
         execute_trade,
 
-        # V3.2.59: Dynamic event detection
-        detect_macro_events, _check_dynamic_blackout,
-
         # V3.2.73: FLOW direction seed on startup
         _prev_flow_direction,
 
@@ -625,26 +622,6 @@ def check_trading_signals():
                         f"Bot will re-enter after the blackout window closes and the first clean candle settles."
         )
         return
-
-    # V3.2.59: DYNAMIC BLACKOUT — Gemini-detected HIGH-impact events within 15 min.
-    # This catches events NOT in the hardcoded MACRO_BLACKOUT_WINDOWS list.
-    # detect_macro_events() is cached (30min TTL) — costs 1 Gemini call per 3 cycles.
-    try:
-        _detected_events = detect_macro_events()
-        _dyn_blacked, _dyn_label = _check_dynamic_blackout(_detected_events.get("events", []))
-        if _dyn_blacked:
-            logger.warning(f"[DYNAMIC BLACKOUT] {_dyn_label} — Gemini detected imminent HIGH-impact event. Skipping signal cycle.")
-            upload_ai_log_to_weex(
-                stage=f"Dynamic Blackout: {_dyn_label}",
-                input_data={"event": _dyn_label, "utc_time": datetime.now(timezone.utc).isoformat(),
-                            "detected_events": [e.get("name") for e in _detected_events.get("events", [])]},
-                output_data={"action": "DYNAMIC_BLACKOUT_SKIP", "reason": "Gemini-detected imminent macro event"},
-                explanation=f"Signal cycle skipped: {_dyn_label}. Gemini Search detected HIGH-impact event "
-                            f"within 15 minutes. Bot will resume after event + 30min settlement window."
-            )
-            return
-    except Exception as _dyn_err:
-        logger.warning(f"[DYNAMIC BLACKOUT] Event detection error: {_dyn_err} — continuing without dynamic blackout")
 
     try:
         # V3.1.19: Get proper account info with equity from API
@@ -3886,7 +3863,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.74 - FLOW CONTRA EXIT + RANGE REVERT + BANNER CLEANUP")
+    logger.info("SMT Daemon V3.2.75 - REMOVE DYNAMIC BLACKOUT")
     logger.info("=" * 60)
     # --- Tier table ---
     logger.info("TIER CONFIG:")
@@ -3899,11 +3876,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.74: FLOW CONTRA + CATALYST DRIVE + CONTINUATION HOLD — (1) FLOW contra exit: close underwater positions when FLOW extreme opposite (taker <0.15 LONG / >7.0 SHORT), age>=vel tier limit, no BE-SL. (2) Judge CATALYST DRIVE rule: SENTIMENT named catalyst + FLOW >=60%% same dir = 85%%+ (news moves markets before indicators). (3) Judge CONTINUATION HOLD: re-evaluate thesis honestly for open positions, don't inflate. (4) Range gate 2H override reverted 45/55→30/70. (5) FLOW flip log fix. (6) Banner cleanup.")
-    logger.info("  V3.2.73: DIP RECOVERY + FLOW SEED + CONF DECAY + VEL PRE-SWEEP — (1) TECHNICAL dip recovery signal: V-shape detection (range<50%% + 30m bounce + 1h still negative). (2) FLOW seed: _prev_flow_direction seeded from signal_history on startup (cycle 1 flips work). (3) Conf decay: stale confidence decays -5%%/30min past 20min (floor 75%%) for opposite flip comparison. (4) Velocity exit in pre-cycle sweep: frees slots before signal analysis.")
-    logger.info("  V3.2.72: FLOW GATE + EMA FIX — (1) FLOW >= 60%% gate: blocks trades where FLOW doesn't confirm direction. (2) EMA snapback giveback: requires 50%% peak giveback before firing.")
-    logger.info("  V3.2.71: EXTRA SLOT DISABLED — 90%%+ CONFIDENCE_EXTRA_SLOT bypass removed. 2-slot hard cap absolute.")
-    logger.info("  V3.2.70: R:R UNLOCK — MIN_VIABLE 0.30%%→0.50%% (walk to 4H), R:R 0.5→0.33 (unblocks BTC/ETH/BNB/LTC at 1.5%% SL).")
+    logger.info("  V3.2.75: REMOVE DYNAMIC BLACKOUT — Gemini event scanner removed. Was blocking ALL signal cycles on Deribit derivatives expiry (separate exchange, not relevant to WEEX futures). Hardcoded MACRO_BLACKOUT_WINDOWS still active for known events.")
+    logger.info("  V3.2.74: FLOW CONTRA + CATALYST DRIVE + CONTINUATION HOLD — (1) FLOW contra exit: close underwater when FLOW extreme opposite. (2) Judge CATALYST DRIVE rule. (3) Judge CONTINUATION HOLD. (4) Range gate 2H override reverted 45/55→30/70. (5) FLOW flip log fix. (6) Banner cleanup.")
+    logger.info("  V3.2.73: DIP RECOVERY + FLOW SEED + CONF DECAY + VEL PRE-SWEEP.")
+    logger.info("  V3.2.72: FLOW GATE + EMA FIX — FLOW >= 60%% gate + EMA snapback giveback 50%%.")
+    logger.info("  V3.2.71: EXTRA SLOT DISABLED — 2-slot hard cap absolute.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
