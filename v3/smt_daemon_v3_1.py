@@ -3993,7 +3993,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.79 - ORPHAN VERIFY LOOP")
+    logger.info("SMT Daemon V3.2.80 - EVENTS TO SENTIMENT")
     logger.info("=" * 60)
     # --- Tier table ---
     logger.info("TIER CONFIG:")
@@ -4006,11 +4006,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.80: EVENTS TO SENTIMENT — Macro event scanner results now fed to SENTIMENT persona instead of raw dump to Judge. SENTIMENT synthesizes events with its own search findings. Judge prompt cleaner (one fewer raw section).")
     logger.info("  V3.2.79: ORPHAN VERIFY LOOP — Pre-trade cancel now verify-and-retry: queries /currentPlan after cancel, re-cancels any surviving orphan plan orders up to 3x. Logs every order/plan with IDs, trigger prices, types. Fixes TP mismatch from cancel race condition.")
     logger.info("  V3.2.78: OPPOSITE SWAP RANGE PRE-CHECK — Range gate checked BEFORE closing existing position for opposite swap.")
     logger.info("  V3.2.77: TECHNICAL MOMENTUM CONFLICT — Momentum/velocity signals gated on 1h momentum. Momentum conflict cap at 65%%.")
     logger.info("  V3.2.76: NEAR-TP GRACE + THESIS EXIT — max_hold grace at 60%%+ toward TP. Judge thesis exit on WAIT.")
-    logger.info("  V3.2.75: REMOVE DYNAMIC BLACKOUT — Gemini event scanner removed.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup

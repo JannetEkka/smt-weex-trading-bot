@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.79-OrphanVerifyLoop-CancelFix"
+PIPELINE_VERSION = "SMT-v3.2.80-EventsToSentiment"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -2652,18 +2652,21 @@ class SentimentPersona:
         self._cache = {}  # {pair: (timestamp, result)}
         self._cache_ttl = 300  # 5 minutes
     
-    def analyze(self, pair: str, pair_info: Dict, competition_status: Dict) -> Dict:
+    def analyze(self, pair: str, pair_info: Dict, competition_status: Dict, macro_events: list = None) -> Dict:
         import time
-        
+
+        # V3.2.80: Store macro events for prompt injection
+        self._current_macro_events = macro_events or []
+
         # Check cache first
         cached = self._get_cached(pair)
         if cached:
             print(f"  [SENTIMENT] Using cached result for {pair}")
             return cached
-        
+
         # Rate limit before making call
         _rate_limit_gemini()
-        
+
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -2714,11 +2717,27 @@ class SentimentPersona:
         # or technical epoch strategies — those are JUDGE's job using live chart data.
         # SENTIMENT's edge: Gemini Search Grounding for real-time catalysts and macro context.
         # V3.2.45: Dynamic date injected so search targets exact 1.5-3H window (not stale articles)
+        # V3.2.80: Pre-detected macro events fed in so SENTIMENT can synthesize them with its own findings.
         _current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _current_hour = datetime.now(timezone.utc).strftime("%H:%M")
+
+        # V3.2.80: Format pre-detected events for SENTIMENT context
+        _event_context = ""
+        if self._current_macro_events:
+            _evt_lines = []
+            for _evt in self._current_macro_events:
+                _t = _evt.get("time_utc", "UNKNOWN")
+                _imp = _evt.get("impact", "LOW")
+                _pairs = ", ".join(_evt.get("affected_pairs", ["ALL"]))
+                _desc = _evt.get("description", "")
+                _evt_lines.append(f"  [{_imp}] {_evt.get('name', 'Unknown')} — time: {_t} UTC — {_desc} (affects: {_pairs})")
+            _event_context = "\n".join(_evt_lines)
+
         combined_prompt = f"""You are the Macro News Analyst for {pair}/USDT crypto futures trading.
+Current UTC: {_current_date} {_current_hour}.
 Use your Google Search capability to research ONLY qualitative, news-driven factors for the NEXT 1-3 HOURS.
 
-RESEARCH TASK — search for these and report findings:
+{"=== PRE-DETECTED SCHEDULED EVENTS (next 12H) ===" + chr(10) + _event_context + chr(10) + "Use these as KNOWN context when forming your analysis. Cross-reference with your own search findings." + chr(10) + "HIGH impact events in next 1-3H = set volatility_risk to HIGH_RISK." + chr(10) + "Events create UNCERTAINTY until released — factor this into your directional confidence." + chr(10) if _event_context else ""}RESEARCH TASK — search for these and report findings:
 
 1. CATALYSTS: Are there any active news events, protocol upgrades, ETF flow data, regulatory decisions,
    or macro events (Fed speeches, CPI data, job reports, Treasury auctions) that could move {pair} in
@@ -2732,6 +2751,7 @@ RESEARCH TASK — search for these and report findings:
 3. VOLATILITY RISK: Any scheduled events in the next 1-3H that could cause a sudden spike?
    (e.g., Fed minutes, major token unlock, futures expiry, major economic data release)
    HIGH_RISK = yes, specific event known. NORMAL = no obvious scheduled event.
+   IMPORTANT: Check the PRE-DETECTED EVENTS above — if any HIGH-impact event is within 3H, that is HIGH_RISK.
 
 4. {pair}-SPECIFIC NEWS: Any {pair}-specific news (ecosystem update, partnership, whale alert,
    exchange listing/delisting, staking changes) that would override the macro trend?
@@ -3877,16 +3897,11 @@ class JudgePersona:
         except Exception as _fr_err:
             print(f"  [JUDGE] Funding rate fetch error for {pair}: {_fr_err}")
 
-        # V3.2.59: DYNAMIC MACRO EVENT CONTEXT — Gemini Search detects events automatically.
-        # Replaces hardcoded _macro_events dict. detect_macro_events() is cached (30min TTL),
-        # so this call is free if already fetched this cycle.
-        macro_event_text = ""
-        try:
-            _detected = detect_macro_events()
-            macro_event_text = _format_events_for_judge(_detected.get("events", []), _detected.get("summary", ""))
-        except Exception as _evt_err:
-            print(f"  [JUDGE] Event detection error: {_evt_err} — continuing without event data")
-            macro_event_text = "Event detection unavailable."
+        # V3.2.80: Macro event context REMOVED from Judge. Events are now fed to SENTIMENT
+        # persona (V3.2.80), which synthesizes them into its macro report. Judge receives
+        # the synthesized output via SENTIMENT MACRO REPORT section — cleaner signal,
+        # fewer raw inputs for Flash to juggle. detect_macro_events() is called in
+        # MultiPersonaAnalyzer.analyze() before SENTIMENT runs.
 
         _hold_windows = {"BTC": "3H", "ETH": "3H", "BNB": "2H", "LTC": "2H", "XRP": "2H", "SOL": "1.5H", "ADA": "1.5H"}
         _pair_hold = _hold_windows.get(pair, "2H")
@@ -3953,9 +3968,9 @@ These are the nearest price levels where large resting orders cluster (>=1.5x av
 - BID wall = support below current price (where buyers are waiting). Relevant for SHORT tp_price.
 NOTE: Order book walls are ephemeral and can be pulled. Use them as ONE input for tp_price alongside chart structure, not as the sole basis.
 
-=== SENTIMENT MACRO REPORT (V3.2.41 — qualitative news analysis, NO price targets) ===
+=== SENTIMENT MACRO REPORT (V3.2.80 — news + scheduled events synthesized by SENTIMENT persona) ===
 {sentiment_macro_text if sentiment_macro_text else "Sentiment macro data unavailable."}
-IMPORTANT: SENTIMENT used Google Search to find qualitative catalysts only — NO technical levels.
+SENTIMENT used Google Search + pre-detected event calendar to produce this report. It already factored in scheduled macro events.
 - RISK_ON macro + strong WHALE/FLOW signal = add confidence to LONG bias
 - RISK_OFF macro + FLOW distribution = add confidence to SHORT bias
 - HIGH_RISK volatility event: note it in reasoning but do NOT block trades. If 3+ personas agree, TRADE despite volatility risk.
@@ -3967,9 +3982,6 @@ WEEX charges funding every 8 hours. At 20x leverage, even a small funding rate c
 - If you are on the PAYING side (LONG when funding positive, SHORT when funding negative), your TP must clear the drag to be profitable.
 - If you are on the RECEIVING side, funding works in your favor — adds to profit beyond TP.
 - If TP target is marginal (e.g., 0.5%) and funding drag is >0.15%, the trade may be NET NEGATIVE after fees+funding. Favor WAIT or switch direction.
-
-=== MACRO EVENT CONTEXT (V3.2.48 — date-sensitive market intelligence) ===
-{macro_event_text if macro_event_text else "No known macro events today."}
 {whale_section}
 === CURRENT POSITIONS ON {pair} ===
 {pair_pos_text}
@@ -4497,15 +4509,24 @@ class MultiPersonaAnalyzer:
 
         votes = []
 
+        # V3.2.80: Fetch macro events BEFORE SENTIMENT so it can synthesize them.
+        # detect_macro_events() is cached (30-min TTL), so this is free after first call per cycle.
+        _pre_events = []
+        try:
+            _evt_data = detect_macro_events()
+            _pre_events = _evt_data.get("events", [])
+        except Exception as _pre_evt_err:
+            print(f"  [EVENTS] Pre-fetch error: {_pre_evt_err} — SENTIMENT will proceed without event context")
+
         # 1. Whale Persona (V3.1.45: ALL pairs via Cryptoracle, BTC/ETH also use Etherscan)
         print(f"  [WHALE] Analyzing...")
         whale_vote = self.whale.analyze(pair, pair_info)
         votes.append(whale_vote)
         print(f"  [WHALE] {whale_vote['signal']} ({whale_vote['confidence']:.0%}): {whale_vote['reasoning']}")
-        
-        # 2. Sentiment Persona
+
+        # 2. Sentiment Persona (V3.2.80: receives pre-detected macro events for synthesis)
         print(f"  [SENTIMENT] Analyzing...")
-        sentiment_vote = self.sentiment.analyze(pair, pair_info, competition_status)
+        sentiment_vote = self.sentiment.analyze(pair, pair_info, competition_status, macro_events=_pre_events)
         votes.append(sentiment_vote)
         print(f"  [SENTIMENT] {sentiment_vote['signal']} ({sentiment_vote['confidence']:.0%}): {sentiment_vote['reasoning']}")
         
