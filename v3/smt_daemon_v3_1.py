@@ -3722,7 +3722,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.62 - Chart context fix: 12H price action now independent of 1D/4H, 30m fallback to 15m, datetime bug fix")
+    logger.info("SMT Daemon V3.2.68 - DIP DETECTION: 5m RSI TECHNICAL, smart FLOW flip, range gate 55/45, TP haircut 90%%")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3742,7 +3742,7 @@ def run_daemon():
     logger.info("TP/SL (V3.2.41 LARGER GAINS):")
     logger.info("  MIN_VIABLE_TP_PCT: 0.40%% (was 0.20%% — filters micro-moves, pushes to 4H/48H structure)")
     logger.info("  MAX_SL_PCT: 1.50%% ceiling (was no ceiling — 4H anchors can be wide at 20x)")
-    logger.info("  PAIR_TP_CEILING: BTC/ETH=1.0%%, SOL=1.5%%, BNB/LTC/XRP/ADA=0.80%% (V3.2.61: R:R balanced)")
+    logger.info("  PAIR_TP_CEILING: BTC=0.60%%, ETH=0.50%%, BNB=0.50%%, LTC=0.70%%, XRP=0.75%%, SOL=0.75%%, ADA=0.80%% (V3.2.67 tight) + 90%% haircut (V3.2.68)")
     logger.info("  TP anchor: 4H high/low tried first, then 48H walk (was 2H anchor → 48H walk)")
     logger.info("  SOL sizing: 30%% of sizing_base max (was 50%% — high beta risk control)")
     logger.info("  TP priority: Gemini tp_price (4H structure) > 4H anchor > 48H SR walk")
@@ -3799,6 +3799,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.68: DIP DETECTION OVERHAUL — TECHNICAL rewritten with 5m RSI(14)+VWAP+30m momentum (was 1H RSI=blind to dips). FLOW FLIP = DIP SIGNAL: SHORT→LONG flip at bottom of range gets +15%% confidence BOOST (was 50%% discount!). Mid-range flips: neutral (no penalty). Range gate tightened 70/30→55/45. TP haircut 90%%.")
     logger.info("  V3.2.67: VELOCITY EXIT TIERED (T1=75m, T2=60m, T3=50m, was flat 40m — bounces need 60-90min). Peak threshold 0.15%%→0.10%%. ADX gate softened (5, not 10). Weekend restriction DISABLED (all 7 pairs). Signal persistence tracks ADX-gated signals.")
     logger.info("  V3.2.63: 1D candle granularity FIX (1Dutc→1d — was rejected by WEEX API, breaking ALL chart context). 4H fallback when 1D unavailable. datetime.utcfromtimestamp→fromtimestamp(tz=utc). Judge now gets daily+4H S/R levels again.")
     logger.info("  V3.2.62: Chart context FIX — 12H price action fetch now INDEPENDENT of 1D/4H (was silently failing when 1D/4H returned errors). 30m→15m fallback for T2 if WEEX rejects 30m granularity. Fixed datetime.datetime bug (was datetime.utcfromtimestamp). Judge TP ceiling prompt now reads PAIR_TP_CEILING dynamically.")

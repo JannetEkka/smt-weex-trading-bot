@@ -1147,6 +1147,9 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
     MAX_SL_PCT = 1.5          # V3.2.41: SL ceiling — cap if 4H structure requires SL > 1.5%.
                               # 1.5% SL = 30% margin loss at 20x (survivable). Liquidation at ~4.5%.
     MIN_VIABLE_TP_PCT = 0.30  # V3.2.67: Lowered from 0.40%. Allows closer S/R targets in tight ranges.
+    TP_HAIRCUT = 0.90         # V3.2.68: Take 90% of distance to S/R. Price often reverses 10-20%
+                              # before the exact level (limit clusters, front-running, other bots).
+                              # Applied to raw TP distance BEFORE ceiling check.
 
     try:
         # === 1H candles — primary source for both TP and SL ===
@@ -1211,9 +1214,10 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         sl_found = False
 
         if signal == "LONG":
-            # TP: raw 2H ceiling (where sellers appeared most recently)
-            # V3.2.31: Haircut removed — raw resistance IS the TP. Competition cap (0.5%) handles sizing.
-            tp_price = tp_high_2h
+            # TP: 2H ceiling with haircut (don't target exact resistance — price reverses before it)
+            # V3.2.68: TP_HAIRCUT reinstated. Raw S/R was missing by a hair. Take 90% of the distance.
+            tp_price_raw = tp_high_2h
+            tp_price = entry_price + (tp_price_raw - entry_price) * TP_HAIRCUT
             tp_pct   = (tp_price - entry_price) / entry_price * 100
             if tp_price > entry_price and tp_pct >= MIN_VIABLE_TP_PCT:
                 result["tp_pct"]   = round(tp_pct, 2)
@@ -1224,12 +1228,13 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 # V3.2.41: Try 4H anchor first (last 2 complete 4H candles), before the 48H walk.
                 # 4H highs naturally sit 1-2% from entry in trending markets, unlocking bigger TPs.
                 if _tp_high_4h > entry_price:
-                    _tp4h_pct = (_tp_high_4h - entry_price) / entry_price * 100
+                    _tp4h_price = entry_price + (_tp_high_4h - entry_price) * TP_HAIRCUT  # V3.2.68 haircut
+                    _tp4h_pct = (_tp4h_price - entry_price) / entry_price * 100
                     if _tp4h_pct >= MIN_VIABLE_TP_PCT:
                         result["tp_pct"]   = round(_tp4h_pct, 2)
-                        result["tp_price"] = round(_tp_high_4h, 8)
+                        result["tp_price"] = round(_tp4h_price, 8)
                         tp_found = True
-                        print(f"  [CHART-SR] LONG TP (4H anchor): {_tp_high_4h:.4f} → {_tp4h_pct:.2f}%")
+                        print(f"  [CHART-SR] LONG TP (4H anchor): {_tp_high_4h:.4f} → haircut {_tp4h_price:.4f} → {_tp4h_pct:.2f}%")
 
                 if not tp_found:
                     # V3.2.20: 2H_high at/below entry — scan 48H resistance list
@@ -1239,12 +1244,13 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                     # Only discard if ALL candidates fail. COMPETITION_FALLBACK_TP is NOT a resistance workaround.
                     _cands = sorted([h for h in highs_1h[1:49] if h > entry_price])
                     for _candidate_res in _cands:
-                        _tp12_pct = (_candidate_res - entry_price) / entry_price * 100
+                        _haircut_price = entry_price + (_candidate_res - entry_price) * TP_HAIRCUT  # V3.2.68
+                        _tp12_pct = (_haircut_price - entry_price) / entry_price * 100
                         if _tp12_pct >= MIN_VIABLE_TP_PCT:  # V3.2.36+V3.2.41: must clear min viable distance
                             result["tp_pct"]   = round(_tp12_pct, 2)
-                            result["tp_price"] = round(_candidate_res, 8)
+                            result["tp_price"] = round(_haircut_price, 8)
                             tp_found = True
-                            print(f"  [CHART-SR] LONG TP (48H walk): {_candidate_res:.4f} → {_tp12_pct:.2f}%")
+                            print(f"  [CHART-SR] LONG TP (48H walk): {_candidate_res:.4f} → haircut {_haircut_price:.4f} → {_tp12_pct:.2f}%")
                             break
                     if not tp_found:
                         print(f"  [CHART-SR] LONG: no resistance >= {MIN_VIABLE_TP_PCT:.2f}% above entry in 4H/48H — tp_not_found (entry at ceiling)")
@@ -1266,9 +1272,10 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
             print(f"  [CHART-SR] LONG SL: min(1H={sl_low_12h_1h:.4f}, 4H={sl_low_12h_4h:.4f})={min(sl_low_12h_1h,sl_low_12h_4h):.4f} → {sl_pct:.2f}%")
 
         elif signal == "SHORT":
-            # TP: raw 2H floor (where buyers appeared most recently)
-            # V3.2.31: Haircut removed — raw support IS the TP. Competition cap (0.5%) handles sizing.
-            tp_price = tp_low_2h
+            # TP: 2H floor with haircut (don't target exact support — price bounces before it)
+            # V3.2.68: TP_HAIRCUT reinstated. Take 90% of the distance to support.
+            tp_price_raw = tp_low_2h
+            tp_price = entry_price - (entry_price - tp_price_raw) * TP_HAIRCUT
             tp_pct   = (entry_price - tp_price) / entry_price * 100
             if tp_price < entry_price and tp_pct >= MIN_VIABLE_TP_PCT:
                 result["tp_pct"]   = round(tp_pct, 2)
@@ -1279,12 +1286,13 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                 # V3.2.41: Try 4H anchor first (last 2 complete 4H candles), before the 48H walk.
                 # 4H lows naturally sit 1-2% from entry in trending markets, unlocking bigger TPs.
                 if _tp_low_4h > 0 and _tp_low_4h < entry_price:
-                    _tp4h_pct = (entry_price - _tp_low_4h) / entry_price * 100
+                    _tp4h_price = entry_price - (entry_price - _tp_low_4h) * TP_HAIRCUT  # V3.2.68 haircut
+                    _tp4h_pct = (entry_price - _tp4h_price) / entry_price * 100
                     if _tp4h_pct >= MIN_VIABLE_TP_PCT:
                         result["tp_pct"]   = round(_tp4h_pct, 2)
-                        result["tp_price"] = round(_tp_low_4h, 8)
+                        result["tp_price"] = round(_tp4h_price, 8)
                         tp_found = True
-                        print(f"  [CHART-SR] SHORT TP (4H anchor): {_tp_low_4h:.4f} → {_tp4h_pct:.2f}%")
+                        print(f"  [CHART-SR] SHORT TP (4H anchor): {_tp_low_4h:.4f} → haircut {_tp4h_price:.4f} → {_tp4h_pct:.2f}%")
 
                 if not tp_found:
                     # V3.2.20: 2H_low at/above entry — scan 48H support list
@@ -1294,12 +1302,13 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
                     # Only discard if ALL candidates fail. COMPETITION_FALLBACK_TP is NOT a resistance workaround.
                     _cands = sorted([l for l in lows_1h[1:49] if l < entry_price], reverse=True)
                     for _candidate_sup in _cands:
-                        _tp12_pct = (entry_price - _candidate_sup) / entry_price * 100
+                        _haircut_price = entry_price - (entry_price - _candidate_sup) * TP_HAIRCUT  # V3.2.68
+                        _tp12_pct = (entry_price - _haircut_price) / entry_price * 100
                         if _tp12_pct >= MIN_VIABLE_TP_PCT:  # V3.2.36+V3.2.41: must clear min viable distance
                             result["tp_pct"]   = round(_tp12_pct, 2)
-                            result["tp_price"] = round(_candidate_sup, 8)
+                            result["tp_price"] = round(_haircut_price, 8)
                             tp_found = True
-                            print(f"  [CHART-SR] SHORT TP (48H walk): {_candidate_sup:.4f} → {_tp12_pct:.2f}%")
+                            print(f"  [CHART-SR] SHORT TP (48H walk): {_candidate_sup:.4f} → haircut {_haircut_price:.4f} → {_tp12_pct:.2f}%")
                             break
                     if not tp_found:
                         print(f"  [CHART-SR] SHORT: no support >= {MIN_VIABLE_TP_PCT:.2f}% below entry in 4H/48H — tp_not_found (entry at floor)")
@@ -2032,7 +2041,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.67-TightTP-VelocityTiered-AllPairs"
+PIPELINE_VERSION = "SMT-v3.2.68-DipDetection-5mRSI-FlipBoost-TPHaircut"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3253,92 +3262,162 @@ class FlowPersona:
 # ============================================================
 
 class TechnicalPersona:
-    """Simple technical indicators (RSI, SMA, momentum)."""
-    
+    """V3.2.68: Fast dip/peak detection using 5m candles + 1H trend context.
+
+    OLD (pre-V3.2.68): RSI(14) on 1H candles. 14-hour effective lookback.
+      A 30-60 min dip barely moved RSI. Returned NEUTRAL on nearly every dip.
+      RSI<30 threshold = multi-day crash level, useless for dip-bounce trading.
+
+    NEW: Dual-timeframe approach:
+      5m candles (primary): RSI(14) = 70-min lookback. Catches 30-60 min dips/peaks.
+        RSI < 35 = dip bottom (LONG), RSI > 65 = peak (SHORT).
+        6-bar momentum (30 min) detects sharp recent moves.
+      1H candles (context): SMA 20/50 for trend direction.
+        Trend alignment boosts confidence. Counter-trend trades get small penalty.
+      Price vs 1H VWAP: below VWAP = dip territory, above = peak territory.
+    """
+
     def __init__(self):
         self.name = "TECHNICAL"
-        self.weight = 1.2  # V3.1.7: Increased from 0.8
-    
+        self.weight = 1.2
+
     def analyze(self, pair: str, pair_info: Dict) -> Dict:
         symbol = pair_info["symbol"]
-        
+
         try:
-            candles = self._get_candles(symbol, "1H", 50)
-            
-            if len(candles) < 20:
-                return {
-                    "persona": self.name,
-                    "signal": "NEUTRAL",
-                    "confidence": 0.0,
-                    "reasoning": "Insufficient data",
-                }
-            
-            closes = [c["close"] for c in candles]
-            
-            rsi = self._calculate_rsi(closes, 14)
-            sma_20 = np.mean(closes[-20:])
-            sma_50 = np.mean(closes[-50:]) if len(closes) >= 50 else sma_20
-            current_price = closes[-1]
-            
-            momentum = (closes[-1] - closes[-5]) / closes[-5] * 100 if closes[-5] > 0 else 0
-            
+            # === PRIMARY: 5m candles for fast dip/peak detection ===
+            candles_5m = self._get_candles(symbol, "5m", 30)  # 30 × 5m = 2.5h
+            if len(candles_5m) < 16:
+                return {"persona": self.name, "signal": "NEUTRAL",
+                        "confidence": 0.0, "reasoning": "Insufficient 5m data"}
+
+            closes_5m = [c["close"] for c in candles_5m]
+            highs_5m = [c["high"] for c in candles_5m]
+            lows_5m = [c["low"] for c in candles_5m]
+            volumes_5m = [c["volume"] for c in candles_5m]
+            current_price = closes_5m[0]  # candles_5m[0] = most recent
+
+            # 5m RSI(14) — 70-min effective lookback, perfect for 30-60 min dips
+            rsi_5m = self._calculate_rsi(list(reversed(closes_5m)), 14)
+
+            # 30-min momentum: last 6 × 5m candles (captures the dip move itself)
+            if closes_5m[6] > 0:
+                momentum_30m = ((closes_5m[0] - closes_5m[6]) / closes_5m[6]) * 100
+            else:
+                momentum_30m = 0.0
+
+            # 1H momentum: last 12 × 5m candles (captures the broader swing)
+            if len(closes_5m) >= 13 and closes_5m[12] > 0:
+                momentum_1h = ((closes_5m[0] - closes_5m[12]) / closes_5m[12]) * 100
+            else:
+                momentum_1h = 0.0
+
+            # Recent range position: where is price within last 2h (24 × 5m)?
+            _lookback = min(24, len(highs_5m))
+            recent_high = max(highs_5m[:_lookback])
+            recent_low = min(lows_5m[:_lookback])
+            if recent_high > recent_low:
+                range_pos = ((current_price - recent_low) / (recent_high - recent_low)) * 100
+            else:
+                range_pos = 50.0
+
+            # === CONTEXT: 1H candles for trend direction ===
+            candles_1h = self._get_candles(symbol, "1H", 25)
+            trend_bias = "NEUTRAL"
+            if len(candles_1h) >= 20:
+                closes_1h = [c["close"] for c in candles_1h]
+                # 1H candles are newest-first from WEEX; reverse for SMA calc
+                closes_1h_chron = list(reversed(closes_1h))
+                sma_20 = np.mean(closes_1h_chron[-20:])
+                sma_50 = np.mean(closes_1h_chron[-min(50, len(closes_1h_chron)):])
+                if current_price > sma_20 > sma_50:
+                    trend_bias = "LONG"
+                elif current_price < sma_20 < sma_50:
+                    trend_bias = "SHORT"
+
+            # === VWAP approximation: volume-weighted average of 5m closes (last 2h) ===
+            _vwap_n = min(24, len(closes_5m))
+            _vwap_vol = sum(volumes_5m[:_vwap_n]) if sum(volumes_5m[:_vwap_n]) > 0 else 1.0
+            vwap = sum(closes_5m[i] * volumes_5m[i] for i in range(_vwap_n)) / _vwap_vol
+            vwap_dist = ((current_price - vwap) / vwap) * 100 if vwap > 0 else 0.0
+
+            print(f"  [TECHNICAL] 5m RSI={rsi_5m:.1f} | 30m mom={momentum_30m:+.2f}% | "
+                  f"1h mom={momentum_1h:+.2f}% | range_pos={range_pos:.0f}% | "
+                  f"VWAP dist={vwap_dist:+.3f}% | trend={trend_bias}")
+
+            # === SIGNAL GENERATION ===
             signals = []
-            
-            if rsi < 30:
-                signals.append(("LONG", 0.7, f"RSI oversold: {rsi:.1f}"))
-            elif rsi > 70:
-                signals.append(("SHORT", 0.7, f"RSI overbought: {rsi:.1f}"))
-            
-            if current_price > sma_20 > sma_50:
-                signals.append(("LONG", 0.5, "Price above SMAs (uptrend)"))
-            elif current_price < sma_20 < sma_50:
-                signals.append(("SHORT", 0.5, "Price below SMAs (downtrend)"))
-            
-            if momentum > 2:
-                signals.append(("LONG", 0.4, f"Strong momentum: +{momentum:.1f}%"))
-            elif momentum < -2:
-                signals.append(("SHORT", 0.4, f"Weak momentum: {momentum:.1f}%"))
-            
+
+            # 5m RSI — primary dip/peak detector
+            # RSI < 35 on 5m = short-term oversold = dip bottom
+            # RSI > 65 on 5m = short-term overbought = peak
+            if rsi_5m < 25:
+                signals.append(("LONG", 0.80, f"5m RSI deeply oversold: {rsi_5m:.1f}"))
+            elif rsi_5m < 35:
+                signals.append(("LONG", 0.65, f"5m RSI oversold: {rsi_5m:.1f}"))
+            elif rsi_5m > 75:
+                signals.append(("SHORT", 0.80, f"5m RSI deeply overbought: {rsi_5m:.1f}"))
+            elif rsi_5m > 65:
+                signals.append(("SHORT", 0.65, f"5m RSI overbought: {rsi_5m:.1f}"))
+
+            # 30-min momentum — sharp recent move = dip or spike happening NOW
+            if momentum_30m < -0.3:
+                signals.append(("LONG", 0.45, f"Sharp 30m dip: {momentum_30m:+.2f}%"))
+            elif momentum_30m > 0.3:
+                signals.append(("SHORT", 0.45, f"Sharp 30m spike: {momentum_30m:+.2f}%"))
+
+            # Range position — lower half = dip territory, upper half = peak territory
+            if range_pos < 20:
+                signals.append(("LONG", 0.40, f"At bottom of 2H range: {range_pos:.0f}%"))
+            elif range_pos > 80:
+                signals.append(("SHORT", 0.40, f"At top of 2H range: {range_pos:.0f}%"))
+
+            # VWAP — below VWAP = dip territory (institutional mean-reversion target)
+            if vwap_dist < -0.15:
+                signals.append(("LONG", 0.30, f"Below VWAP: {vwap_dist:+.3f}%"))
+            elif vwap_dist > 0.15:
+                signals.append(("SHORT", 0.30, f"Above VWAP: {vwap_dist:+.3f}%"))
+
+            # 1H trend context — boost confidence if signal aligns with trend
+            # (Don't block counter-trend, just lower confidence)
             if not signals:
-                return {
-                    "persona": self.name,
-                    "signal": "NEUTRAL",
-                    "confidence": 0.4,
-                    "reasoning": f"No clear technical signal. RSI: {rsi:.1f}",
-                }
-            
+                return {"persona": self.name, "signal": "NEUTRAL",
+                        "confidence": 0.4,
+                        "reasoning": f"No dip/peak detected. 5m RSI: {rsi_5m:.1f}, range: {range_pos:.0f}%"}
+
             long_score = sum(s[1] for s in signals if s[0] == "LONG")
             short_score = sum(s[1] for s in signals if s[0] == "SHORT")
-            
+
             if long_score > short_score:
-                return {
-                    "persona": self.name,
-                    "signal": "LONG",
-                    "confidence": min(0.8, long_score),
-                    "reasoning": "; ".join(s[2] for s in signals if s[0] == "LONG"),
-                }
+                direction = "LONG"
+                base_conf = long_score
+                reasoning = "; ".join(s[2] for s in signals if s[0] == "LONG")
             elif short_score > long_score:
-                return {
-                    "persona": self.name,
-                    "signal": "SHORT",
-                    "confidence": min(0.8, short_score),
-                    "reasoning": "; ".join(s[2] for s in signals if s[0] == "SHORT"),
-                }
-            
+                direction = "SHORT"
+                base_conf = short_score
+                reasoning = "; ".join(s[2] for s in signals if s[0] == "SHORT")
+            else:
+                return {"persona": self.name, "signal": "NEUTRAL",
+                        "confidence": 0.4, "reasoning": "Mixed dip/peak signals"}
+
+            # Trend alignment bonus/penalty
+            if trend_bias == direction:
+                base_conf += 0.10  # With-trend dip = higher confidence
+                reasoning += f"; 1H trend confirms ({trend_bias})"
+            elif trend_bias != "NEUTRAL" and trend_bias != direction:
+                base_conf -= 0.05  # Counter-trend = slight penalty (not blocked)
+                reasoning += f"; counter-trend ({trend_bias})"
+
             return {
                 "persona": self.name,
-                "signal": "NEUTRAL",
-                "confidence": 0.4,
-                "reasoning": "Mixed technical signals",
+                "signal": direction,
+                "confidence": min(0.85, max(0.3, base_conf)),
+                "reasoning": reasoning,
             }
-            
+
         except Exception as e:
-            return {
-                "persona": self.name,
-                "signal": "NEUTRAL",
-                "confidence": 0.0,
-                "reasoning": f"Technical analysis error: {str(e)}",
-            }
+            return {"persona": self.name, "signal": "NEUTRAL",
+                    "confidence": 0.0, "reasoning": f"Technical analysis error: {str(e)}"}
     
     def _get_candles(self, symbol: str, interval: str, limit: int) -> List[Dict]:
         try:
@@ -3770,10 +3849,22 @@ CRITICAL — USE THE 12H PRICE ACTION TABLE ABOVE TO ASSESS ENTRY TIMING:
 {signal_history_text if signal_history_text else "No recent signal history (first cycle or all signals expired)."}
 NOTE: Each entry shows the pair, direction, confidence, how many consecutive 10-min cycles it persisted, and when it first appeared.
 - 2+ cycles same direction = signal is REAL and confirmed. Commit harder (boost confidence).
-- 1 cycle only = fresh signal, could be noise. Normal confidence.
-- If THIS PAIR just flipped direction from last cycle (was SHORT now LONG or vice versa) = HIGH NOISE RISK. Favor WAIT unless 3+ personas strongly agree (>70%).
+- 1 cycle only = fresh signal. Normal confidence.
 - If THIS PAIR has no history = first time seeing a signal for it. Treat normally.
 - Other pairs' history gives you cross-market context (is everything flipping? broad trend shift?).
+
+=== DIP/PEAK DETECTION PROTOCOL (V3.2.68) ===
+THIS IS A DIP-BOUNCE STRATEGY. The key signal pattern is:
+  Cycle N: FLOW shows SHORT (selling pressure = dip forming)
+  Cycle N+1: FLOW FLIPS to LONG (buying returns = dip BOTTOM)
+  → THIS IS THE ENTRY. The FLOW flip from SHORT→LONG IS the dip bounce signal.
+  → Vice versa for peaks: FLOW flips LONG→SHORT = peak reversal = SHORT entry.
+
+CRITICAL: When you see FLOW reasoning contains "[FLIP SHORT→LONG = DIP/PEAK SIGNAL, boosted]":
+  - This means FLOW just flipped direction AND price is in dip territory (bottom of range).
+  - TRUST FLOW. This is the highest-conviction entry signal. Do NOT return WAIT.
+  - FLOW flip + price at bottom of range + TECHNICAL showing oversold = MAXIMUM confidence entry.
+  - The old rule "direction flip = noise" is WRONG for dip-bounce trading. The flip IS the trade.
 
 === MICROSTRUCTURE / CHOP DETECTION (5m candles) ===
 {chop_context_text if chop_context_text else "Chop data unavailable."}
@@ -4316,19 +4407,47 @@ class MultiPersonaAnalyzer:
         print(f"  [FLOW] Analyzing...")
         flow_vote = self.flow.analyze(pair, pair_info)
 
-        # V3.2.1: FLOW stability — if direction flipped 180° from last cycle, discount confidence 50%.
-        # Rationale: FLOW that flip-flops is noise (reacting to a single large print), not signal.
-        # Sustained FLOW direction = real money moving. A one-cycle flip = wait for confirmation.
+        # V3.2.68: FLOW FLIP = DIP/PEAK SIGNAL (replaces V3.2.1 flip discount)
+        #
+        # Core insight: When a dip forms, FLOW shows SHORT (selling pressure).
+        # When the dip BOTTOMS and buying returns, FLOW flips SHORT→LONG.
+        # That flip IS the dip bounce signal. Previously we HALVED confidence here — exactly wrong.
+        #
+        # New logic:
+        #   FLIP + price in dip territory (range ≤ 45%) → BOOST confidence +15% (dip confirmed)
+        #   FLIP + price in peak territory (range ≥ 55%) → BOOST confidence +15% (peak confirmed)
+        #   FLIP + price in mid-range → no change (ambiguous, but don't penalize)
+        #   No flip → no change (sustained direction = already captured by base confidence)
+        #
+        # The range gate (55/45) already blocks bad entries. The flip boost ensures
+        # the bot ACTS on the reversal signal instead of waiting for "confirmation" that comes too late.
         _flow_sym = pair_info.get("symbol", pair)
         _flow_prev = _prev_flow_direction.get(_flow_sym)
         _flow_dir = flow_vote.get("signal", "NEUTRAL")
         if (_flow_prev and _flow_prev in ("LONG", "SHORT") and
                 _flow_dir in ("LONG", "SHORT") and _flow_prev != _flow_dir):
-            _disc = round(flow_vote["confidence"] * 0.5, 2)
-            print(f"  [FLOW] FLIP DISCOUNT: {_flow_prev}->{_flow_dir}, conf {flow_vote['confidence']:.0%} -> {_disc:.0%} (wait for confirmation)")
-            flow_vote = dict(flow_vote)
-            flow_vote["confidence"] = _disc
-            flow_vote["reasoning"] = flow_vote.get("reasoning", "") + f" [FLIP {_flow_prev}->{_flow_dir}, conf discounted]"
+            # Check range position to determine if flip is dip/peak-aligned
+            _range_pos_flow = _chart_range_position_cache.get(_flow_sym)
+            _dip_aligned = False
+            if _range_pos_flow is not None:
+                # SHORT→LONG flip while price in lower half = dip bounce (buying returns at bottom)
+                if _flow_dir == "LONG" and _range_pos_flow <= 45:
+                    _dip_aligned = True
+                # LONG→SHORT flip while price in upper half = peak reversal (selling starts at top)
+                elif _flow_dir == "SHORT" and _range_pos_flow >= 55:
+                    _dip_aligned = True
+
+            if _dip_aligned:
+                # BOOST: flip at dip/peak = the signal we're looking for
+                _boost = min(0.85, round(flow_vote["confidence"] + 0.15, 2))
+                print(f"  [FLOW] DIP/PEAK FLIP BOOST: {_flow_prev}->{_flow_dir} at range {_range_pos_flow:.0f}% — conf {flow_vote['confidence']:.0%} → {_boost:.0%} (V3.2.68)")
+                flow_vote = dict(flow_vote)
+                flow_vote["confidence"] = _boost
+                flow_vote["reasoning"] = flow_vote.get("reasoning", "") + f" [FLIP {_flow_prev}->{_flow_dir} = DIP/PEAK SIGNAL, boosted]"
+            else:
+                # Mid-range flip: ambiguous. Don't penalize, don't boost.
+                _rp_str = f"{_range_pos_flow:.0f}%" if _range_pos_flow is not None else "unknown"
+                print(f"  [FLOW] FLIP {_flow_prev}->{_flow_dir} at range {_rp_str} — neutral (mid-range, no boost/discount)")
         _prev_flow_direction[_flow_sym] = _flow_dir
 
         votes.append(flow_vote)
@@ -4683,8 +4802,11 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     # Uses _chart_range_position_cache populated by get_chart_context() during analysis phase.
     _range_pos = _chart_range_position_cache.get(symbol)
     if _range_pos is not None:
-        _RANGE_LONG_BLOCK = 70   # Block LONGs above 70% of range — not a dip
-        _RANGE_SHORT_BLOCK = 30  # Block SHORTs below 30% of range — not a peak
+        # V3.2.68: Tightened from 70/30 → 55/45. The dip-bounce strategy MUST enter in dip territory.
+        # Old 70% threshold allowed LONGs in upper half of range = not a dip, just mid-range noise.
+        # 55% forces LONGs into lower half; 45% forces SHORTs into upper half.
+        _RANGE_LONG_BLOCK = 55   # Block LONGs above 55% of range — must be in lower half (dip)
+        _RANGE_SHORT_BLOCK = 45  # Block SHORTs below 45% of range — must be in upper half (peak)
         if signal == "LONG" and _range_pos >= _RANGE_LONG_BLOCK:
             _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (>={_RANGE_LONG_BLOCK}%) — too high for LONG dip-bounce entry"
             print(f"  [RANGE-GATE] {_reason}")
