@@ -1683,8 +1683,14 @@ BREAKEVEN_TRIGGER_PCT = 0.4  # Move SL to entry when trade reaches +0.4%
 # exit_reason "peak_fade" → COOLDOWN_MULTIPLIERS["profit_lock"] = 0.0 → zero cooldown.
 PEAK_FADE_MIN_PEAK   = {1: 0.30, 2: 0.45, 3: 0.45}  # Min peak% per tier to activate fade
 PEAK_FADE_TRIGGER_PCT = {1: 0.15, 2: 0.25, 3: 0.25}  # Drop threshold per tier (current <= peak - trigger)
-VELOCITY_EXIT_MINUTES = 40      # V3.2.57: Kill trade if peak never reached 0.15% in first 40 min (dead thesis)
-VELOCITY_MIN_PEAK_PCT = 0.15    # V3.2.57: "No movement" threshold — peak < 0.15% = trade never started
+# V3.2.67: Tiered velocity exit — matches actual hold times per tier.
+# Charts show 0.5-1% dip-bounces happening over 60-120 min windows.
+# 40 min was killing trades before the bounce could play out (4/7 velocity exits last session).
+# T1 (BTC/ETH): 3h hold → 75 min velocity exit (25% of hold)
+# T2 (BNB/LTC/XRP): 2h hold → 60 min velocity exit (50% of hold)
+# T3 (SOL/ADA): 1.5h hold → 50 min velocity exit (56% of hold)
+VELOCITY_EXIT_MINUTES = {1: 75, 2: 60, 3: 50}  # Per-tier velocity exit (was flat 40)
+VELOCITY_MIN_PEAK_PCT = 0.10    # V3.2.67: Lowered from 0.15% → 0.10%. If peak < 0.10% in full velocity window, truly dead.
 
 def _move_sl_to_breakeven(symbol: str, side: str, entry_price: float, tp_price: float, size: float) -> bool:
     """V3.2.46: Cancel existing SL and replace with breakeven SL at entry price.
@@ -2030,13 +2036,14 @@ def monitor_positions():
                     if peak_pnl_pct >= _pf_min and pnl_pct <= peak_pnl_pct - _pf_trig:
                         should_exit = True
                         exit_reason = f"peak_fade_T{tier} ({peak_pnl_pct:.2f}%→{pnl_pct:.2f}%, fade={peak_pnl_pct - pnl_pct:.2f}%, thr={_pf_min:.2f}/{_pf_trig:.2f})"
-                    # V3.2.57: VELOCITY EXIT — if peak never reached 0.15% in first 40 min, thesis is dead
-                    # Distinct from early_exit (needs -1% loss) and peak_fade (needs a peak then reversal).
+                    # V3.2.67: VELOCITY EXIT — tiered per-tier timing (was flat 40 min, too aggressive).
+                    # Charts show dip-bounces over 60-120 min. Give trades time to catch the move.
                     elif peak_pnl_pct < VELOCITY_MIN_PEAK_PCT:
                         _age_min = hours_open * 60  # hours_open already computed above
-                        if _age_min >= VELOCITY_EXIT_MINUTES:
+                        _vel_limit = VELOCITY_EXIT_MINUTES.get(tier, 60)  # Per-tier velocity window
+                        if _age_min >= _vel_limit:
                             should_exit = True
-                            exit_reason = f"velocity_exit ({_age_min:.0f}m open, peak={peak_pnl_pct:.2f}% never reached {VELOCITY_MIN_PEAK_PCT:.2f}%)"
+                            exit_reason = f"velocity_exit ({_age_min:.0f}m open, peak={peak_pnl_pct:.2f}% never reached {VELOCITY_MIN_PEAK_PCT:.2f}%, T{tier} limit={_vel_limit}m)"
 
                 if should_exit:
                     symbol_clean = symbol.replace("cmt_", "").upper()
@@ -3792,7 +3799,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.67: ADX FLOOR GATE (ADX<10=WAIT, prevents velocity-exit bleed in flatline markets). Weekend restriction DISABLED (all 7 pairs active). Signal persistence tracks ADX-gated signals.")
+    logger.info("  V3.2.67: VELOCITY EXIT TIERED (T1=75m, T2=60m, T3=50m, was flat 40m — bounces need 60-90min). Peak threshold 0.15%%→0.10%%. ADX gate softened (5, not 10). Weekend restriction DISABLED (all 7 pairs). Signal persistence tracks ADX-gated signals.")
     logger.info("  V3.2.63: 1D candle granularity FIX (1Dutc→1d — was rejected by WEEX API, breaking ALL chart context). 4H fallback when 1D unavailable. datetime.utcfromtimestamp→fromtimestamp(tz=utc). Judge now gets daily+4H S/R levels again.")
     logger.info("  V3.2.62: Chart context FIX — 12H price action fetch now INDEPENDENT of 1D/4H (was silently failing when 1D/4H returned errors). 30m→15m fallback for T2 if WEEX rejects 30m granularity. Fixed datetime.datetime bug (was datetime.utcfromtimestamp). Judge TP ceiling prompt now reads PAIR_TP_CEILING dynamically.")
     logger.info("  V3.2.61: 12H price action candles fed to Judge (T1=1h/12, T2=30m/24, T3=15m/48 — entry timing + range position). TP ceilings raised (BTC/ETH=1.0%%, SOL=1.5%%, others=0.80%%), R:R guard restored (min 0.5:1), Gemini TP override blocked when chart SR returns tp_not_found.")

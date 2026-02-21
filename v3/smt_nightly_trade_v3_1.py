@@ -1916,7 +1916,7 @@ MAX_SINGLE_POSITION_PCT = 0.50  # V3.1.62: LAST PLACE - 50% max per trade
 MIN_SINGLE_POSITION_PCT = 0.20  # V3.1.62: LAST PLACE - 20% min per trade
 MIN_CONFIDENCE_TO_TRADE = 0.85  # V3.2.57: 85% floor (was 80%). In 1-slot mode, 80-84% trades at 20% sizing block the slot from better signals. 85%+ = all trades at 35-50% sizing minimum.
 CHOP_FALLBACK_CONFIDENCE = 0.85  # V3.2.59: Aligned with MIN_CONFIDENCE_TO_TRADE (was 0.80, creating gate bypass)
-ADX_FLOOR_GATE = 10  # V3.2.67: ADX < 10 = market is flatline, force WAIT. Prevents velocity-exit bleed in zero-trend environments.
+ADX_FLOOR_GATE = 5  # V3.2.67: ADX < 5 = absolute flatline, force WAIT. Only blocks truly dead markets. Was 10 (too aggressive — blocked everything).
 
 # V3.1.92: Equity-based sizing with liquidation safety floors
 _sizing_equity_cache = {"sizing_base": 0, "equity": 0, "available": 0, "ts": 0}
@@ -2031,7 +2031,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.67-ADXFloorGate-NoFlatlineTrades"
+PIPELINE_VERSION = "SMT-v3.2.67-VelocityTiered-AllPairs-ADXSoft"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
