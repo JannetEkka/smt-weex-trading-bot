@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.74** — all production code is in `v3/`.
+**Current version: V3.2.76** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -205,6 +205,21 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 # Age gate: same as velocity exit per tier (T1=75m, T2=60m, T3=50m)
 # Only fires when: pnl < 0, no BE-SL placed. Trade thesis invalidated by real-time orderbook.
 # exit_reason "flow_contra_exit" → zero cooldown (thesis dead, free slot)
+#
+# Near-TP grace (V3.2.76): max_hold exit skipped when trade >= 60% toward TP
+# NEAR_TP_GRACE_PCT = 0.60       # TP progress threshold
+# NEAR_TP_GRACE_MINUTES = 15     # Extra time granted past max_hold
+# Prevents killing trades that are actively approaching their target.
+# After grace expires, max_hold fires normally. Applied in both monitor_positions + pre-cycle sweep.
+#
+# Judge thesis degradation exit (V3.2.76): closes stale positions when Judge says WAIT
+# Runs in check_trading_signals() after Judge evaluates each pair.
+# If Judge returns WAIT for a pair we're holding:
+#   Gate 1: trade age > early_exit_hours (T1=1h, T2=45m, T3=30m)
+#   Gate 2: PnL < BREAKEVEN_TRIGGER_PCT (0.4%) — if above, BE-SL handles it
+#   Gate 3: BE-SL not placed (WEEX SL handles those)
+# Uses structured decision enum ONLY — NO string parsing (avoids ANTI-WAIT V3.2.37 disaster).
+# exit_reason "thesis_degraded" → zero cooldown (thesis dead, free slot immediately)
 
 # 8-EMA snap-back exit (V3.2.68): mean-reversion exit for dip-bounce trades
 # Computes 8-period EMA on 5m candles in monitor_positions()
@@ -438,46 +453,40 @@ python3 v3/cryptoracle_client.py
 34. **Catalyst drive rule (V3.2.74)** — Judge prompt: SENTIMENT named catalyst (ETF inflow, partnership, protocol upgrade, institutional adoption) + FLOW >= 60% same direction = 85%+ confidence. Bypasses 3-persona requirement because news moves markets before WHALE/TECHNICAL react. Previously ETH with BNP Paribas catalyst + FLOW 51% would WAIT because only 2 of 4 personas agreed. Do not raise FLOW threshold above 60% — catalysts create flow, so FLOW confirmation may be building (60%) rather than fully established (70%+).
 35. **Continuation hold thesis check (V3.2.74)** — Judge prompt: when re-evaluating a pair with an open position in the same direction, Judge explicitly told to re-evaluate the thesis honestly. If signals degraded (FLOW flipped, TECHNICAL reversed), return WAIT/opposite. Do not inflate confidence just because a position is already open. The daemon uses the Judge's re-evaluation to inform exit decisions.
 36. **Range gate 2H override thresholds (V3.2.74 revert)** — V3.2.73 widened thresholds from 30/70 to 45/55, which effectively disabled the 12H range gate (any sub-midpoint reading triggered override). V3.2.74 reverted to 30/70. Do not widen past 30/70 — the thresholds are intentionally conservative to ensure only genuine dips/peaks override the 12H gate.
+37. **Near-TP grace for max_hold (V3.2.76)** — `NEAR_TP_GRACE_PCT = 0.60`, `NEAR_TP_GRACE_MINUTES = 15`. If trade is >= 60% toward TP when max_hold fires, grant 15-min grace. Applied in both `monitor_positions()` and pre-cycle sweep. Do not remove — killing a trade at 60%+ toward TP wastes the move and all fees paid. After grace expires, max_hold fires normally (no infinite grace).
+38. **Judge thesis degradation exit (V3.2.76)** — When Judge returns WAIT (structured enum, not string parse) for a pair with an open position, and trade is past `early_exit_hours` AND PnL < 0.4% AND no BE-SL placed → close with `thesis_degraded`. Uses ONLY the structured `decision` field — NO reasoning text parsing. This is the OPPOSITE of ANTI-WAIT (V3.2.37): ANTI-WAIT parsed reasoning to override WAIT into a trade; thesis exit RESPECTS WAIT to inform an exit. Do not add string parsing of Judge reasoning — that was the ANTI-WAIT disaster. Zero cooldown (slot freed immediately for better opportunity).
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.74. Next change should be V3.2.75.
+Current: V3.2.76. Next change should be V3.2.77.
 
 **Recent version history (last 5):**
-- V3.2.74: (**CURRENT**) FLOW CONTRA + CATALYST DRIVE + CONTINUATION HOLD.
-  (1) FLOW contra exit: `monitor_positions()` closes underwater positions when FLOW taker ratio
-  shows extreme opposite (< 0.15 for LONG, > 7.0 for SHORT). Same age gate as velocity exit
-  per tier (T1=75m, T2=60m, T3=50m). Fixes ADA LONG at -0.18% with taker ratio 0.11 sitting
-  with no exit mechanism firing. Zero cooldown.
-  (2) Judge CATALYST DRIVE rule: SENTIMENT named catalyst + FLOW >= 60% same direction = 85%+.
-  Bypasses 3-persona requirement — news moves markets before WHALE/TECHNICAL react.
-  (3) Judge CONTINUATION HOLD: when re-evaluating a pair with an open position, Judge told to
-  re-evaluate thesis honestly. If signals degraded, return WAIT/opposite. Don't inflate.
-  (4) Range gate 2H override reverted 45/55→30/70 (V3.2.73 widened too far, neutering the gate).
-  (5) FLOW flip log label fixed — shows actual position context instead of always "mid-range".
-  (6) Startup banner stripped to tier config + last 5 versions.
+- V3.2.76: (**CURRENT**) NEAR-TP GRACE + THESIS EXIT.
+  (1) Near-TP grace: max_hold exit skipped if trade >= 60% toward TP. Grants 15-min grace
+  past max_hold. Prevents killing trades actively approaching target. Applied in both
+  `monitor_positions()` and pre-cycle sweep.
+  (2) Judge thesis degradation exit: when Judge returns WAIT (structured enum) for a pair
+  with an open position, and trade is past `early_exit_hours` AND PnL < 0.4% (BE-SL trigger)
+  AND no BE-SL placed → close with `thesis_degraded` (zero cooldown). Uses ONLY structured
+  decision field — NO string parsing (avoids ANTI-WAIT V3.2.37 disaster). The Judge already
+  sees chop, ADX, persona conflicts, FLOW — it's the smartest exit signal and was being ignored.
+  `PIPELINE_VERSION = "SMT-v3.2.76-NearTPGrace-ThesisExit"`.
+- V3.2.75: REMOVE DYNAMIC BLACKOUT — Gemini event scanner removed. Was blocking ALL signal
+  cycles on Deribit derivatives expiry (separate exchange, not relevant to WEEX futures).
+  Hardcoded MACRO_BLACKOUT_WINDOWS still active for known events.
+  `PIPELINE_VERSION = "SMT-v3.2.75-RemoveDynamicBlackout"`.
+- V3.2.74: FLOW CONTRA + CATALYST DRIVE + CONTINUATION HOLD.
+  (1) FLOW contra exit: close underwater when FLOW extreme opposite.
+  (2) Judge CATALYST DRIVE rule. (3) Judge CONTINUATION HOLD.
+  (4) Range gate 2H override reverted 45/55→30/70. (5) FLOW flip log fix. (6) Banner cleanup.
   `PIPELINE_VERSION = "SMT-v3.2.74-FlowContra-CatalystDrive-ContinuationHold-RangeRevert"`.
 - V3.2.73: DIP RECOVERY + FLOW SEED + CONF DECAY + VEL PRE-SWEEP.
-  (1) TECHNICAL dip recovery: V-shape detection (range<50% + 30m bounce + 1h still negative).
-  (2) FLOW seed: `_prev_flow_direction` seeded from signal_history on startup (cycle 1 flips work).
-  (3) Conf decay: stale confidence decays -5%/30min past 20min (floor 75%) for opposite flip comparison.
-  (4) Velocity exit in pre-cycle sweep: frees slots before signal analysis.
   `PIPELINE_VERSION = "SMT-v3.2.73-DipRecovery-FlowSeed-ConfDecay-VelPreSweep"`.
 - V3.2.72: FLOW GATE + EMA SNAPBACK FIX.
-  (1) FLOW CONFIDENCE GATE: `MIN_FLOW_CONFIDENCE_GATE = 0.60`. FLOW must be >= 60% in same
-  direction as trade signal. Blocks trades on stale WHALE + narrative SENTIMENT alone.
-  (2) EMA SNAPBACK GIVEBACK: requires 50% peak giveback before firing. Fixes trending trades
-  killed by EMA convergence (LTC SHORT at +0.24% killed when EMA caught up to within $0.006).
   `PIPELINE_VERSION = "SMT-v3.2.72-FlowGate60-EMAGiveback50"`.
-- V3.2.71: EXTRA SLOT DISABLED — 90%+ `CONFIDENCE_EXTRA_SLOT` bypass removed.
-  2-slot hard cap absolute. At $2-3K equity, a 3rd slot = margin call territory.
-  `PIPELINE_VERSION = "SMT-v3.2.71-DisableExtraSlot-HardCap2"`.
-- V3.2.70: R:R UNLOCK — `MIN_VIABLE_TP_PCT` 0.30%→0.50% (walk to 4H structural anchor).
-  `MIN_RR_RATIO` 0.5→0.33 (unblocks BTC/ETH/BNB/LTC at 1.5% SL ceiling).
-  `PIPELINE_VERSION = "SMT-v3.2.70-RRUnlock-MinViable50-RR33"`.
 
 **CRITICAL RULE (V3.2.57): The 85% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that
