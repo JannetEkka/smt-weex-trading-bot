@@ -264,6 +264,9 @@ try:
         # V3.2.73: FLOW direction seed on startup
         _prev_flow_direction,
 
+        # V3.2.78: Range gate caches for opposite-swap pre-check
+        _chart_range_position_cache, _technical_range_pos_cache,
+
         # Logging
         save_local_log,
     )
@@ -1663,6 +1666,29 @@ def check_trading_signals():
                         sym = opportunity["pair_info"]["symbol"]
                         sym_positions = position_map.get(sym, {})
                         opp_pos = sym_positions.get(opp_side)
+
+                        # V3.2.78: PRE-CHECK range gate BEFORE closing the existing position.
+                        # If the replacement trade would be blocked by the range gate, don't close
+                        # the existing position — closing it would take a loss with no replacement.
+                        if opp_pos:
+                            _rg_pos_12h = _chart_range_position_cache.get(sym)
+                            _rg_pos_2h = _technical_range_pos_cache.get(sym)
+                            _RG_LONG_BLOCK = 55
+                            _RG_SHORT_BLOCK = 45
+                            _RG_DIP_OVERRIDE = 30
+                            _RG_PEAK_OVERRIDE = 70
+                            _rg_blocked = False
+                            if _rg_pos_12h is not None:
+                                if signal == "LONG" and _rg_pos_12h >= _RG_LONG_BLOCK:
+                                    if _rg_pos_2h is None or _rg_pos_2h >= _RG_DIP_OVERRIDE:
+                                        _rg_blocked = True
+                                elif signal == "SHORT" and _rg_pos_12h <= _RG_SHORT_BLOCK:
+                                    if _rg_pos_2h is None or _rg_pos_2h <= _RG_PEAK_OVERRIDE:
+                                        _rg_blocked = True
+                            if _rg_blocked:
+                                _rg_2h_str = f"{_rg_pos_2h:.0f}%" if _rg_pos_2h is not None else "N/A"
+                                logger.warning(f"  [OPPOSITE] RANGE GATE PRE-CHECK: {signal} would be blocked (12H={_rg_pos_12h:.0f}%, 2H={_rg_2h_str}) — keeping {opp_side} position instead of closing for nothing")
+                                continue
 
                         if opp_pos:
                             opp_size = float(opp_pos.get("size", 0))
@@ -3967,7 +3993,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.77 - TECHNICAL MOMENTUM CONFLICT FIX")
+    logger.info("SMT Daemon V3.2.78 - OPPOSITE SWAP RANGE PRE-CHECK")
     logger.info("=" * 60)
     # --- Tier table ---
     logger.info("TIER CONFIG:")
@@ -3980,11 +4006,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.77: TECHNICAL MOMENTUM CONFLICT — (1) Momentum/velocity signals gated on 1h momentum: only treat as reversal when 1h disagrees (spike in downtrend, not trend continuation). (2) Momentum conflict cap: when TECHNICAL SHORT but 1h momentum > 0.20%% (uptrend), cap confidence at 65%%. Prevents shorting into bounces.")
-    logger.info("  V3.2.76: NEAR-TP GRACE + THESIS EXIT — (1) Near-TP grace: max_hold skipped if trade >= 60%% toward TP (15min grace). (2) Judge thesis exit: WAIT for held position → close with thesis_degraded (zero cooldown).")
+    logger.info("  V3.2.78: OPPOSITE SWAP RANGE PRE-CHECK — Range gate checked BEFORE closing existing position for opposite swap. If replacement trade would be blocked (e.g. LONG at 91%% of 12H range), keep existing position instead of closing for nothing.")
+    logger.info("  V3.2.77: TECHNICAL MOMENTUM CONFLICT — Momentum/velocity signals gated on 1h momentum. Momentum conflict cap at 65%%. Prevents shorting into bounces.")
+    logger.info("  V3.2.76: NEAR-TP GRACE + THESIS EXIT — max_hold grace at 60%%+ toward TP. Judge thesis exit on WAIT.")
     logger.info("  V3.2.75: REMOVE DYNAMIC BLACKOUT — Gemini event scanner removed.")
     logger.info("  V3.2.74: FLOW CONTRA + CATALYST DRIVE + CONTINUATION HOLD.")
-    logger.info("  V3.2.73: DIP RECOVERY + FLOW SEED + CONF DECAY + VEL PRE-SWEEP.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
