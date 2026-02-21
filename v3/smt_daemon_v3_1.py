@@ -264,6 +264,9 @@ try:
         # V3.2.59: Dynamic event detection
         detect_macro_events, _check_dynamic_blackout,
 
+        # V3.2.73: FLOW direction seed on startup
+        _prev_flow_direction,
+
         # Logging
         save_local_log,
     )
@@ -826,6 +829,16 @@ def check_trading_signals():
                                 _pre_exit_reason = f"force_stop_T{_pre_tier} ({_pre_pnl_pct:.2f}%)"
                 except Exception as _pre_pnl_err:
                     logger.debug(f"[PRE-CYCLE] PnL check error {_pre_sym}: {_pre_pnl_err}")
+            # V3.2.73: Velocity exit in pre-cycle sweep — frees slots BEFORE signal analysis.
+            # Without this, velocity exits only happen in monitor_positions() (after signals),
+            # so stale trades block slots during the entire 7-pair analysis window.
+            if not _pre_should_exit:
+                _pre_age_min = _pre_hours * 60
+                _pre_vel_limit = VELOCITY_EXIT_MINUTES.get(_pre_tier, 60)
+                _pre_peak = _pre_trade.get("peak_pnl_pct", 0.0)
+                if _pre_age_min >= _pre_vel_limit and _pre_peak < VELOCITY_MIN_PEAK_PCT:
+                    _pre_should_exit = True
+                    _pre_exit_reason = f"velocity_exit ({_pre_age_min:.0f}m open, peak={_pre_peak:.2f}% never reached {VELOCITY_MIN_PEAK_PCT:.2f}%, T{_pre_tier} limit={_pre_vel_limit}m)"
             if not _pre_should_exit:
                 continue
             logger.warning(f"[PRE-CYCLE] {_pre_clean}: {_pre_exit_reason} — closing before signal analysis")
@@ -1112,6 +1125,23 @@ def check_trading_signals():
                         # V3.1.53: OPPOSITE - tighten SHORT SL + open LONG
                         short_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:SHORT")
                         existing_conf = short_trade.get("confidence", 0.75) if short_trade else 0.75
+                        # V3.2.73: Decay stale confidence — original confidence from 30+ min ago
+                        # doesn't reflect current market conditions. ETH LONG at 90% from 50 min ago
+                        # blocked a flip when all 4 personas now say SHORT at 85%.
+                        _existing_raw = existing_conf
+                        if short_trade:
+                            try:
+                                _t_opened = short_trade.get("opened_at", "")
+                                if _t_opened:
+                                    _t_opened_dt = datetime.fromisoformat(str(_t_opened).replace("Z", "+00:00")) if isinstance(_t_opened, str) else _t_opened
+                                    _t_age_min = (datetime.now(timezone.utc) - _t_opened_dt).total_seconds() / 60
+                                    if _t_age_min > 20:
+                                        _decay = 0.05 * ((_t_age_min - 20) / 30)  # -5% per 30 min past 20 min
+                                        existing_conf = max(0.75, existing_conf - _decay)
+                                        if existing_conf < _existing_raw:
+                                            logger.info(f"    -> [CONF-DECAY] SHORT conf {_existing_raw:.0%} → {existing_conf:.0%} (age {_t_age_min:.0f}m)")
+                            except Exception:
+                                pass
                         if confidence >= existing_conf:  # V3.1.74: >= (was > which blocked 85% vs 85% flips)
                             # V3.1.100: Check TP proximity + age gates before flipping
                             _opp_blocked, _opp_reason = _check_opposite_swap_gates(
@@ -1132,7 +1162,7 @@ def check_trading_signals():
                                 _flip_tag = "EMERGENCY FLIP" if confidence >= EMERGENCY_FLIP_CONFIDENCE else "OPPOSITE"
                                 logger.info(f"    -> {_flip_tag}: LONG {confidence:.0%} >= SHORT {existing_conf:.0%}. Closing SHORT, opening LONG")
                         else:
-                            logger.info(f"    -> Has SHORT at {existing_conf:.0%}, LONG {confidence:.0%} not stronger. Hold.")
+                            logger.info(f"    -> Has SHORT at {existing_conf:.0%}{f' (raw {_existing_raw:.0%})' if existing_conf < _existing_raw else ''}, LONG {confidence:.0%} not stronger. Hold.")
                             upload_ai_log_to_weex(
                                 stage=f"Hold: {symbol.replace('cmt_','').upper()} SHORT kept",
                                 input_data={"symbol": symbol, "existing_side": "SHORT", "existing_conf": existing_conf, "new_signal": "LONG", "new_conf": confidence},
@@ -1154,6 +1184,21 @@ def check_trading_signals():
                         # V3.1.53: OPPOSITE - tighten LONG SL + open SHORT
                         long_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:LONG")
                         existing_conf = long_trade.get("confidence", 0.75) if long_trade else 0.75
+                        # V3.2.73: Decay stale confidence (same logic as SHORT→LONG above)
+                        _existing_raw = existing_conf
+                        if long_trade:
+                            try:
+                                _t_opened = long_trade.get("opened_at", "")
+                                if _t_opened:
+                                    _t_opened_dt = datetime.fromisoformat(str(_t_opened).replace("Z", "+00:00")) if isinstance(_t_opened, str) else _t_opened
+                                    _t_age_min = (datetime.now(timezone.utc) - _t_opened_dt).total_seconds() / 60
+                                    if _t_age_min > 20:
+                                        _decay = 0.05 * ((_t_age_min - 20) / 30)
+                                        existing_conf = max(0.75, existing_conf - _decay)
+                                        if existing_conf < _existing_raw:
+                                            logger.info(f"    -> [CONF-DECAY] LONG conf {_existing_raw:.0%} → {existing_conf:.0%} (age {_t_age_min:.0f}m)")
+                            except Exception:
+                                pass
                         if confidence >= existing_conf:  # V3.1.74: >= (was > which blocked 85% vs 85% flips)
                             # V3.1.100: Check TP proximity + age gates before flipping
                             _opp_blocked, _opp_reason = _check_opposite_swap_gates(
@@ -1174,7 +1219,7 @@ def check_trading_signals():
                                 _flip_tag = "EMERGENCY FLIP" if confidence >= EMERGENCY_FLIP_CONFIDENCE else "OPPOSITE"
                                 logger.info(f"    -> {_flip_tag}: SHORT {confidence:.0%} >= LONG {existing_conf:.0%}. Closing LONG, opening SHORT")
                         else:
-                            logger.info(f"    -> Has LONG at {existing_conf:.0%}, SHORT {confidence:.0%} not stronger. Hold.")
+                            logger.info(f"    -> Has LONG at {existing_conf:.0%}{f' (raw {_existing_raw:.0%})' if existing_conf < _existing_raw else ''}, SHORT {confidence:.0%} not stronger. Hold.")
                             upload_ai_log_to_weex(
                                 stage=f"Hold: {symbol.replace('cmt_','').upper()} LONG kept",
                                 input_data={"symbol": symbol, "existing_side": "LONG", "existing_conf": existing_conf, "new_signal": "SHORT", "new_conf": confidence},
@@ -3811,7 +3856,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.72 - FLOW GATE + EMA FIX: FLOW >= 60%% required (blocks stale/narrative signals). EMA snapback needs 50%% giveback from peak (stops killing trending trades).")
+    logger.info("SMT Daemon V3.2.73 - DIP RECOVERY + FLOW SEED + CONF DECAY + VEL PRE-SWEEP + RANGE WIDEN")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3888,11 +3933,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.72: FLOW GATE + EMA FIX — (1) FLOW >= 60%% gate: blocks trades where FLOW doesn't confirm direction (kills stale WHALE+SENTIMENT-only signals like ETH 90%% with FLOW 46%%). (2) EMA snapback giveback: requires 50%% peak giveback before firing (stops killing trending trades on EMA convergence, e.g. LTC SHORT +0.24%% actively climbing).")
+    logger.info("  V3.2.73: DIP RECOVERY + FLOW SEED + CONF DECAY + VEL PRE-SWEEP + RANGE WIDEN — (1) TECHNICAL dip recovery signal: V-shape detection (range<50%% + 30m bounce + 1h still negative). (2) FLOW seed: _prev_flow_direction seeded from signal_history on startup (cycle 1 flips work). (3) Conf decay: stale confidence decays -5%%/30min past 20min (floor 75%%) for opposite flip comparison. (4) Velocity exit in pre-cycle sweep: frees slots before signal analysis. (5) 2H range override widened 30/70→45/55.")
+    logger.info("  V3.2.72: FLOW GATE + EMA FIX — (1) FLOW >= 60%% gate: blocks trades where FLOW doesn't confirm direction. (2) EMA snapback giveback: requires 50%% peak giveback before firing.")
     logger.info("  V3.2.71: EXTRA SLOT DISABLED — 90%%+ CONFIDENCE_EXTRA_SLOT bypass removed. 2-slot hard cap absolute.")
     logger.info("  V3.2.70: R:R UNLOCK — MIN_VIABLE 0.30%%→0.50%% (walk to 4H), R:R 0.5→0.33 (unblocks BTC/ETH/BNB/LTC at 1.5%% SL).")
-    logger.info("  V3.2.69: RANGE GATE 2H OVERRIDE — 12H range gate (55/45) now bypassed when TECHNICAL's 2H range confirms genuine dip (<30%%) or peak (>70%%). Fixes: BNB 90%% blocked at 12H=77%%/2H=11%%, SOL 85%% blocked at 12H=57%%/2H=7%%. Short-term dips in uptrends are valid entries.")
-    logger.info("  V3.2.68: DIP DETECTION OVERHAUL — TECHNICAL: 5m RSI(14)+VWAP+30m momentum+volume spike(2x)+entry velocity(0.20%%/15m). FLOW: flip at dip/peak=+15%% boost (was 50%% discount). Range gate 55/45. TP haircut 90%%. 8-EMA snap-back EXIT in daemon (mean-reversion close). Judge: 2-persona dip rule, flip protocol.")
+    logger.info("  V3.2.69: RANGE GATE 2H OVERRIDE — 12H range gate (55/45) now bypassed when TECHNICAL's 2H range confirms genuine dip (<30%%) or peak (>70%%).")
     logger.info("  V3.2.67: VELOCITY EXIT TIERED (T1=75m, T2=60m, T3=50m, was flat 40m — bounces need 60-90min). Peak threshold 0.15%%→0.10%%. ADX gate softened (5, not 10). Weekend restriction DISABLED (all 7 pairs). Signal persistence tracks ADX-gated signals.")
     logger.info("  V3.2.63: 1D candle granularity FIX (1Dutc→1d — was rejected by WEEX API, breaking ALL chart context). 4H fallback when 1D unavailable. datetime.utcfromtimestamp→fromtimestamp(tz=utc). Judge now gets daily+4H S/R levels again.")
     logger.info("  V3.2.62: Chart context FIX — 12H price action fetch now INDEPENDENT of 1D/4H (was silently failing when 1D/4H returned errors). 30m→15m fallback for T2 if WEEX rejects 30m granularity. Fixed datetime.datetime bug (was datetime.utcfromtimestamp). Judge TP ceiling prompt now reads PAIR_TP_CEILING dynamically.")
@@ -3929,7 +3974,26 @@ def run_daemon():
 
     # V3.1.9: Sync with WEEX on startup
     sync_tracker_with_weex()
-    
+
+    # V3.2.73: Seed FLOW direction history from persisted signal_history
+    # so FLOW flips can be detected on the first cycle after restart.
+    # Without this, _prev_flow_direction is empty → no flips → the core dip signal is dead on cycle 1.
+    _sh = tracker.state.get("signal_history", {})
+    _seeded = 0
+    for _pair_key, _sh_data in _sh.items():
+        if isinstance(_sh_data, dict) and _sh_data.get("direction") in ("LONG", "SHORT"):
+            _sym = None
+            for _tp in TRADING_PAIRS:
+                if _tp["pair"] == _pair_key:
+                    _sym = _tp["symbol"]
+                    break
+            if _sym:
+                _prev_flow_direction[_sym] = _sh_data["direction"]
+                _seeded += 1
+                logger.info(f"  [FLOW-SEED] {_pair_key}: seeded prev direction = {_sh_data['direction']} from signal_history")
+    if _seeded:
+        logger.info(f"  [FLOW-SEED] Seeded {_seeded} pair(s) from signal_history")
+
     # V3.1.53: Clean dust positions on startup
     try:
         cleanup_dust_positions()

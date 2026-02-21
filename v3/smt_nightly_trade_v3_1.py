@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.72-FlowGate60-EMAGiveback50"
+PIPELINE_VERSION = "SMT-v3.2.73-DipRecovery-FlowSeed-ConfDecay-VelPreSweep-RangeWiden"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3409,6 +3409,16 @@ class TechnicalPersona:
                 signals.append(("LONG", 0.40, f"At bottom of 2H range: {range_pos:.0f}%"))
             elif range_pos > 80:
                 signals.append(("SHORT", 0.40, f"At top of 2H range: {range_pos:.0f}%"))
+
+            # V3.2.73: DIP RECOVERY — detect V-shape bounce pattern
+            # When FLOW flips to LONG at the bottom, RSI is already climbing out of oversold
+            # (40-55), momentum_30m is positive (bounce started), but momentum_1h is negative
+            # (the dip happened). This is a LONG signal, not a SHORT signal.
+            # Without this, TECHNICAL opposes FLOW at dip bottoms because "positive momentum = SHORT".
+            if range_pos < 50 and momentum_30m > 0.05 and momentum_1h < 0:
+                signals.append(("LONG", 0.45, f"Dip recovery: range {range_pos:.0f}% + 30m bounce {momentum_30m:+.2f}% (1h still negative {momentum_1h:+.2f}%)"))
+            elif range_pos > 50 and momentum_30m < -0.05 and momentum_1h > 0:
+                signals.append(("SHORT", 0.45, f"Peak reversal: range {range_pos:.0f}% + 30m fade {momentum_30m:+.2f}% (1h still positive {momentum_1h:+.2f}%)"))
 
             # VWAP — below VWAP = dip territory (institutional mean-reversion target)
             if vwap_dist < -0.15:
@@ -4874,13 +4884,13 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     if _range_pos is not None:
         _RANGE_LONG_BLOCK = 55   # Block LONGs above 55% of 12H range
         _RANGE_SHORT_BLOCK = 45  # Block SHORTs below 45% of 12H range
-        _DIP_OVERRIDE_THRESH = 30  # V3.2.69: 2H range < 30% = genuine dip, bypass 12H gate
-        _PEAK_OVERRIDE_THRESH = 70  # V3.2.69: 2H range > 70% = genuine peak, bypass 12H gate
+        _DIP_OVERRIDE_THRESH = 45  # V3.2.73: was 30, widened to 45 — below midpoint = dip real enough to override 12H
+        _PEAK_OVERRIDE_THRESH = 55  # V3.2.73: was 70, widened to 55 — above midpoint = peak real enough to override 12H
 
         if signal == "LONG" and _range_pos >= _RANGE_LONG_BLOCK:
             # Check 2H override: if TECHNICAL sees bottom of 2H range, the dip is real
             if _range_pos_2h is not None and _range_pos_2h < _DIP_OVERRIDE_THRESH:
-                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block LONG, but 2H range {_range_pos_2h:.0f}% confirms dip — OVERRIDE (V3.2.69)")
+                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block LONG, but 2H range {_range_pos_2h:.0f}% confirms dip — OVERRIDE (V3.2.73)")
             else:
                 _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (>={_RANGE_LONG_BLOCK}%){f', 2H={_range_pos_2h:.0f}%' if _range_pos_2h is not None else ''} — too high for LONG dip-bounce entry"
                 print(f"  [RANGE-GATE] {_reason}")
@@ -4888,7 +4898,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         elif signal == "SHORT" and _range_pos <= _RANGE_SHORT_BLOCK:
             # Check 2H override: if TECHNICAL sees top of 2H range, the peak is real
             if _range_pos_2h is not None and _range_pos_2h > _PEAK_OVERRIDE_THRESH:
-                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block SHORT, but 2H range {_range_pos_2h:.0f}% confirms peak — OVERRIDE (V3.2.69)")
+                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block SHORT, but 2H range {_range_pos_2h:.0f}% confirms peak — OVERRIDE (V3.2.73)")
             else:
                 _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (<={_RANGE_SHORT_BLOCK}%){f', 2H={_range_pos_2h:.0f}%' if _range_pos_2h is not None else ''} — too low for SHORT entry"
                 print(f"  [RANGE-GATE] {_reason}")
