@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.76-NearTPGrace-ThesisExit"
+PIPELINE_VERSION = "SMT-v3.2.77-TechMomentumConflict"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3387,15 +3387,19 @@ class TechnicalPersona:
                 signals.append(("SHORT", 0.65, f"5m RSI overbought: {rsi_5m:.1f}"))
 
             # 30-min momentum — sharp recent move = dip or spike happening NOW
-            if momentum_30m < -0.3:
+            # V3.2.77: Only treat as reversal when 1h momentum DISAGREES.
+            # If 30m AND 1h both positive → trend continuation, NOT a spike to fade.
+            # If 30m positive but 1h near-zero/negative → genuine spike in downtrend → SHORT.
+            if momentum_30m < -0.3 and momentum_1h <= 0.10:
                 signals.append(("LONG", 0.45, f"Sharp 30m dip: {momentum_30m:+.2f}%"))
-            elif momentum_30m > 0.3:
+            elif momentum_30m > 0.3 and momentum_1h <= 0.10:
                 signals.append(("SHORT", 0.45, f"Sharp 30m spike: {momentum_30m:+.2f}%"))
 
             # Entry velocity — sharp 15m move = active dip/spike (not slow grind)
-            if velocity_15m < -0.20:
+            # V3.2.77: Same gate — only reversal signal when 1h momentum disagrees.
+            if velocity_15m < -0.20 and momentum_1h >= -0.10:
                 signals.append(("LONG", 0.35, f"Active dip velocity: {velocity_15m:+.3f}%/15m"))
-            elif velocity_15m > 0.20:
+            elif velocity_15m > 0.20 and momentum_1h <= 0.10:
                 signals.append(("SHORT", 0.35, f"Active spike velocity: {velocity_15m:+.3f}%/15m"))
 
             # Volume spike — confirms the move is real, not noise
@@ -3455,6 +3459,21 @@ class TechnicalPersona:
             elif trend_bias != "NEUTRAL" and trend_bias != direction:
                 base_conf -= 0.05  # Counter-trend = slight penalty (not blocked)
                 reasoning += f"; counter-trend ({trend_bias})"
+
+            # V3.2.77: MOMENTUM CONFLICT CAP — when mean-reversion signals say SHORT
+            # but 1h momentum is strongly positive (genuine uptrend), cap confidence.
+            # TECHNICAL's mean-reversion framework is wrong in trending markets:
+            # overbought RSI + positive momentum = trend strength, not reversal.
+            # Cap at 0.65 → TECHNICAL can't single-handedly push Judge to 85%.
+            # Other personas (FLOW, WHALE) must confirm for a trade.
+            _MOMENTUM_CONFLICT_CAP = 0.65
+            _MOMENTUM_TREND_THRESH = 0.20  # 1h momentum threshold for "confirmed trend"
+            if direction == "SHORT" and momentum_1h > _MOMENTUM_TREND_THRESH:
+                base_conf = min(base_conf, _MOMENTUM_CONFLICT_CAP)
+                reasoning += f"; MOMENTUM CONFLICT: 1h mom {momentum_1h:+.2f}% contradicts SHORT (capped {_MOMENTUM_CONFLICT_CAP:.0%})"
+            elif direction == "LONG" and momentum_1h < -_MOMENTUM_TREND_THRESH:
+                base_conf = min(base_conf, _MOMENTUM_CONFLICT_CAP)
+                reasoning += f"; MOMENTUM CONFLICT: 1h mom {momentum_1h:+.2f}% contradicts LONG (capped {_MOMENTUM_CONFLICT_CAP:.0%})"
 
             return {
                 "persona": self.name,
