@@ -4028,7 +4028,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.82 - FLOW SEED FROM POSITIONS")
+    logger.info("SMT Daemon V3.2.83 - FLOW SEED FROM RL DATA")
     logger.info("=" * 60)
     # --- Tier table ---
     logger.info("TIER CONFIG:")
@@ -4041,23 +4041,24 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.82: FLOW SEED FROM POSITIONS — FLOW direction seed now uses active positions (traded side) as primary source, signal_history as fallback. Fixes BTC seeded LONG when actual position was SHORT. Positions are ground truth; signal_history can be stale/mismatched.")
-    logger.info("  V3.2.81: TAKER VOLUME FLOOR + FLOW STABILITY — (1) Minority side < 3%% of total taker volume = noise, extreme/heavy classification suppressed. (2) Fresh signal flips blocked until 2nd cycle confirms.")
-    logger.info("  V3.2.80: EVENTS TO SENTIMENT — Macro event scanner results now fed to SENTIMENT persona instead of raw dump to Judge.")
-    logger.info("  V3.2.79: ORPHAN VERIFY LOOP — Pre-trade cancel now verify-and-retry: queries /currentPlan after cancel, re-cancels any surviving orphan plan orders up to 3x.")
-    logger.info("  V3.2.78: OPPOSITE SWAP RANGE PRE-CHECK — Range gate checked BEFORE closing existing position for opposite swap.")
+    logger.info("  V3.2.83: FLOW SEED FROM RL DATA — 3-tier seed: (1) active positions, (2) RL training data (persistent, no expiry), (3) signal_history. Fixes XRP/SOL/ADA losing seeds on restarts due to 20-min signal_history expiry.")
+    logger.info("  V3.2.82: FLOW SEED FROM POSITIONS — Active positions as primary seed source (traded side = ground truth).")
+    logger.info("  V3.2.81: TAKER VOLUME FLOOR + FLOW STABILITY — Minority < 3%% = noise. Fresh flips blocked until 2nd cycle.")
+    logger.info("  V3.2.80: EVENTS TO SENTIMENT — Macro event scanner results fed to SENTIMENT persona.")
+    logger.info("  V3.2.79: ORPHAN VERIFY LOOP — Pre-trade cancel verify-and-retry up to 3x.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
     sync_tracker_with_weex()
 
-    # V3.2.82: Seed FLOW direction from active positions FIRST (actual traded side),
-    # then fill gaps from signal_history. Active positions are the most reliable source —
-    # they represent actual capital commitment. signal_history can be stale or mismatched
-    # (e.g., BTC signal_history says LONG but actual position is SHORT).
+    # V3.2.83: Seed FLOW direction from 3 sources (priority order):
+    #   1. Active positions (traded side = ground truth)
+    #   2. RL data (last FLOW direction per pair — survives restarts, no expiry)
+    #   3. signal_history (last resort — has 20-min expiry that kills data on restarts)
     # Without this, _prev_flow_direction is empty → no flips → the core dip signal is dead on cycle 1.
     _seeded = 0
     _seeded_from_pos = 0
+    _seeded_from_rl = 0
     _seeded_from_sh = 0
 
     # Step 1: Seed from active positions (traded side = ground truth)
@@ -4067,24 +4068,63 @@ def run_daemon():
             _prev_flow_direction[_at_sym] = _at_data["side"]
             _seeded += 1
             _seeded_from_pos += 1
-            # Find pair name for logging
             _at_pair = next((p for p, info in TRADING_PAIRS.items() if info["symbol"] == _at_sym), _at_sym)
-            logger.info(f"  [FLOW-SEED] {_at_pair}: seeded prev direction = {_at_data['side']} from ACTIVE POSITION (traded side)")
+            logger.info(f"  [FLOW-SEED] {_at_pair}: seeded = {_at_data['side']} from ACTIVE POSITION")
 
-    # Step 2: Fill gaps from signal_history (for pairs without active positions)
+    # Step 2: Seed from RL data (persistent across restarts, no 20-min expiry)
+    # RL logs state.flow_sig for every pair on every cycle: 1.0=LONG, -1.0=SHORT, 0.0=NEUTRAL
+    # Read last ~30 lines of today's RL file to find most recent FLOW direction per symbol.
+    try:
+        import glob as _glob_mod
+        _rl_files = sorted(_glob_mod.glob(os.path.join(os.path.dirname(__file__), "rl_training_data", "exp_*.jsonl")))
+        if _rl_files:
+            _rl_flow_map = {}  # symbol → (direction, timestamp)
+            # Read last 2 files (today + yesterday) in case today's file is empty/new
+            for _rl_file in _rl_files[-2:]:
+                try:
+                    with open(_rl_file, 'r') as _rf:
+                        _rl_lines = _rf.readlines()
+                    # Scan last 30 lines (covers ~4 full cycles of 7 pairs)
+                    for _rl_line in _rl_lines[-30:]:
+                        try:
+                            _rl_entry = json.loads(_rl_line)
+                            _rl_sym = _rl_entry.get("symbol", "")
+                            _rl_ts = _rl_entry.get("ts", "")
+                            _rl_flow_sig = _rl_entry.get("state", {}).get("flow_sig", 0.0)
+                            if _rl_sym and _rl_flow_sig != 0.0:
+                                _rl_dir = "LONG" if _rl_flow_sig > 0 else "SHORT"
+                                # Keep the most recent entry per symbol
+                                if _rl_sym not in _rl_flow_map or _rl_ts > _rl_flow_map[_rl_sym][1]:
+                                    _rl_flow_map[_rl_sym] = (_rl_dir, _rl_ts)
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+                except Exception:
+                    continue
+
+            for _rl_sym, (_rl_dir, _rl_ts) in _rl_flow_map.items():
+                if _rl_sym not in _prev_flow_direction:  # don't overwrite position-based seed
+                    _prev_flow_direction[_rl_sym] = _rl_dir
+                    _seeded += 1
+                    _seeded_from_rl += 1
+                    _rl_pair = next((p for p, info in TRADING_PAIRS.items() if info["symbol"] == _rl_sym), _rl_sym)
+                    logger.info(f"  [FLOW-SEED] {_rl_pair}: seeded = {_rl_dir} from RL data ({_rl_ts[:16]})")
+    except Exception as _rl_err:
+        logger.warning(f"  [FLOW-SEED] RL data read failed: {_rl_err}")
+
+    # Step 3: Fill remaining gaps from signal_history (last resort — 20-min expiry)
     _sh = tracker.signal_history
     for _pair_key, _sh_data in _sh.items():
         if isinstance(_sh_data, dict) and _sh_data.get("direction") in ("LONG", "SHORT"):
             _tp_info = TRADING_PAIRS.get(_pair_key)
             if _tp_info:
                 _sym = _tp_info["symbol"]
-                if _sym not in _prev_flow_direction:  # don't overwrite position-based seed
+                if _sym not in _prev_flow_direction:
                     _prev_flow_direction[_sym] = _sh_data["direction"]
                     _seeded += 1
                     _seeded_from_sh += 1
-                    logger.info(f"  [FLOW-SEED] {_pair_key}: seeded prev direction = {_sh_data['direction']} from signal_history")
+                    logger.info(f"  [FLOW-SEED] {_pair_key}: seeded = {_sh_data['direction']} from signal_history")
     if _seeded:
-        logger.info(f"  [FLOW-SEED] Seeded {_seeded} pair(s): {_seeded_from_pos} from positions, {_seeded_from_sh} from signal_history")
+        logger.info(f"  [FLOW-SEED] Seeded {_seeded} pair(s): {_seeded_from_pos} from positions, {_seeded_from_rl} from RL, {_seeded_from_sh} from signal_history")
 
     # V3.1.53: Clean dust positions on startup
     try:
