@@ -1193,53 +1193,30 @@ def check_trading_signals():
                     if has_long:
                         logger.info(f"    -> Already LONG")
                     elif has_short:
-                        # V3.1.53: OPPOSITE - tighten SHORT SL + open LONG
-                        short_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:SHORT")
-                        existing_conf = short_trade.get("confidence", 0.75) if short_trade else 0.75
-                        # V3.2.73: Decay stale confidence — original confidence from 30+ min ago
-                        # doesn't reflect current market conditions. ETH LONG at 90% from 50 min ago
-                        # blocked a flip when all 4 personas now say SHORT at 85%.
-                        _existing_raw = existing_conf
-                        if short_trade:
-                            try:
-                                _t_opened = short_trade.get("opened_at", "")
-                                if _t_opened:
-                                    _t_opened_dt = datetime.fromisoformat(str(_t_opened).replace("Z", "+00:00")) if isinstance(_t_opened, str) else _t_opened
-                                    _t_age_min = (datetime.now(timezone.utc) - _t_opened_dt).total_seconds() / 60
-                                    if _t_age_min > 20:
-                                        _decay = 0.05 * ((_t_age_min - 20) / 30)  # -5% per 30 min past 20 min
-                                        existing_conf = max(0.75, existing_conf - _decay)
-                                        if existing_conf < _existing_raw:
-                                            logger.info(f"    -> [CONF-DECAY] SHORT conf {_existing_raw:.0%} → {existing_conf:.0%} (age {_t_age_min:.0f}m)")
-                            except Exception:
-                                pass
-                        if confidence >= existing_conf:  # V3.1.74: >= (was > which blocked 85% vs 85% flips)
-                            # V3.1.100: Check TP proximity + age gates before flipping
-                            _opp_blocked, _opp_reason = _check_opposite_swap_gates(
-                                symbol=symbol, existing_side="SHORT", new_signal="LONG",
-                                new_confidence=confidence, opportunity={"pair_info": pair_info, "decision": decision}
-                            )
-                            if _opp_blocked:
-                                logger.info(f"    -> OPPOSITE BLOCKED: {_opp_reason}")
-                                upload_ai_log_to_weex(
-                                    stage=f"Opposite Blocked: {symbol.replace('cmt_','').upper()}",
-                                    input_data={"symbol": symbol, "existing_side": "SHORT", "new_signal": "LONG", "new_conf": confidence},
-                                    output_data={"action": "DEFERRED", "reason": _opp_reason},
-                                    explanation=f"AI blocked opposite flip on {symbol.replace('cmt_','').upper()}. {_opp_reason}. Signal queued for deferred execution after existing position closes."[:1000]
-                                )
-                            else:
-                                can_trade_this = True
-                                trade_type = "opposite"
-                                _flip_tag = "EMERGENCY FLIP" if confidence >= EMERGENCY_FLIP_CONFIDENCE else "OPPOSITE"
-                                logger.info(f"    -> {_flip_tag}: LONG {confidence:.0%} >= SHORT {existing_conf:.0%}. Closing SHORT, opening LONG")
-                        else:
-                            logger.info(f"    -> Has SHORT at {existing_conf:.0%}{f' (raw {_existing_raw:.0%})' if existing_conf < _existing_raw else ''}, LONG {confidence:.0%} not stronger. Hold.")
+                        # V3.1.53: OPPOSITE - close SHORT + open LONG
+                        # V3.2.87: Removed stale confidence comparison. The old "existing conf > new conf = hold"
+                        # predates swap gates (V3.1.100), SR pre-check (V3.2.86), range pre-check (V3.2.78),
+                        # FLOW gate (V3.2.72), and thesis exit (V3.2.76). Those are the real guards now.
+                        # If Judge says LONG at 85%+ with fresh data, let the swap gates decide — not a
+                        # stale confidence number from 10-30 min ago that doesn't reflect current market.
+                        # V3.1.100: Check TP proximity + age gates before flipping
+                        _opp_blocked, _opp_reason = _check_opposite_swap_gates(
+                            symbol=symbol, existing_side="SHORT", new_signal="LONG",
+                            new_confidence=confidence, opportunity={"pair_info": pair_info, "decision": decision}
+                        )
+                        if _opp_blocked:
+                            logger.info(f"    -> OPPOSITE BLOCKED: {_opp_reason}")
                             upload_ai_log_to_weex(
-                                stage=f"Hold: {symbol.replace('cmt_','').upper()} SHORT kept",
-                                input_data={"symbol": symbol, "existing_side": "SHORT", "existing_conf": existing_conf, "new_signal": "LONG", "new_conf": confidence},
-                                output_data={"action": "HOLD", "reason": "existing_confidence_higher"},
-                                explanation=f"AI decided to maintain SHORT position. Existing SHORT confidence ({existing_conf:.0%}) > new LONG signal ({confidence:.0%}). No directional change warranted."
+                                stage=f"Opposite Blocked: {symbol.replace('cmt_','').upper()}",
+                                input_data={"symbol": symbol, "existing_side": "SHORT", "new_signal": "LONG", "new_conf": confidence},
+                                output_data={"action": "DEFERRED", "reason": _opp_reason},
+                                explanation=f"AI blocked opposite flip on {symbol.replace('cmt_','').upper()}. {_opp_reason}. Signal queued for deferred execution after existing position closes."[:1000]
                             )
+                        else:
+                            can_trade_this = True
+                            trade_type = "opposite"
+                            _flip_tag = "EMERGENCY FLIP" if confidence >= EMERGENCY_FLIP_CONFIDENCE else "OPPOSITE"
+                            logger.info(f"    -> {_flip_tag}: LONG {confidence:.0%} vs SHORT. Closing SHORT, opening LONG")
                     else:
                         # V3.2.59: Always collect 85%+ signals — slot check deferred to execution
                         # time where positions are re-queried (catches TP/SL during analysis window).
@@ -1252,50 +1229,26 @@ def check_trading_signals():
                     if has_short:
                         logger.info(f"    -> Already SHORT")
                     elif has_long:
-                        # V3.1.53: OPPOSITE - tighten LONG SL + open SHORT
-                        long_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:LONG")
-                        existing_conf = long_trade.get("confidence", 0.75) if long_trade else 0.75
-                        # V3.2.73: Decay stale confidence (same logic as SHORT→LONG above)
-                        _existing_raw = existing_conf
-                        if long_trade:
-                            try:
-                                _t_opened = long_trade.get("opened_at", "")
-                                if _t_opened:
-                                    _t_opened_dt = datetime.fromisoformat(str(_t_opened).replace("Z", "+00:00")) if isinstance(_t_opened, str) else _t_opened
-                                    _t_age_min = (datetime.now(timezone.utc) - _t_opened_dt).total_seconds() / 60
-                                    if _t_age_min > 20:
-                                        _decay = 0.05 * ((_t_age_min - 20) / 30)
-                                        existing_conf = max(0.75, existing_conf - _decay)
-                                        if existing_conf < _existing_raw:
-                                            logger.info(f"    -> [CONF-DECAY] LONG conf {_existing_raw:.0%} → {existing_conf:.0%} (age {_t_age_min:.0f}m)")
-                            except Exception:
-                                pass
-                        if confidence >= existing_conf:  # V3.1.74: >= (was > which blocked 85% vs 85% flips)
-                            # V3.1.100: Check TP proximity + age gates before flipping
-                            _opp_blocked, _opp_reason = _check_opposite_swap_gates(
-                                symbol=symbol, existing_side="LONG", new_signal="SHORT",
-                                new_confidence=confidence, opportunity={"pair_info": pair_info, "decision": decision}
-                            )
-                            if _opp_blocked:
-                                logger.info(f"    -> OPPOSITE BLOCKED: {_opp_reason}")
-                                upload_ai_log_to_weex(
-                                    stage=f"Opposite Blocked: {symbol.replace('cmt_','').upper()}",
-                                    input_data={"symbol": symbol, "existing_side": "LONG", "new_signal": "SHORT", "new_conf": confidence},
-                                    output_data={"action": "DEFERRED", "reason": _opp_reason},
-                                    explanation=f"AI blocked opposite flip on {symbol.replace('cmt_','').upper()}. {_opp_reason}. Signal queued for deferred execution after existing position closes."[:1000]
-                                )
-                            else:
-                                can_trade_this = True
-                                trade_type = "opposite"
-                                _flip_tag = "EMERGENCY FLIP" if confidence >= EMERGENCY_FLIP_CONFIDENCE else "OPPOSITE"
-                                logger.info(f"    -> {_flip_tag}: SHORT {confidence:.0%} >= LONG {existing_conf:.0%}. Closing LONG, opening SHORT")
-                        else:
-                            logger.info(f"    -> Has LONG at {existing_conf:.0%}{f' (raw {_existing_raw:.0%})' if existing_conf < _existing_raw else ''}, SHORT {confidence:.0%} not stronger. Hold.")
+                        # V3.1.53: OPPOSITE - close LONG + open SHORT
+                        # V3.2.87: Removed stale confidence comparison (same as SHORT→LONG above).
+                        # V3.1.100: Check TP proximity + age gates before flipping
+                        _opp_blocked, _opp_reason = _check_opposite_swap_gates(
+                            symbol=symbol, existing_side="LONG", new_signal="SHORT",
+                            new_confidence=confidence, opportunity={"pair_info": pair_info, "decision": decision}
+                        )
+                        if _opp_blocked:
+                            logger.info(f"    -> OPPOSITE BLOCKED: {_opp_reason}")
                             upload_ai_log_to_weex(
-                                stage=f"Hold: {symbol.replace('cmt_','').upper()} LONG kept",
-                                input_data={"symbol": symbol, "existing_side": "LONG", "existing_conf": existing_conf, "new_signal": "SHORT", "new_conf": confidence},
-                                output_data={"action": "HOLD", "reason": "existing_confidence_higher"},
-                                explanation=f"AI decided to maintain LONG position. Existing LONG confidence ({existing_conf:.0%}) > new SHORT signal ({confidence:.0%}). No directional change warranted."
+                                stage=f"Opposite Blocked: {symbol.replace('cmt_','').upper()}",
+                                input_data={"symbol": symbol, "existing_side": "LONG", "new_signal": "SHORT", "new_conf": confidence},
+                                output_data={"action": "DEFERRED", "reason": _opp_reason},
+                                explanation=f"AI blocked opposite flip on {symbol.replace('cmt_','').upper()}. {_opp_reason}. Signal queued for deferred execution after existing position closes."[:1000]
+                            )
+                        else:
+                            can_trade_this = True
+                            trade_type = "opposite"
+                            _flip_tag = "EMERGENCY FLIP" if confidence >= EMERGENCY_FLIP_CONFIDENCE else "OPPOSITE"
+                            logger.info(f"    -> {_flip_tag}: SHORT {confidence:.0%} vs LONG. Closing LONG, opening SHORT")
                             )
                     else:
                         # V3.2.59: Always collect 85%+ signals — slot check deferred to execution
@@ -4129,7 +4082,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.86 - OPPOSITE SWAP SR PRE-CHECK")
+    logger.info("SMT Daemon V3.2.87 - REMOVE STALE CONF COMPARISON")
     logger.info("=" * 60)
     # --- Tier table ---
     logger.info("TIER CONFIG:")
@@ -4142,11 +4095,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.87: REMOVE STALE CONF COMPARISON. Old 'existing conf > new conf = hold' blocked flips when market reversed. Swap gates (age/TP proximity/range/SR pre-check) are the real guards now.")
     logger.info("  V3.2.86: OPPOSITE SWAP SR PRE-CHECK. Chart SR pre-checked before closing existing position for opposite swap. If replacement has no valid TP, keep existing position (prevents close-for-nothing disaster).")
     logger.info("  V3.2.85: PNL LEVERAGE FIX + PER-CYCLE FLOW SEED. (1) PnL was margin not notional (missing ×20) — broke BE-SL detection, display, AI logs. (2) FLOW seed refresh every signal cycle (positions + RL), not just daemon startup.")
     logger.info("  V3.2.84: THESIS EXIT SAME-DIRECTION FIX + BLACKLIST EXEMPT. (1) Judge LONG 89%% + already have LONG = thesis CONFIRMED, not degraded. (2) Zero-cooldown exits (thesis/velocity/flow_contra) exempt from 2h loss blacklist.")
     logger.info("  V3.2.83: FLOW SEED FROM RL DATA — 3-tier seed: positions → RL data → signal_history.")
-    logger.info("  V3.2.82: FLOW SEED FROM POSITIONS — Active positions as primary seed source.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
