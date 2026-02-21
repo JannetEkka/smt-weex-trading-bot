@@ -1996,7 +1996,7 @@ def monitor_positions():
                                 pnl_pct = ((current_price - entry_price) / entry_price) * 100
                             else:
                                 pnl_pct = ((entry_price - current_price) / entry_price) * 100
-                            actual_pnl = position_usdt * (pnl_pct / 100)
+                            actual_pnl = position_usdt * 20 * (pnl_pct / 100)  # V3.2.85: notional PnL (margin × leverage)
                         if position_usdt > 0:
                             _rt_fee = position_usdt * 20 * TAKER_FEE_RATE * 2  # both sides
                             _net_pnl = actual_pnl - _rt_fee
@@ -3307,7 +3307,7 @@ def quick_cleanup_check():
                             pnl_pct = ((current_price - entry_price) / entry_price) * 100
                         else:
                             pnl_pct = ((entry_price - current_price) / entry_price) * 100
-                        pnl_usd = (pnl_pct / 100) * position_usdt
+                        pnl_usd = (pnl_pct / 100) * position_usdt * 20  # V3.2.85: notional PnL (margin × leverage)
                         hit_tp = pnl_usd > 0
                     except:
                         pass
@@ -4049,11 +4049,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.85: PNL LEVERAGE FIX. PnL calculation was using margin (position_usdt) instead of notional (margin × 20). Broke breakeven SL detection (always classified as BE-SL), display, and AI logs. Two lines fixed: monitor_positions + sync/cleanup.")
     logger.info("  V3.2.84: THESIS EXIT SAME-DIRECTION FIX + BLACKLIST EXEMPT. (1) Judge LONG 89%% + already have LONG = thesis CONFIRMED, not degraded. (2) Zero-cooldown exits (thesis/velocity/flow_contra) exempt from 2h loss blacklist.")
     logger.info("  V3.2.83: FLOW SEED FROM RL DATA — 3-tier seed: positions → RL data → signal_history.")
     logger.info("  V3.2.82: FLOW SEED FROM POSITIONS — Active positions as primary seed source.")
     logger.info("  V3.2.81: TAKER VOLUME FLOOR + FLOW STABILITY — Minority < 3%% = noise. Fresh flips need 2 cycles.")
-    logger.info("  V3.2.80: EVENTS TO SENTIMENT — Macro event scanner results fed to SENTIMENT persona.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
