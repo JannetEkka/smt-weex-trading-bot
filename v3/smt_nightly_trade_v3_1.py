@@ -5584,8 +5584,9 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
                                 headers=weex_headers("POST", cancel_endpoint, body),
                                 data=body, timeout=15)
                     _crj = _cr.json()
-                    _ccode = _crj.get("code", "?")
-                    print(f"  [CANCEL] {_pair_tag}: regular order_id={oid} cancel response: code={_ccode}", flush=True)
+                    _cok = _crj.get("result", _crj.get("code") == "00000")
+                    _cerr = _crj.get("err_msg") or _crj.get("msg") or ""
+                    print(f"  [CANCEL] {_pair_tag}: regular order_id={oid} → {'OK' if _cok else f'FAIL: {_cerr}'} (raw={_crj})", flush=True)
                 except Exception as _ce:
                     print(f"  [CANCEL] {_pair_tag}: regular order_id={oid} cancel FAILED: {_ce}", flush=True)
                 result["cancelled"].append(oid)
@@ -5618,8 +5619,9 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
                                 headers=weex_headers("POST", cancel_endpoint, body),
                                 data=body, timeout=10)
                     _crj = _cr.json()
-                    _ccode = _crj.get("code", "?")
-                    print(f"  [CANCEL] {_pair_tag}: plan order_id={oid} cancel response: code={_ccode}", flush=True)
+                    _cok = _crj.get("result", _crj.get("code") == "00000")
+                    _cerr = _crj.get("err_msg") or _crj.get("msg") or ""
+                    print(f"  [CANCEL] {_pair_tag}: plan order_id={oid} → {'OK' if _cok else f'FAIL: {_cerr}'} (raw={_crj})", flush=True)
                 except Exception as _ce:
                     print(f"  [CANCEL] {_pair_tag}: plan order_id={oid} cancel FAILED: {_ce}", flush=True)
                 result["cancelled"].append(f"plan_{oid}")
