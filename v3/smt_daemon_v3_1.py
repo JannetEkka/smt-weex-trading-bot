@@ -2125,6 +2125,36 @@ def monitor_positions():
                             should_exit = True
                             exit_reason = f"velocity_exit ({_age_min:.0f}m open, peak={peak_pnl_pct:.2f}% never reached {VELOCITY_MIN_PEAK_PCT:.2f}%, T{tier} limit={_vel_limit}m)"
 
+                # V3.2.74: FLOW CONTRA EXIT — close underwater positions when FLOW shows extreme
+                # opposite pressure. Trade thesis is invalidated by real-time orderbook data.
+                # Uses same age gate as velocity exit (T1=75m, T2=60m, T3=50m) — trade had its chance.
+                # Only fires when: (1) pnl < 0 (underwater), (2) no BE-SL placed,
+                # (3) FLOW taker ratio is extreme opposite (< 0.15 for LONG = extreme selling,
+                #     > 7.0 for SHORT = extreme buying).
+                # Zero cooldown — thesis dead, free the slot.
+                if not should_exit and not trade.get("sl_moved_to_breakeven", False):
+                    _fc_age_min = hours_open * 60
+                    _fc_vel_limit = VELOCITY_EXIT_MINUTES.get(tier, 60)
+                    if _fc_age_min >= _fc_vel_limit and pnl_pct < 0:
+                        _fc_side = trade.get("side", "LONG")
+                        try:
+                            _fc_url = f"{WEEX_BASE_URL}/capi/v2/market/trades?symbol={real_symbol}&limit=100"
+                            _fc_r = requests.get(_fc_url, timeout=8)
+                            _fc_data = _fc_r.json()
+                            if isinstance(_fc_data, list) and len(_fc_data) > 0:
+                                _fc_buy = sum(float(t.get("size", 0)) for t in _fc_data if not t.get("isBuyerMaker", True))
+                                _fc_sell = sum(float(t.get("size", 0)) for t in _fc_data if t.get("isBuyerMaker", False))
+                                _fc_ratio = _fc_buy / _fc_sell if _fc_sell > 0 else 2.0
+                                # LONG + extreme selling (ratio < 0.15) = thesis dead
+                                # SHORT + extreme buying (ratio > 7.0) = thesis dead
+                                if (_fc_side == "LONG" and _fc_ratio < 0.15) or \
+                                   (_fc_side == "SHORT" and _fc_ratio > 7.0):
+                                    should_exit = True
+                                    exit_reason = f"flow_contra_exit ({_fc_side}, taker_ratio={_fc_ratio:.2f}, pnl={pnl_pct:.2f}%, age={_fc_age_min:.0f}m, T{tier} limit={_fc_vel_limit}m)"
+                                    logger.info(f"  [FLOW-CONTRA] {symbol}: {exit_reason}")
+                        except Exception as _fc_err:
+                            logger.debug(f"  [FLOW-CONTRA] {symbol}: check failed: {_fc_err}")
+
                 # V3.2.68: 8-EMA SNAP-BACK EXIT — mean-reversion exit for dip-bounce trades.
                 # The natural dip-bounce exit is when price snaps back to the short-term mean.
                 # 8-period EMA on 5m candles = 40 min of data = matches the dip-bounce timeframe.
@@ -3856,72 +3886,8 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.73 - DIP RECOVERY + FLOW SEED + CONF DECAY + VEL PRE-SWEEP + RANGE WIDEN")
+    logger.info("SMT Daemon V3.2.74 - FLOW CONTRA EXIT + RANGE REVERT + BANNER CLEANUP")
     logger.info("=" * 60)
-    # --- Trading pairs & slots ---
-    logger.info("PAIRS & SLOTS:")
-    logger.info("  Pairs: BTC, ETH, BNB, LTC, XRP, SOL, ADA (7)")
-    logger.info("  Max slots: 2 (V3.2.59 — diversification without cascade risk) | Leverage: 20x flat | Shorts: ALL pairs")
-    logger.info("  Sizing: 80-84%%=20%%, 85-89%%=35%%, 90%%+=50%% of sizing_base (SOL capped 30%%)")
-    logger.info("  Circuit breaker: 60min+ cooldown after SL/force stop | Breakeven SL at +0.4%%")
-    # --- Confidence & entry filters ---
-    logger.info("ENTRY FILTERS:")
-    logger.info("  MIN_CONFIDENCE: 85%% HARD FLOOR — no exceptions, no discounts, no overrides")
-    logger.info("  Chop filter: logging only (no penalties since V3.2.18)")
-    logger.info("  Consecutive loss block: 2 losses same direction in 24h = block re-entry")
-    logger.info("  Freshness filter: block entering after move already happened")
-    logger.info("  Regime veto: post-judge filter (not disabled, separate from regime exits)")
-    logger.info("  Margin guard: skip trade if available margin < $1000")
-    # --- TP/SL V3.2.41 ---
-    logger.info("TP/SL (V3.2.41 LARGER GAINS):")
-    logger.info("  MIN_VIABLE_TP_PCT: 0.40%% (was 0.20%% — filters micro-moves, pushes to 4H/48H structure)")
-    logger.info("  MAX_SL_PCT: 1.50%% ceiling (was no ceiling — 4H anchors can be wide at 20x)")
-    logger.info("  PAIR_TP_CEILING: BTC=0.60%%, ETH=0.50%%, BNB=0.50%%, LTC=0.70%%, XRP=0.75%%, SOL=0.75%%, ADA=0.80%% (V3.2.67 tight) + 90%% haircut (V3.2.68)")
-    logger.info("  TP anchor: 4H high/low tried first, then 48H walk (was 2H anchor → 48H walk)")
-    logger.info("  SOL sizing: 30%% of sizing_base max (was 50%% — high beta risk control)")
-    logger.info("  TP priority: Gemini tp_price (4H structure) > 4H anchor > 48H SR walk")
-    logger.info("  TP floor: 0.3%% (MIN_TP_PCT) | Fallback TP: 0.5%% all tiers (COMPETITION_FALLBACK_TP)")
-    logger.info("  Extreme fear TP cap: 0.5%% when F&G < 20 (both LONG and SHORT)")
-    logger.info("  XRP TP cap: 0.70%% (only when no Gemini structural override)")
-    logger.info("  SL method: lowest wick in 12H (1H grid) + last 3 4H candles | SL floor: 1.0%%")
-    logger.info("  TP method: max high of last 2 complete 1H candles (LONG) / min low (SHORT)")
-    logger.info("  FLOW walls in Judge prompt: ask/bid walls from 200-level order book (context, not hard override)")
-    logger.info("  Gemini Judge: sees chart structure (1D+4H) + 12H price action candles (T1=1h, T2=30m, T3=15m) + FLOW walls + chop → returns tp_price")
-    # --- Position sizing ---
-    logger.info("POSITION SIZING (V3.2.46 confidence-scaled):")
-    logger.info("  sizing_base = max(min(available, balance * 2.5), 1000)")
-    logger.info("  80-84%%: sizing_base * 0.20 | 85-89%%: sizing_base * 0.35 | 90%%+: sizing_base * 0.50")
-    logger.info("  SOL cap: 30%% of sizing_base (high beta) | Single slot = full account buffer")
-    # --- Opposite swap ---
-    logger.info("OPPOSITE SWAP (V3.1.100):")
-    logger.info("  Block flip if position < 20min old or >= 30%% toward TP")
-    logger.info("  Blocked signal queued → auto-executes after old position closes")
-    logger.info("  Deferred flip expires after 30min")
-    # --- V3.2.48: Macro defense ---
-    logger.info("MACRO DEFENSE (V3.2.48):")
-    logger.info("  Blackout windows: PCE 2026-02-20 13:15-14:00 UTC (skip entire signal cycle)")
-    logger.info("  Weekend mode: Sat/Sun → BTC,ETH,SOL only (altcoin books too thin)")
-    logger.info("  Holiday mode: Emperor's Birthday 2026-02-23 < 12:00 UTC → same restriction")
-    logger.info("  Funding hold-cost: per-pair funding rate × 20x = margin drag in Judge prompt")
-    logger.info("  Macro events: date-sensitive context (PCE, ZRO unlock, holiday) fed to Judge")
-    # --- Timing ---
-    logger.info("TIMING:")
-    logger.info("  Signal check: 10min | Position monitor: 2min | Orphan sweep: 30s | Health: 60s")
-    logger.info("  Global trade cooldown: 10min between trades")
-    logger.info("  Gemini: 90s timeout + 8s rate limit between calls")
-    # --- Persona weights ---
-    logger.info("PERSONA CONFIG:")
-    logger.info("  WHALE: 1.0 | Etherscan on-chain + Cryptoracle (always combined for BTC/ETH)")
-    logger.info("  SENTIMENT: 1.0 | Gemini 2.5 Flash w/ Search Grounding")
-    logger.info("  FLOW: 1.0 | Taker ratio beats depth | 180-flip at dip/peak = +15%% boost (V3.2.68)")
-    logger.info("  TECHNICAL: 1.0 (halved when F&G<30) | 5m RSI(14) + VWAP + 30m momentum + volume spike (2x) + entry velocity (0.20%%/15m) (V3.2.68)")
-    logger.info("  JUDGE: Gemini aggregator | Receives chart structure (1D+4H) + 12H price action candles for entry timing")
-    # --- Disabled features ---
-    logger.info("DISABLED:")
-    logger.info("  Gemini portfolio review (V3.2.17) | Stale auto-close (V3.2.17)")
-    logger.info("  Regime-based auto-exits (V3.2.17) — SL handles exits")
-    logger.info("  Chop score penalties (V3.2.18) — logging only")
-    logger.info("  Fee tracking: 0.08%%/side taker (V3.2.50), logged per trade + session cumulative in HEALTH")
     # --- Tier table ---
     logger.info("TIER CONFIG:")
     for tier, config in TIER_CONFIG.items():
@@ -3933,43 +3899,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.73: DIP RECOVERY + FLOW SEED + CONF DECAY + VEL PRE-SWEEP + RANGE WIDEN — (1) TECHNICAL dip recovery signal: V-shape detection (range<50%% + 30m bounce + 1h still negative). (2) FLOW seed: _prev_flow_direction seeded from signal_history on startup (cycle 1 flips work). (3) Conf decay: stale confidence decays -5%%/30min past 20min (floor 75%%) for opposite flip comparison. (4) Velocity exit in pre-cycle sweep: frees slots before signal analysis. (5) 2H range override widened 30/70→45/55.")
+    logger.info("  V3.2.74: FLOW CONTRA + CATALYST DRIVE + CONTINUATION HOLD — (1) FLOW contra exit: close underwater positions when FLOW extreme opposite (taker <0.15 LONG / >7.0 SHORT), age>=vel tier limit, no BE-SL. (2) Judge CATALYST DRIVE rule: SENTIMENT named catalyst + FLOW >=60%% same dir = 85%%+ (news moves markets before indicators). (3) Judge CONTINUATION HOLD: re-evaluate thesis honestly for open positions, don't inflate. (4) Range gate 2H override reverted 45/55→30/70. (5) FLOW flip log fix. (6) Banner cleanup.")
+    logger.info("  V3.2.73: DIP RECOVERY + FLOW SEED + CONF DECAY + VEL PRE-SWEEP — (1) TECHNICAL dip recovery signal: V-shape detection (range<50%% + 30m bounce + 1h still negative). (2) FLOW seed: _prev_flow_direction seeded from signal_history on startup (cycle 1 flips work). (3) Conf decay: stale confidence decays -5%%/30min past 20min (floor 75%%) for opposite flip comparison. (4) Velocity exit in pre-cycle sweep: frees slots before signal analysis.")
     logger.info("  V3.2.72: FLOW GATE + EMA FIX — (1) FLOW >= 60%% gate: blocks trades where FLOW doesn't confirm direction. (2) EMA snapback giveback: requires 50%% peak giveback before firing.")
     logger.info("  V3.2.71: EXTRA SLOT DISABLED — 90%%+ CONFIDENCE_EXTRA_SLOT bypass removed. 2-slot hard cap absolute.")
     logger.info("  V3.2.70: R:R UNLOCK — MIN_VIABLE 0.30%%→0.50%% (walk to 4H), R:R 0.5→0.33 (unblocks BTC/ETH/BNB/LTC at 1.5%% SL).")
-    logger.info("  V3.2.69: RANGE GATE 2H OVERRIDE — 12H range gate (55/45) now bypassed when TECHNICAL's 2H range confirms genuine dip (<30%%) or peak (>70%%).")
-    logger.info("  V3.2.67: VELOCITY EXIT TIERED (T1=75m, T2=60m, T3=50m, was flat 40m — bounces need 60-90min). Peak threshold 0.15%%→0.10%%. ADX gate softened (5, not 10). Weekend restriction DISABLED (all 7 pairs). Signal persistence tracks ADX-gated signals.")
-    logger.info("  V3.2.63: 1D candle granularity FIX (1Dutc→1d — was rejected by WEEX API, breaking ALL chart context). 4H fallback when 1D unavailable. datetime.utcfromtimestamp→fromtimestamp(tz=utc). Judge now gets daily+4H S/R levels again.")
-    logger.info("  V3.2.62: Chart context FIX — 12H price action fetch now INDEPENDENT of 1D/4H (was silently failing when 1D/4H returned errors). 30m→15m fallback for T2 if WEEX rejects 30m granularity. Fixed datetime.datetime bug (was datetime.utcfromtimestamp). Judge TP ceiling prompt now reads PAIR_TP_CEILING dynamically.")
-    logger.info("  V3.2.61: 12H price action candles fed to Judge (T1=1h/12, T2=30m/24, T3=15m/48 — entry timing + range position). TP ceilings raised (BTC/ETH=1.0%%, SOL=1.5%%, others=0.80%%), R:R guard restored (min 0.5:1), Gemini TP override blocked when chart SR returns tp_not_found.")
-    logger.info("  V3.2.60: ATR-safety respects MAX_SL_PCT ceiling (was overriding to 1.84%%), breakeven SL classified correctly.")
-    logger.info("  V3.2.59: Gemini event detection — detect_macro_events() uses Gemini Search to scan upcoming macro/crypto events (30min cache). Dynamic blackout for HIGH-impact events within 15min. Replaces hardcoded _macro_events dict in Judge prompt. Also: ADX<20 WAIT removed, 2-slot mode, TP fee-floor guard.")
-    logger.info("  V3.2.58: Altcoin execution priority — sort key now (confidence desc, tier desc) so T3>T2>T1 at equal confidence. Prevents T1 BTC/ETH crowding out altcoins when same 85%% threshold hit in same cycle.")
-    logger.info("  V3.2.57: BlitzMode final 72h — MIN_CONFIDENCE 80%%→85%%; velocity_exit (40min/0.15%% peak, zero cooldown); GLOBAL_TRADE_COOLDOWN 900→600s; sizing floor $1000→$500; Judge BLITZ MODE prompt")
-    logger.info("  V3.2.56: Macro blackout exit — monitor_positions() closes unprofitable (pnl<0) positions when blackout window activates; profitable positions ride with SL; AI log sent with order_id. Funding rate direction-aware: Judge now told paying vs receiving side based on persona consensus (fixes bonus-labeled-as-drag for LONG on negative funding)")
-    logger.info("  V3.2.55: _fetch_plan_order_ids() retry loop — 2s initial sleep + up to 2 retries (2s apart) on HTTP 404 or empty plan-orders response; eliminates stored-ID=None fallback on WEEX registration lag")
-    logger.info("  V3.2.54: Tiered peak-fade — T1(BTC/ETH): MIN=0.30%%,TRIG=0.15%%; T2/T3(altcoins): MIN=0.45%%,TRIG=0.25%%; altcoin wick noise needs 2x breathing room vs majors; exit_reason peak_fade_T{n} includes tier+thresholds")
-    logger.info("  V3.2.53: Peak-fade soft stop — PEAK_FADE_MIN_PEAK=0.20%%, PEAK_FADE_TRIGGER=0.12%%; fires when peak>=0.20%% and current<=peak-0.12%%; 'peak_fade' reason = zero cooldown; only when BE-SL not yet placed")
-    logger.info("  V3.2.52: Pre-cycle exit sweep — max_hold/force_exit/early_exit checked at START of check_trading_signals(); positions closed with full AI log BEFORE 7-pair Gemini analysis (fixes 6-min blind spot)")
-    logger.info("  V3.2.51: Emergency flip — EMERGENCY_FLIP_CONFIDENCE=0.90; age gate bypassed at 90%+ opposite confidence; TP proximity gate preserved; 'EMERGENCY FLIP' tag in logs + AI log")
-    logger.info("  V3.2.50: TAKER_FEE_RATE corrected 0.0006→0.0008 (0.08%/side, 3.2%% margin RT); _fetch_plan_order_ids() stores tp/sl plan IDs at open; daemon uses stored IDs for AI log upload (no sleep/guesswork)")
-    logger.info("  V3.2.49: Final stretch — T1: 3h/1h, T2: 2h/45m, T3: 1.5h/30m (was 24/12/8h); sync display reads live TIER_CONFIG not stale trade state")
-    logger.info("  V3.2.48: Macro blackout (PCE 13:15-14:00 UTC), weekend mode (BTC/ETH/SOL only), Emperor's Birthday thin-liq, funding hold-cost in Judge, ZRO unlock context")
-    logger.info("  V3.2.45: Regex JSON parser for SENTIMENT+JUDGE (re.search(r'\\{.*\\}', re.DOTALL) — immune to grounding citation injection [1][2]); dynamic date in SENTIMENT search; no-citation prompt directive")
-    logger.info("  V3.2.44: Full Gemini response visibility — removed [:200] on SENTIMENT reasoning, [:600] on JUDGE reasoning print, [:200] on Judge prompt persona summary; market_context no longer capped")
-    logger.info("  V3.2.42: Judge progress prints ([JUDGE] Calling Gemini / responded in Xs); sync_tracker AI log now sends order_id via get_recent_close_order_id()")
-    logger.info("  V3.2.38: 4-slot hard cap restored (can_open_new checks available_slots > 0)")
-    logger.info("  V3.2.37: ANTI-WAIT removed — Gemini Judge WAIT = WAIT; no persona-consensus or keyword override")
-    logger.info("  V3.2.36: MIN_VIABLE_TP_PCT=0.20%% — skip SR levels < 0.20%% from entry; entry at resistance = tp_not_found = discard")
-    logger.info("  V3.2.35: Opposite signal = close existing position first, then open new side (was SL-tighten + dual-open)")
-    logger.info("  V3.2.34: Judge receives WHALE dual-source data (Etherscan+Cryptoracle) separately for BTC/ETH")
-    logger.info("  V3.2.33: SHORT TP back to min(lows_1h[1:3]) (deepest wick = real support)")
-    logger.info("  V3.2.31: 48H SR lookback (was 12H); 0.5%% TP cap universal ceiling on ALL trades")
-    logger.info("  V3.2.29: Walk SR list before discard; 0.5%% TP cap on ALL trades (not just fear); no-SR = no trade (no fallback)")
-    logger.info("  V3.2.28: Bad-TP trades discarded (entry at resistance); sizing cache reset after each trade for accurate available")
-    logger.info("  V3.2.25: No slot cap (margin guard limits); dust+orphan sweep every cycle; opp-side resolve at cycle end; sizing from available margin")
-    logger.info("  V3.2.24: MIN_TP_PCT=0.3%% floor removed — chart SR is the TP, no artificial minimum")
-    logger.info("  V3.2.18: Chop penalties removed | Shorts ALL pairs | Trust 80%% floor + 0.5%% TP")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup

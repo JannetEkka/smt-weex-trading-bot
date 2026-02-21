@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.72** — all production code is in `v3/`.
+**Current version: V3.2.74** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -193,12 +193,18 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 # PEAK_FADE_TRIGGER_PCT = {1: 0.15, 2: 0.25, 3: 0.25}   # Drop from peak to trigger soft exit
 #   T1 (BTC/ETH): tighter (majors have less wick noise). T2/T3 (altcoins): 2× breathing room.
 #   exit_reason "peak_fade_T{n}" → zero cooldown (profit was taken).
-# Velocity exit (V3.2.57): exits flat/stale trades that never moved
-# VELOCITY_EXIT_MINUTES = 40     # Kill trade if no movement after 40 min
-# VELOCITY_MIN_PEAK_PCT = 0.15   # "No movement" = peak never reached 0.15%
+# Velocity exit (V3.2.57/V3.2.67): exits flat/stale trades that never moved
+# VELOCITY_EXIT_MINUTES = {1: 75, 2: 60, 3: 50}  # V3.2.67: tiered per-tier (was flat 40min)
+# VELOCITY_MIN_PEAK_PCT = 0.10   # V3.2.67: lowered from 0.15%
 #   Distinct from early_exit (needs actual loss) and peak_fade (needs peak then reversal).
 #   Covers "trade opened but price never moved in our direction" — thesis is dead.
 #   exit_reason "velocity_exit" → zero cooldown (slot freed immediately).
+#
+# FLOW contra exit (V3.2.74): exits underwater positions when FLOW shows extreme opposite
+# Taker ratio < 0.15 for LONG (extreme selling) or > 7.0 for SHORT (extreme buying)
+# Age gate: same as velocity exit per tier (T1=75m, T2=60m, T3=50m)
+# Only fires when: pnl < 0, no BE-SL placed. Trade thesis invalidated by real-time orderbook.
+# exit_reason "flow_contra_exit" → zero cooldown (thesis dead, free slot)
 
 # 8-EMA snap-back exit (V3.2.68): mean-reversion exit for dip-bounce trades
 # Computes 8-period EMA on 5m candles in monitor_positions()
@@ -323,7 +329,7 @@ Key endpoints:
 2. **SENTIMENT** — Gemini 2.5 Flash with Search Grounding. Macro news analyst role (V3.2.41): catalysts, macro_bias, volatility_risk, volatility_event, pair_specific_news — qualitative only, no price targets. V3.2.45: dynamic date injection in search queries + regex JSON parser immune to grounding citation injection.
 3. **FLOW** — WEEX order book + trades. Taker ratios, bid/ask depth, funding rates. V3.2.20: order book wall detection (depth limit=200) — nearest significant ask/bid wall passed to Judge as context. V3.2.68: FLOW flip (SHORT→LONG or LONG→SHORT) at dip/peak territory = +15% confidence boost (was 50% discount). Mid-range flips = neutral.
 4. **TECHNICAL** — V3.2.68: 5m RSI(14) + VWAP + 30m momentum + 2H range position + volume spike (2x avg) + entry velocity (0.20%/15m). Was: RSI(14), SMA 20/50 on 1H candles (14-hour lookback, blind to 30-60 min dips).
-5. **JUDGE** — Aggregates all votes with regime-aware weights. Final LONG/SHORT/WAIT. V3.2.16: receives Gemini chart context (1D + 4H structural levels). V3.2.17: receives signal cycle memory + live chop microstructure. V3.2.20: receives FLOW order book wall prices as additional TP context. V3.2.37: ANTI-WAIT removed — if Judge returns WAIT, it is WAIT with no overrides. V3.2.45: regex JSON extractor immune to grounding citation markers. V3.2.48: receives funding hold-cost and macro event context. V3.2.56: funding direction-aware — told "paying" or "receiving" based on position side vs rate sign (fixes bonus mislabeled as drag for LONGs on negative funding). V3.2.68: DIP/PEAK DETECTION PROTOCOL — FLOW flip is the dip signal, 2-persona dip rule (FLOW+TECHNICAL sufficient for 85% when WHALE/SENT neutral), explicit flip visibility in signal_history.
+5. **JUDGE** — Aggregates all votes with regime-aware weights. Final LONG/SHORT/WAIT. V3.2.16: receives Gemini chart context (1D + 4H structural levels). V3.2.17: receives signal cycle memory + live chop microstructure. V3.2.20: receives FLOW order book wall prices as additional TP context. V3.2.37: ANTI-WAIT removed — if Judge returns WAIT, it is WAIT with no overrides. V3.2.45: regex JSON extractor immune to grounding citation markers. V3.2.48: receives funding hold-cost and macro event context. V3.2.56: funding direction-aware — told "paying" or "receiving" based on position side vs rate sign (fixes bonus mislabeled as drag for LONGs on negative funding). V3.2.68: DIP/PEAK DETECTION PROTOCOL — FLOW flip is the dip signal, 2-persona dip rule (FLOW+TECHNICAL sufficient for 85% when WHALE/SENT neutral), explicit flip visibility in signal_history. V3.2.74: CATALYST DRIVE rule (SENTIMENT named catalyst + FLOW >=60% = 85%+, bypasses 3-persona requirement) + CONTINUATION HOLD thesis check (re-evaluate honestly for open positions, return WAIT/opposite if signals degraded).
 
 Post-judge filters (V3.2.18): Freshness filter, Regime veto, Consecutive loss block.
 Chop filter kept for **logging only** — no score penalties applied as of V3.2.18.
@@ -428,162 +434,50 @@ python3 v3/cryptoracle_client.py
 30. **Range gate 2H override (V3.2.69)** — The 12H range gate (55/45) is bypassed when TECHNICAL's 2H range_pos < 30% (LONG) or > 70% (SHORT). This is critical for dip-bounce entries in uptrends where the 12H range says "upper half" but a genuine 1-2H dip just happened. Do not remove the override — it fixes the most common trade-blocking scenario observed in V3.2.68 (5 trades blocked in 2 cycles). The 30%/70% thresholds are intentionally conservative (not 50/50) to ensure only genuine dips/peaks override.
 31. **FLOW confidence gate (V3.2.72)** — `MIN_FLOW_CONFIDENCE_GATE = 0.60`. FLOW must be >= 60% in the same direction as the trade signal before execution. Without this, Judge can reach 85-90% on stale WHALE (hours-old on-chain) + narrative SENTIMENT (news headlines) alone, with FLOW at 46% (zero orderbook confirmation). FLOW is the only persona with real-time data. Do not lower below 60% — that's barely above coin-flip and means the orderbook shows essentially nothing.
 32. **EMA snapback giveback (V3.2.72)** — `EMA_SNAPBACK_GIVEBACK_PCT = 0.50`. EMA snap-back exit requires 50% giveback from peak before firing. In trending moves, the 8-EMA on 5m candles converges toward price — any tiny pause triggers a false "cross" even though the trade is still moving in the right direction. LTC SHORT was at +0.24% and actively climbing when the EMA caught up to within $0.006, killing a trade headed for 0.69% TP. The giveback ensures an actual reversal, not EMA convergence. Do not remove — without it, every steady trend gets killed at 0.20-0.39% (the kill zone between snapback arm and BE-SL placement).
+33. **FLOW contra exit (V3.2.74)** — Closes underwater positions when FLOW taker ratio shows extreme opposite pressure (< 0.15 for LONG, > 7.0 for SHORT). Uses same age gate as velocity exit per tier (T1=75m, T2=60m, T3=50m). Only fires when pnl < 0 and no BE-SL placed. Fixes scenario where ADA LONG sat at -0.18% with FLOW taker ratio 0.11 (extreme selling) and no exit mechanism fired. Do not lower taker thresholds (0.15/7.0 are already extreme) or remove age gate (trade needs time to develop).
+34. **Catalyst drive rule (V3.2.74)** — Judge prompt: SENTIMENT named catalyst (ETF inflow, partnership, protocol upgrade, institutional adoption) + FLOW >= 60% same direction = 85%+ confidence. Bypasses 3-persona requirement because news moves markets before WHALE/TECHNICAL react. Previously ETH with BNP Paribas catalyst + FLOW 51% would WAIT because only 2 of 4 personas agreed. Do not raise FLOW threshold above 60% — catalysts create flow, so FLOW confirmation may be building (60%) rather than fully established (70%+).
+35. **Continuation hold thesis check (V3.2.74)** — Judge prompt: when re-evaluating a pair with an open position in the same direction, Judge explicitly told to re-evaluate the thesis honestly. If signals degraded (FLOW flipped, TECHNICAL reversed), return WAIT/opposite. Do not inflate confidence just because a position is already open. The daemon uses the Judge's re-evaluation to inform exit decisions.
+36. **Range gate 2H override thresholds (V3.2.74 revert)** — V3.2.73 widened thresholds from 30/70 to 45/55, which effectively disabled the 12H range gate (any sub-midpoint reading triggered override). V3.2.74 reverted to 30/70. Do not widen past 30/70 — the thresholds are intentionally conservative to ensure only genuine dips/peaks override the 12H gate.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.72. Next change should be V3.2.73.
+Current: V3.2.74. Next change should be V3.2.75.
 
-**Recent version history:**
-- V3.2.72: (**CURRENT**) FLOW GATE + EMA SNAPBACK FIX — two quality-of-signal improvements.
-  (1) FLOW CONFIDENCE GATE: `MIN_FLOW_CONFIDENCE_GATE = 0.60`. FLOW persona must be >= 60% in
-  the same direction as the trade signal. Blocks trades built on stale/narrative data alone
-  (e.g., ETH LONG 90% with FLOW at 46% — WHALE+SENTIMENT narrative produced high confidence
-  with zero real-time orderbook confirmation). FLOW is the only persona with live orderbook data.
-  (2) EMA SNAPBACK GIVEBACK: `EMA_SNAPBACK_GIVEBACK_PCT = 0.50`. EMA snap-back exit now requires
-  the trade to have given back >= 50% of peak profit before firing. Fixes: LTC SHORT at +0.24%
-  was actively climbing (price declining) when the 8-EMA converged to within $0.006 of price,
-  triggering a false "snap-back" on noise. The trade was trending, not reversing — the EMA was
-  simply catching up in a steady move. TP was at 0.69% — left 0.45% on the table.
+**Recent version history (last 5):**
+- V3.2.74: (**CURRENT**) FLOW CONTRA + CATALYST DRIVE + CONTINUATION HOLD.
+  (1) FLOW contra exit: `monitor_positions()` closes underwater positions when FLOW taker ratio
+  shows extreme opposite (< 0.15 for LONG, > 7.0 for SHORT). Same age gate as velocity exit
+  per tier (T1=75m, T2=60m, T3=50m). Fixes ADA LONG at -0.18% with taker ratio 0.11 sitting
+  with no exit mechanism firing. Zero cooldown.
+  (2) Judge CATALYST DRIVE rule: SENTIMENT named catalyst + FLOW >= 60% same direction = 85%+.
+  Bypasses 3-persona requirement — news moves markets before WHALE/TECHNICAL react.
+  (3) Judge CONTINUATION HOLD: when re-evaluating a pair with an open position, Judge told to
+  re-evaluate thesis honestly. If signals degraded, return WAIT/opposite. Don't inflate.
+  (4) Range gate 2H override reverted 45/55→30/70 (V3.2.73 widened too far, neutering the gate).
+  (5) FLOW flip log label fixed — shows actual position context instead of always "mid-range".
+  (6) Startup banner stripped to tier config + last 5 versions.
+  `PIPELINE_VERSION = "SMT-v3.2.74-FlowContra-CatalystDrive-ContinuationHold-RangeRevert"`.
+- V3.2.73: DIP RECOVERY + FLOW SEED + CONF DECAY + VEL PRE-SWEEP.
+  (1) TECHNICAL dip recovery: V-shape detection (range<50% + 30m bounce + 1h still negative).
+  (2) FLOW seed: `_prev_flow_direction` seeded from signal_history on startup (cycle 1 flips work).
+  (3) Conf decay: stale confidence decays -5%/30min past 20min (floor 75%) for opposite flip comparison.
+  (4) Velocity exit in pre-cycle sweep: frees slots before signal analysis.
+  `PIPELINE_VERSION = "SMT-v3.2.73-DipRecovery-FlowSeed-ConfDecay-VelPreSweep"`.
+- V3.2.72: FLOW GATE + EMA SNAPBACK FIX.
+  (1) FLOW CONFIDENCE GATE: `MIN_FLOW_CONFIDENCE_GATE = 0.60`. FLOW must be >= 60% in same
+  direction as trade signal. Blocks trades on stale WHALE + narrative SENTIMENT alone.
+  (2) EMA SNAPBACK GIVEBACK: requires 50% peak giveback before firing. Fixes trending trades
+  killed by EMA convergence (LTC SHORT at +0.24% killed when EMA caught up to within $0.006).
   `PIPELINE_VERSION = "SMT-v3.2.72-FlowGate60-EMAGiveback50"`.
 - V3.2.71: EXTRA SLOT DISABLED — 90%+ `CONFIDENCE_EXTRA_SLOT` bypass removed.
-  2-slot hard cap is now absolute. The bypass was supposed to be disabled in V3.2.46 but
-  the code was never removed — only commented. At $2-3K equity, a 3rd slot leaves ~$580
-  margin buffer which is margin call territory on any adverse spike.
-  Proper 3rd slot will be added when equity reaches $5K+ (with correct sizing).
+  2-slot hard cap absolute. At $2-3K equity, a 3rd slot = margin call territory.
   `PIPELINE_VERSION = "SMT-v3.2.71-DisableExtraSlot-HardCap2"`.
-- V3.2.70: R:R UNLOCK — fixes TP ceiling vs R:R guard deadlock that blocked 4/7 pairs.
-  `MIN_VIABLE_TP_PCT` raised 0.30%→0.50%: forces TP walk past 2H micro-bounce levels (0.30-0.45%)
-  to the 4H structural anchor where real resistance lives (0.50-1.0%).
-  Previously the 2H anchor at ~0.37% passed MIN_VIABLE (0.30%), the walk stopped, but then
-  R:R guard killed it (0.37%/1.50% = 0.25:1 < 0.50). Now the walk skips to the 4H anchor.
-  `MIN_RR_RATIO` lowered 0.5→0.33: PAIR_TP_CEILING for BTC(0.60%), ETH(0.50%), BNB(0.50%),
-  LTC(0.70%) was structurally incompatible with R:R 0.5:1 at 1.5% SL.
-  At 0.33:1: break-even win rate = 82.3% (with 20x leverage + 0.16% round-trip fees).
-  The 85% confidence floor provides margin. Strategy exits via snap-back/peak-fade/BE-SL (not TP),
-  so classical R:R overstates the risk. The alternative was zero trades on 4/7 pairs.
+- V3.2.70: R:R UNLOCK — `MIN_VIABLE_TP_PCT` 0.30%→0.50% (walk to 4H structural anchor).
+  `MIN_RR_RATIO` 0.5→0.33 (unblocks BTC/ETH/BNB/LTC at 1.5% SL ceiling).
   `PIPELINE_VERSION = "SMT-v3.2.70-RRUnlock-MinViable50-RR33"`.
-- V3.2.69: RANGE GATE 2H OVERRIDE — 12H range gate (55/45) now bypassed when
-  TECHNICAL's 2H range confirms genuine dip (<30%) or peak (>70%).
-  `_technical_range_pos_cache`: new global cache storing TECHNICAL persona's 2H range_pos per symbol.
-  Populated in `TechnicalPersona.analyze()`, cleared with chart context cache (10min TTL).
-  Range gate logic: 12H gate still applies by default (55% LONG block, 45% SHORT block).
-  Override: if 2H range_pos < 30% for LONG or > 70% for SHORT, the 12H gate is bypassed.
-  Log tag: `[RANGE-GATE] 12H range X% would block LONG, but 2H range Y% confirms dip — OVERRIDE`
-  Fixes observed in V3.2.68: BNB 90% confidence (all 4 personas) blocked at 12H=77%/2H=11%.
-  SOL 85% blocked at 12H=57%/2H=7%. XRP 90% blocked at 12H=72%/2H=15%.
-  These were valid dip-bounce entries (short-term dips within uptrends) incorrectly blocked
-  because the 12H range captures the broader trend, not the 1-2 hour V-bounce setup.
-  `PIPELINE_VERSION = "SMT-v3.2.69-RangeGate2HOverride-DipInUptrend"`.
-- V3.2.68: DIP DETECTION OVERHAUL — complete rewrite of how the bot detects and enters dip-bounce patterns.
-  TECHNICAL persona: Rewritten from 1H RSI(14) (14-hour lookback, blind to dips) to 5m RSI(14) + VWAP + 30m momentum + 2H range position.
-  Volume spike detection: Current 3-candle avg volume > 2x baseline 12-candle avg = institutional move confirmation (+0.25 conf).
-  Entry velocity check: Price drop > 0.20% in 15 min = active dip, not slow grind (+0.35 conf to dominant direction).
-  FLOW flip boost: SHORT→LONG flip at dip territory (range < 45%) = +15% confidence boost (was 50% discount). Cap raised 0.85→0.95.
-  Range gate tightened: 70/30 → 55/45 (must be in dip/peak territory, not mid-range).
-  TP haircut 90%: All SR-based TPs target 90% of distance to level (price reverses before exact S/R).
-  Chart context pre-fetch: `get_chart_context()` called BEFORE persona analysis so range cache populated when FLOW flip checks.
-  Judge DIP/PEAK DETECTION PROTOCOL: FLOW flip IS the dip signal. 2-persona dip rule (FLOW+TECHNICAL sufficient for 85%).
-  Signal history flip tag: Judge sees "★ FLIPPED from SHORT → LONG (DIP/PEAK SIGNAL)" with prev_direction tracked.
-  8-EMA snap-back EXIT: Mean-reversion exit in daemon — when price crosses back through 8-period EMA on 5m candles (age>=10m, peak>=0.20%, pnl>0, no BE-SL).
-  `PIPELINE_VERSION = "SMT-v3.2.68-DipDetection-5mRSI-VolSpike-Velocity-EMAExit"`.
-- V3.2.67: VELOCITY EXIT TIERED (T1=75m, T2=60m, T3=50m). Peak threshold 0.15%→0.10%. ADX gate softened. Weekend restriction DISABLED. Signal persistence tracks ADX-gated signals.
-- V3.2.64: Shorts re-enabled + bidirectional Judge + plan_orders endpoint fix.
-  Judge prompt rewritten: removed LONG-only bias language, added CONTINUATION SHORT strategy for extreme fear.
-  Shorts now evaluated equally with LONGs based on FLOW/SENTIMENT/WHALE confluence.
-  `_fetch_plan_order_ids()` + `cancel_all_orders_for_symbol()`: endpoint fixed `/plan_orders` → `/currentPlan` (was returning HTTP 404).
-  Orphan cleanup now works for plan/trigger orders (was silently failing due to wrong endpoint).
-  MAX_TOTAL_POSITIONS changed from 1 → 2 (V3.2.59): diversification without cascading risk.
-  `PIPELINE_VERSION = "SMT-v3.2.64-ShortsReEnabled-BidirectionalJudge"`.
-- V3.2.58: Altcoin execution priority — sort key changed to `(confidence desc, tier desc)` so T3 > T2 > T1 at equal confidence.
-  Fixes: BTC/ETH crowding out altcoins at same 85% threshold. When multiple pairs hit the same confidence, altcoins now execute first.
-  Example: BTC SHORT 85% + XRP LONG 85% in same cycle → XRP wins the slot (T2 > T1). Higher confidence always wins regardless of tier.
-  `PIPELINE_VERSION = "SMT-v3.2.58-AltcoinPriority-TierTiebreak"`.
-- V3.2.57: BlitzMode final 72h — velocity exit + confidence 85% + cooldown reduction + Judge hold-time awareness. (superseded by V3.2.58)
-  `MIN_CONFIDENCE_TO_TRADE` 80%→85%: In 1-slot mode, 80-84% trades at 20% sizing block the slot from better 90%+ signals.
-  All trades now 35-50% of sizing_base (85-89%=35%, 90%+=50%). The 20% tier is eliminated.
-  `$1000 sizing floor` lowered to $500 — ensures meaningful position size during drawdowns while reducing artificial inflation.
-  `GLOBAL_TRADE_COOLDOWN` 900→600s (15→10min): +5-6 extra trade windows in final 72h.
-  `VELOCITY_EXIT`: New exit for "flat/stale" trades — if peak PnL < 0.15% after 40min, close immediately. Zero cooldown.
-  Distinct from early_exit (needs loss) and peak_fade (needs peak then reversal). Covers "thesis never even started."
-  Judge prompt: BLITZ MODE section (momentum priority, T3 bias, ADX<20=WAIT, RANGE/VWAP deprioritized).
-  Judge prompt: All "4-5H" planning horizon references replaced with actual TIER_CONFIG hold times (T1=3H, T2=2H, T3=1.5H).
-  Judge prompt: HOLD TIME LIMITS section added — daemon hard limits + velocity exit rules explicitly stated.
-  Judge prompt: Stale hardcoded price levels (BTC@$66,985, LTC@$52.50, SOL@$82-$85, XRP@$1.41-$1.51) replaced with "[Use current chart data]".
-  SENTIMENT prompt: "4-5H" window updated to "1-3H" to match actual hold times.
-  `PIPELINE_VERSION = "SMT-v3.2.57-BlitzMode-VelocityExit-Conf85"`.
-- V3.2.56: Macro blackout exit + funding rate direction fix.
-  `monitor_positions()` now closes UNPROFITABLE positions when a macro blackout window activates mid-position.
-  Profitable positions ride with their existing SL — no forced exit if in profit.
-  Full AI log sent with order_id on blackout-triggered closes.
-  Funding rate direction-aware: Judge now told "paying" or "receiving" based on position side vs rate sign.
-  Fixes LONG on negative funding being labeled as "drag" (it's actually a bonus).
-  `PIPELINE_VERSION = "SMT-v3.2.56-BlackoutClose-FundingFix"`.
-- V3.2.55: `_fetch_plan_order_ids()` retry loop — 2s initial sleep + up to 2 retries (2s apart) on HTTP 404 or empty plan-orders response.
-  Eliminates `stored-ID=None` fallback caused by WEEX TP/SL registration lag after placement.
-- V3.2.54: Tiered peak-fade soft stop — per-tier thresholds to match liquidity profile.
-  T1 (BTC/ETH): `PEAK_FADE_MIN_PEAK=0.30%`, `PEAK_FADE_TRIGGER=0.15%`.
-  T2/T3 (altcoins): `PEAK_FADE_MIN_PEAK=0.45%`, `PEAK_FADE_TRIGGER=0.25%`.
-  Altcoin wick noise requires 2× breathing room vs majors. `exit_reason` includes `peak_fade_T{n}` with tier+thresholds.
-- V3.2.53: Peak-fade soft stop (initial version) — `PEAK_FADE_MIN_PEAK=0.20%`, `PEAK_FADE_TRIGGER=0.12%`.
-  Fires when peak gain >= 0.20% and current <= peak - 0.12%. `peak_fade` exit reason = zero cooldown.
-  Only fires when BE-SL not yet placed (mutually exclusive with breakeven SL).
-- V3.2.52: Pre-cycle exit sweep — max_hold/force_exit/early_exit checked at START of `check_trading_signals()`.
-  Positions closed with full AI log BEFORE the 7-pair Gemini analysis loop. Fixes 6-min blind spot.
-- V3.2.51: Emergency flip — `EMERGENCY_FLIP_CONFIDENCE=0.90`. At 90%+ opposite confidence, the 20-min age gate is bypassed.
-  TP proximity gate (>= 30% toward TP) preserved regardless of confidence.
-  `EMERGENCY FLIP` tag in logs + AI log.
-- V3.2.50: `TAKER_FEE_RATE` corrected `0.0006→0.0008` (0.08%/side; 3.2% margin round-trip at 20x).
-  `_fetch_plan_order_ids()` stores `tp_plan_order_id`/`sl_plan_order_id` at trade open in trade state.
-  Daemon uses stored IDs for AI log upload — no sleep/guesswork.
-- V3.2.49: Final stretch — aggressive hold times for last 72h of competition.
-  T1: 3h max hold / 1h early exit (was 24h/6h). T2: 2h / 45m (was 12h/4h). T3: 1.5h / 30m (was 8h/3h).
-  Single-slot mode means stale position blocks ALL capital rotation — dip-bounce strategy = move happens in first 30-60min or thesis is dead.
-  `sync_tracker_with_weex()` display now reads live TIER_CONFIG (was reading stale hold time from trade state).
-- V3.2.48: Macro defense — blackout windows, weekend liquidity mode, funding hold-cost awareness.
-  `MACRO_BLACKOUT_WINDOWS`: skip entire signal cycle during high-impact data releases (PCE 2026-02-20 13:15-14:00 UTC).
-  Weekend mode: Sat/Sun → BTC/ETH/SOL only (altcoin books too thin). Emperor's Birthday (2026-02-23 < 12 UTC) → same restriction.
-  Funding hold-cost: per-pair funding rate × 20x = margin drag passed to Judge as context section.
-  Macro event context: date-sensitive intelligence (PCE, ZRO unlock, holiday) fed to Judge prompt.
-  Fixed `get_recent_close_order_id()` — was using wrong endpoint (HTTP 404). Now uses `/capi/v2/order/history`.
-- V3.2.47: Fix slot recheck bug — was opening 2+ trades with 1-slot cap. Decrements `available_slots` after each successful trade; stops executing if all slots filled.
-- V3.2.46: Cross margin defense — 1-slot strategy + confidence-scaled sizing + circuit breaker.
-  `MAX_TOTAL_POSITIONS = 1` (was 4). Full account is buffer for one 20x trade — no concurrent positions.
-  `CONFIDENCE_EXTRA_SLOT` (90% extra slot) disabled — 1-slot hard cap is absolute.
-  Confidence-scaled sizing: 80-84% → 20% of sizing_base, 85-89% → 35%, 90%+ → 50%.
-  Circuit breaker: `COOLDOWN_MULTIPLIERS` — 60min+ cooldown after SL/force stop (was 0.0 = immediate re-entry).
-  `MAX_SL_PCT` behavior changed: cap instead of discard (was discard in V3.2.41 — fixes XRP LONG trade rejections).
-- V3.2.45: Regex JSON parser for SENTIMENT+JUDGE — `re.search(r'\{.*\}', re.DOTALL)` immune to Gemini grounding citation injection `[1][2]`. Dynamic date injected in SENTIMENT search queries. No-citation prompt directive added.
-- V3.2.44: Full Gemini response visibility — removed all truncation ([:200] on SENTIMENT, [:600] on JUDGE reasoning, [:200] on Judge prompt persona summary). `market_context` no longer capped.
-- V3.2.43: Per-persona reasoning visibility — SENTIMENT/JUDGE reasoning now included in AI log uploads for WAIT decisions too.
-- V3.2.42: Judge progress prints (`[JUDGE] Calling Gemini / responded in Xs`). `sync_tracker_with_weex()` AI log now sends order_id via `get_recent_close_order_id()`.
-- V3.2.41: Larger gains strategy — per-pair TP ceilings, 4H anchor, SL ceiling, 4-5H planning horizon.
-  `PAIR_TP_CEILING` dict replaces flat 0.5% `COMPETITION_FALLBACK_TP`: BTC/ETH→1.5%, SOL→2.0%, XRP/BNB/LTC/ADA→1.0%.
-  `PAIR_MAX_POSITION_PCT["SOL"] = 0.30` caps SOL at 30% of sizing_base (high beta risk control).
-  `MAX_SL_PCT = 1.5%` ceiling added to `find_chart_based_tp_sl()`.
-  `MIN_VIABLE_TP_PCT` raised from 0.20% → 0.40% — filters micro-bounce SR levels, forces anchor to 4H/48H structure.
-  4H candle anchor added: `limit=9` in 4H fetch; `_tp_high_4h`/`_tp_low_4h` from `candles_4h[1:3]` tried between 2H anchor and 48H walk.
-  Judge prompt: per-pair epoch strategy guide, 4-5H planning horizon, SENTIMENT macro section, TP target updated to 4H structural level.
-  SENTIMENT persona: macro news analyst role using Google Search grounding — qualitative only, no price targets.
-- V3.2.40: Close order ID wiring for AI log uploads. `get_recent_close_order_id(symbol)` queries WEEX for most recent filled close order, enabling AI logs to include `orderId` for TP/SL auto-executions.
-- V3.2.39: 90%+ confidence opens 5th slot when all 4 are full. (Superseded by V3.2.46 — now 1-slot hard cap.)
-- V3.2.38: Restore 4-slot hard cap removed in V3.2.25. (Superseded by V3.2.46.)
-- V3.2.37: ANTI-WAIT removed — trust Gemini Judge completely. WAIT = WAIT, no overrides.
-- V3.2.36: `MIN_VIABLE_TP_PCT = 0.20` — skip SR levels < 0.20% from entry. Fixed UnboundLocalErrors from V3.2.35.
-- V3.2.35: Opposite signal = close existing position first, then open new direction. No more dual LONG+SHORT on same pair.
-- V3.2.34: Judge receives WHALE dual-source data (Etherscan + Cryptoracle) separately for BTC/ETH.
-- V3.2.33: SHORT TP back to `min(lows_1h[1:3])` (deepest wick = real support). Reverts V3.2.32.
-- V3.2.31: 48H SR lookback (was 12H). 0.5% TP cap universal ceiling on ALL trades.
-- V3.2.29: Walk SR list before discard. No-SR = no trade (no fallback %).
-- V3.2.28: Bad-TP trades discarded. Sizing cache reset after each trade.
-- V3.2.25: Sizing from available free margin. Dust + orphan sweep every cycle.
-- V3.2.24: MIN_TP_PCT=0.3% floor removed — chart SR is the TP.
-- V3.2.18: CHOP penalties removed | Shorts ALL pairs | Trust 80% floor + TP protection.
-- V3.2.17: Gemini portfolio review disabled. Regime-based auto-exits disabled.
-- V3.2.16: BTC/ETH/BNB re-added; 7 pairs; Gemini chart context (1D+4H) for TP targeting.
-- V3.2.11: DOGE removed (erratic SL/orphan behavior).
 
 **CRITICAL RULE (V3.2.57): The 85% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that

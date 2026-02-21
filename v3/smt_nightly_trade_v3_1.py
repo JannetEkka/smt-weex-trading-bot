@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.73-DipRecovery-FlowSeed-ConfDecay-VelPreSweep-RangeWiden"
+PIPELINE_VERSION = "SMT-v3.2.74-FlowContra-CatalystDrive-ContinuationHold-RangeRevert"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4052,6 +4052,11 @@ Count how many personas agree on direction. F&G is CONTEXT, not a vote — never
 - 2 personas agree LONG strongly (70%+ each) + other 2 neutral: 80-85% confidence. Requires FLOW to be one of the two.
 - FLOW strong (>70%) + SENTIMENT has specific catalyst + same direction: 85%+ even if WHALE disagrees.
   WHALE community sentiment lags price action — a catalyst-driven move with FLOW confirmation is more reliable.
+- CATALYST DRIVE RULE: SENTIMENT has a NAMED catalyst (not just "neutral macro" — an actual event: ETF inflow, partnership,
+  protocol upgrade, institutional adoption, regulatory decision) + FLOW >= 60% same direction: 85%+ confidence.
+  This is distinct from DIP CATCH. The catalyst creates the move; FLOW confirms smart money is acting on it.
+  TECHNICAL and WHALE are optional — catalysts bypass the 3-persona requirement because news moves markets before
+  indicators react. If WHALE or TECHNICAL actively OPPOSE (>70% opposite), cap at 85%.
 - WHALE strong (>70%) + FLOW strong (>70%) + same direction: 85-90%. This is the gold standard.
 - ANY strong persona (>70%) in the OPPOSITE direction of your trade: cap confidence at 85% max.
 - FLOW and WHALE both strong (>70%) in OPPOSITE directions: WAIT (genuine conflict).
@@ -4067,6 +4072,17 @@ THEREFORE: When ALL of these conditions are true:
   4. WHALE and SENTIMENT are NEUTRAL (not actively opposing)
 → 2-PERSONA AGREEMENT IS SUFFICIENT FOR 85% CONFIDENCE. Output 85-90%.
 This is the dip-bounce pattern. FLOW flip + TECHNICAL oversold + price at range extreme = the trade. WHALE/SENTIMENT neutrality is EXPECTED, not a contra-indicator.
+
+=== CONTINUATION HOLD / THESIS CHECK (V3.2.74) ===
+When CURRENT POSITIONS shows an OPEN position on THIS pair in the SAME direction as your signal:
+  → This is a CONTINUATION HOLD. The code will NOT open a duplicate — but your confidence score tells the daemon
+    whether the thesis is still alive. If you return the SAME direction at 85%+, the position stays. Good.
+  → If signals have DEGRADED (e.g., FLOW flipped opposite, TECHNICAL reversed, catalyst faded):
+    return WAIT or the OPPOSITE direction. The daemon uses this to decide exits.
+  → Be honest: do NOT inflate confidence just because a position is already open. Re-evaluate fresh.
+When CURRENT POSITIONS shows an OPEN position in the OPPOSITE direction:
+  → The daemon has opposite-swap logic. Your job is still to call the best signal. If the opposite direction
+    is genuinely stronger now, call it — the daemon handles the flip mechanics.
 
 VOLATILITY RISK (from SENTIMENT):
 - HIGH_RISK means a scheduled event COULD cause volatility. It does NOT mean "don't trade."
@@ -4519,9 +4535,17 @@ class MultiPersonaAnalyzer:
                 flow_vote["confidence"] = _boost
                 flow_vote["reasoning"] = flow_vote.get("reasoning", "") + f" [FLIP {_flow_prev}->{_flow_dir} = DIP/PEAK SIGNAL, boosted]"
             else:
-                # Mid-range flip: ambiguous. Don't penalize, don't boost.
+                # Non-boosted flip: log actual reason (not always "mid-range")
                 _rp_str = f"{_range_pos_flow:.0f}%" if _range_pos_flow is not None else "unknown"
-                print(f"  [FLOW] FLIP {_flow_prev}->{_flow_dir} at range {_rp_str} — neutral (mid-range, no boost/discount)")
+                if _range_pos_flow is None:
+                    _flip_label = "unknown range"
+                elif _flow_dir == "SHORT" and _range_pos_flow < 55:
+                    _flip_label = f"at {_rp_str} — not in peak territory for SHORT boost"
+                elif _flow_dir == "LONG" and _range_pos_flow > 45:
+                    _flip_label = f"at {_rp_str} — not in dip territory for LONG boost"
+                else:
+                    _flip_label = f"mid-range ({_rp_str})"
+                print(f"  [FLOW] FLIP {_flow_prev}->{_flow_dir} at range {_rp_str} — neutral ({_flip_label}, no boost/discount)")
         _prev_flow_direction[_flow_sym] = _flow_dir
 
         votes.append(flow_vote)
@@ -4884,13 +4908,13 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     if _range_pos is not None:
         _RANGE_LONG_BLOCK = 55   # Block LONGs above 55% of 12H range
         _RANGE_SHORT_BLOCK = 45  # Block SHORTs below 45% of 12H range
-        _DIP_OVERRIDE_THRESH = 45  # V3.2.73: was 30, widened to 45 — below midpoint = dip real enough to override 12H
-        _PEAK_OVERRIDE_THRESH = 55  # V3.2.73: was 70, widened to 55 — above midpoint = peak real enough to override 12H
+        _DIP_OVERRIDE_THRESH = 30   # V3.2.74: reverted to 30 (V3.2.73 widened to 45, too loose — any sub-midpoint overrode gate)
+        _PEAK_OVERRIDE_THRESH = 70  # V3.2.74: reverted to 70 (V3.2.73 widened to 55, too loose — any above-midpoint overrode gate)
 
         if signal == "LONG" and _range_pos >= _RANGE_LONG_BLOCK:
             # Check 2H override: if TECHNICAL sees bottom of 2H range, the dip is real
             if _range_pos_2h is not None and _range_pos_2h < _DIP_OVERRIDE_THRESH:
-                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block LONG, but 2H range {_range_pos_2h:.0f}% confirms dip — OVERRIDE (V3.2.73)")
+                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block LONG, but 2H range {_range_pos_2h:.0f}% confirms dip — OVERRIDE (V3.2.74)")
             else:
                 _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (>={_RANGE_LONG_BLOCK}%){f', 2H={_range_pos_2h:.0f}%' if _range_pos_2h is not None else ''} — too high for LONG dip-bounce entry"
                 print(f"  [RANGE-GATE] {_reason}")
@@ -4898,7 +4922,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         elif signal == "SHORT" and _range_pos <= _RANGE_SHORT_BLOCK:
             # Check 2H override: if TECHNICAL sees top of 2H range, the peak is real
             if _range_pos_2h is not None and _range_pos_2h > _PEAK_OVERRIDE_THRESH:
-                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block SHORT, but 2H range {_range_pos_2h:.0f}% confirms peak — OVERRIDE (V3.2.73)")
+                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block SHORT, but 2H range {_range_pos_2h:.0f}% confirms peak — OVERRIDE (V3.2.74)")
             else:
                 _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (<={_RANGE_SHORT_BLOCK}%){f', 2H={_range_pos_2h:.0f}%' if _range_pos_2h is not None else ''} — too low for SHORT entry"
                 print(f"  [RANGE-GATE] {_reason}")
