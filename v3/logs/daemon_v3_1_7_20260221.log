@@ -20921,3 +20921,7 @@ TypeError: string indices must be integers
   [JUDGE] BNB funding: +0.000085 → 0.17% margin drag (YOU PAY) for LONG
   [JUDGE] Calling Gemini (rate-limit + up to 90s)...
 2026-02-21 16:00:31 | INFO     | AFC is enabled with max remote calls: 10.
+  File "/home/smtforweex/smt-weex-trading-bot/v3/smt_daemon_v3_1.py", line 1252
+    )
+    ^
+SyntaxError: unmatched ')'
