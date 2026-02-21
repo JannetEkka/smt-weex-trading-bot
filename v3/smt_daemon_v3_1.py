@@ -3771,7 +3771,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.68 - DIP DETECTION: 5m RSI + volume spike + velocity | FLOW flip boost | 8-EMA snap-back exit | TP haircut 90%%")
+    logger.info("SMT Daemon V3.2.69 - Range gate 2H override: dips in uptrends pass when 2H range < 30%% | All V3.2.68 features preserved")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3848,6 +3848,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.69: RANGE GATE 2H OVERRIDE — 12H range gate (55/45) now bypassed when TECHNICAL's 2H range confirms genuine dip (<30%%) or peak (>70%%). Fixes: BNB 90%% blocked at 12H=77%%/2H=11%%, SOL 85%% blocked at 12H=57%%/2H=7%%. Short-term dips in uptrends are valid entries.")
     logger.info("  V3.2.68: DIP DETECTION OVERHAUL — TECHNICAL: 5m RSI(14)+VWAP+30m momentum+volume spike(2x)+entry velocity(0.20%%/15m). FLOW: flip at dip/peak=+15%% boost (was 50%% discount). Range gate 55/45. TP haircut 90%%. 8-EMA snap-back EXIT in daemon (mean-reversion close). Judge: 2-persona dip rule, flip protocol.")
     logger.info("  V3.2.67: VELOCITY EXIT TIERED (T1=75m, T2=60m, T3=50m, was flat 40m — bounces need 60-90min). Peak threshold 0.15%%→0.10%%. ADX gate softened (5, not 10). Weekend restriction DISABLED (all 7 pairs). Signal persistence tracks ADX-gated signals.")
     logger.info("  V3.2.63: 1D candle granularity FIX (1Dutc→1d — was rejected by WEEX API, breaking ALL chart context). 4H fallback when 1D unavailable. datetime.utcfromtimestamp→fromtimestamp(tz=utc). Judge now gets daily+4H S/R levels again.")

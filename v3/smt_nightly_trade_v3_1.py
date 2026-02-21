@@ -1350,6 +1350,7 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
 _chart_context_cache = {}
 _chart_context_cache_time = 0
 _chart_range_position_cache = {}  # V3.2.66: {symbol: pos_in_range (0-100)} — used by range position gate
+_technical_range_pos_cache = {}   # V3.2.69: {symbol: 2H range_pos (0-100)} — TECHNICAL's 5m-based dip detector
 
 def get_chart_context(symbol: str, tier: int = 1) -> str:
     """V3.2.61: Build multi-TF chart context + 12H price action candles for Gemini Judge.
@@ -1361,7 +1362,7 @@ def get_chart_context(symbol: str, tier: int = 1) -> str:
       T3 (SOL/ADA): 15m candles × 48 = 12h
     Cached for 10 minutes (same as signal check interval).
     """
-    global _chart_context_cache, _chart_context_cache_time, _chart_range_position_cache
+    global _chart_context_cache, _chart_context_cache_time, _chart_range_position_cache, _technical_range_pos_cache
 
     now = time.time()
     if now - _chart_context_cache_time < 600 and symbol in _chart_context_cache:
@@ -1370,6 +1371,7 @@ def get_chart_context(symbol: str, tier: int = 1) -> str:
     if now - _chart_context_cache_time >= 600:
         _chart_context_cache = {}
         _chart_range_position_cache = {}  # V3.2.66: clear range cache with chart cache
+        _technical_range_pos_cache = {}   # V3.2.69: clear 2H range cache with chart cache
         _chart_context_cache_time = now
 
     pair_label = symbol.replace("cmt_", "").replace("usdt", "").upper()
@@ -2040,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.68-DipDetection-5mRSI-VolSpike-Velocity-EMAExit"
+PIPELINE_VERSION = "SMT-v3.2.69-RangeGate2HOverride-DipInUptrend"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3319,6 +3321,11 @@ class TechnicalPersona:
                 range_pos = ((current_price - recent_low) / (recent_high - recent_low)) * 100
             else:
                 range_pos = 50.0
+
+            # V3.2.69: Cache 2H range_pos for range gate override.
+            # When TECHNICAL sees a genuine dip (2H range < 30%), the 12H range gate
+            # should not block — short-term dips within uptrends are valid entries.
+            _technical_range_pos_cache[symbol] = range_pos
 
             # === CONTEXT: 1H candles for trend direction ===
             candles_1h = self._get_candles(symbol, "1H", 25)
@@ -4857,21 +4864,35 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     # V3.2.66: Range position gate — block LONGs at top of 12H range, SHORTs at bottom.
     # The dip-bounce strategy should not buy near peaks or short near troughs.
     # Uses _chart_range_position_cache populated by get_chart_context() during analysis phase.
+    # V3.2.69: 2H range override — if TECHNICAL's 2H range confirms a genuine dip/peak
+    # (range_pos < 30% for LONG or > 70% for SHORT), bypass the 12H gate.
+    # Rationale: short-term dips within uptrends are valid dip-bounce entries.
+    # The 12H range captures the broader trend but misses 1-2 hour V-bounce setups
+    # where price drops sharply then recovers. The 2H range detects these.
     _range_pos = _chart_range_position_cache.get(symbol)
+    _range_pos_2h = _technical_range_pos_cache.get(symbol)
     if _range_pos is not None:
-        # V3.2.68: Tightened from 70/30 → 55/45. The dip-bounce strategy MUST enter in dip territory.
-        # Old 70% threshold allowed LONGs in upper half of range = not a dip, just mid-range noise.
-        # 55% forces LONGs into lower half; 45% forces SHORTs into upper half.
-        _RANGE_LONG_BLOCK = 55   # Block LONGs above 55% of range — must be in lower half (dip)
-        _RANGE_SHORT_BLOCK = 45  # Block SHORTs below 45% of range — must be in upper half (peak)
+        _RANGE_LONG_BLOCK = 55   # Block LONGs above 55% of 12H range
+        _RANGE_SHORT_BLOCK = 45  # Block SHORTs below 45% of 12H range
+        _DIP_OVERRIDE_THRESH = 30  # V3.2.69: 2H range < 30% = genuine dip, bypass 12H gate
+        _PEAK_OVERRIDE_THRESH = 70  # V3.2.69: 2H range > 70% = genuine peak, bypass 12H gate
+
         if signal == "LONG" and _range_pos >= _RANGE_LONG_BLOCK:
-            _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (>={_RANGE_LONG_BLOCK}%) — too high for LONG dip-bounce entry"
-            print(f"  [RANGE-GATE] {_reason}")
-            return {"executed": False, "reason": _reason}
+            # Check 2H override: if TECHNICAL sees bottom of 2H range, the dip is real
+            if _range_pos_2h is not None and _range_pos_2h < _DIP_OVERRIDE_THRESH:
+                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block LONG, but 2H range {_range_pos_2h:.0f}% confirms dip — OVERRIDE (V3.2.69)")
+            else:
+                _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (>={_RANGE_LONG_BLOCK}%){f', 2H={_range_pos_2h:.0f}%' if _range_pos_2h is not None else ''} — too high for LONG dip-bounce entry"
+                print(f"  [RANGE-GATE] {_reason}")
+                return {"executed": False, "reason": _reason}
         elif signal == "SHORT" and _range_pos <= _RANGE_SHORT_BLOCK:
-            _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (<={_RANGE_SHORT_BLOCK}%) — too low for SHORT entry"
-            print(f"  [RANGE-GATE] {_reason}")
-            return {"executed": False, "reason": _reason}
+            # Check 2H override: if TECHNICAL sees top of 2H range, the peak is real
+            if _range_pos_2h is not None and _range_pos_2h > _PEAK_OVERRIDE_THRESH:
+                print(f"  [RANGE-GATE] 12H range {_range_pos:.0f}% would block SHORT, but 2H range {_range_pos_2h:.0f}% confirms peak — OVERRIDE (V3.2.69)")
+            else:
+                _reason = f"Range position gate: price at {_range_pos:.0f}% of 12H range (<={_RANGE_SHORT_BLOCK}%){f', 2H={_range_pos_2h:.0f}%' if _range_pos_2h is not None else ''} — too low for SHORT entry"
+                print(f"  [RANGE-GATE] {_reason}")
+                return {"executed": False, "reason": _reason}
 
     # V3.2.16: Gemini structural TP override — uses 1D+4H chart context to identify
     # the REAL nearest resistance/support, bypassing the 2H anchor when Gemini gives a target.

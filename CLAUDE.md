@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.68** — all production code is in `v3/`.
+**Current version: V3.2.69** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -217,9 +217,13 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 # |velocity| > 0.20% = sharp move confirmed → +0.35 confidence to direction
 # Drop = LONG signal (buying the dip), Rally = SHORT signal (fading the peak)
 
-# Range gate (V3.2.68): tightened 70/30 → 55/45
+# Range gate (V3.2.68/V3.2.69): 12H gate 55/45 + 2H dip/peak override
 # _RANGE_LONG_BLOCK = 55  # LONGs must be in lower half of 12H range (dip territory)
 # _RANGE_SHORT_BLOCK = 45  # SHORTs must be in upper half (peak territory)
+# V3.2.69: 2H OVERRIDE — if TECHNICAL's 2H range_pos < 30% (LONG) or > 70% (SHORT),
+#   bypass the 12H gate. Short-term dips within uptrends are valid entries.
+#   _technical_range_pos_cache stores 2H range from TECHNICAL persona.
+#   Fixes: BNB 90% blocked at 12H=77%/2H=11%, SOL 85% blocked at 12H=57%/2H=7%.
 
 # TP haircut (V3.2.68): TP_HAIRCUT = 0.90
 # All SR-based TPs target 90% of distance from entry to S/R level
@@ -420,16 +424,29 @@ python3 v3/cryptoracle_client.py
 27. **FLOW flip boost ordering (V3.2.68)** — `get_chart_context()` MUST run BEFORE persona analysis so `_chart_range_position_cache` is populated when FLOW flip checks range position. Moving `get_chart_context()` after persona analysis makes the flip boost a no-op (cache empty/stale).
 28. **FLOW flip boost cap (V3.2.68)** — Flip boost cap is 0.95 (not 0.85). FLOW's internal cap is 0.85, but the flip boost in `MultiPersonaAnalyzer.analyze()` raises this to `min(0.95, conf + 0.15)`. Do not lower the cap back to 0.85 — that makes the boost a no-op.
 29. **Judge 2-persona dip rule (V3.2.68)** — When FLOW flip + TECHNICAL oversold + range extreme + WHALE/SENT neutral, 2 personas are sufficient for 85% confidence. Do not re-add the 3-persona requirement for dip scenarios — WHALE (backward-looking) and SENTIMENT (qualitative) are structurally blind to real-time 30-60 min dips.
+30. **Range gate 2H override (V3.2.69)** — The 12H range gate (55/45) is bypassed when TECHNICAL's 2H range_pos < 30% (LONG) or > 70% (SHORT). This is critical for dip-bounce entries in uptrends where the 12H range says "upper half" but a genuine 1-2H dip just happened. Do not remove the override — it fixes the most common trade-blocking scenario observed in V3.2.68 (5 trades blocked in 2 cycles). The 30%/70% thresholds are intentionally conservative (not 50/50) to ensure only genuine dips/peaks override.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.68. Next change should be V3.2.69.
+Current: V3.2.69. Next change should be V3.2.70.
 
 **Recent version history:**
-- V3.2.68: (**CURRENT**) DIP DETECTION OVERHAUL — complete rewrite of how the bot detects and enters dip-bounce patterns.
+- V3.2.69: (**CURRENT**) RANGE GATE 2H OVERRIDE — 12H range gate (55/45) now bypassed when
+  TECHNICAL's 2H range confirms genuine dip (<30%) or peak (>70%).
+  `_technical_range_pos_cache`: new global cache storing TECHNICAL persona's 2H range_pos per symbol.
+  Populated in `TechnicalPersona.analyze()`, cleared with chart context cache (10min TTL).
+  Range gate logic: 12H gate still applies by default (55% LONG block, 45% SHORT block).
+  Override: if 2H range_pos < 30% for LONG or > 70% for SHORT, the 12H gate is bypassed.
+  Log tag: `[RANGE-GATE] 12H range X% would block LONG, but 2H range Y% confirms dip — OVERRIDE`
+  Fixes observed in V3.2.68: BNB 90% confidence (all 4 personas) blocked at 12H=77%/2H=11%.
+  SOL 85% blocked at 12H=57%/2H=7%. XRP 90% blocked at 12H=72%/2H=15%.
+  These were valid dip-bounce entries (short-term dips within uptrends) incorrectly blocked
+  because the 12H range captures the broader trend, not the 1-2 hour V-bounce setup.
+  `PIPELINE_VERSION = "SMT-v3.2.69-RangeGate2HOverride-DipInUptrend"`.
+- V3.2.68: DIP DETECTION OVERHAUL — complete rewrite of how the bot detects and enters dip-bounce patterns.
   TECHNICAL persona: Rewritten from 1H RSI(14) (14-hour lookback, blind to dips) to 5m RSI(14) + VWAP + 30m momentum + 2H range position.
   Volume spike detection: Current 3-candle avg volume > 2x baseline 12-candle avg = institutional move confirmation (+0.25 conf).
   Entry velocity check: Price drop > 0.20% in 15 min = active dip, not slow grind (+0.35 conf to dominant direction).
