@@ -3969,7 +3969,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.76 - NEAR-TP GRACE + THESIS EXIT")
+    logger.info("SMT Daemon V3.2.77 - TECHNICAL MOMENTUM CONFLICT FIX")
     logger.info("=" * 60)
     # --- Tier table ---
     logger.info("TIER CONFIG:")
@@ -3982,11 +3982,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.76: NEAR-TP GRACE + THESIS EXIT — (1) Near-TP grace: max_hold skipped if trade >= 60%% toward TP (15min grace). (2) Judge thesis exit: when Judge returns WAIT for held position, trade past early_exit time and below BE-SL trigger → close with thesis_degraded (zero cooldown). Structured enum only, no string parsing.")
-    logger.info("  V3.2.75: REMOVE DYNAMIC BLACKOUT — Gemini event scanner removed. Was blocking ALL signal cycles on Deribit derivatives expiry (separate exchange, not relevant to WEEX futures). Hardcoded MACRO_BLACKOUT_WINDOWS still active for known events.")
-    logger.info("  V3.2.74: FLOW CONTRA + CATALYST DRIVE + CONTINUATION HOLD — (1) FLOW contra exit: close underwater when FLOW extreme opposite. (2) Judge CATALYST DRIVE rule. (3) Judge CONTINUATION HOLD. (4) Range gate 2H override reverted 45/55→30/70. (5) FLOW flip log fix. (6) Banner cleanup.")
+    logger.info("  V3.2.77: TECHNICAL MOMENTUM CONFLICT — (1) Momentum/velocity signals gated on 1h momentum: only treat as reversal when 1h disagrees (spike in downtrend, not trend continuation). (2) Momentum conflict cap: when TECHNICAL SHORT but 1h momentum > 0.20%% (uptrend), cap confidence at 65%%. Prevents shorting into bounces.")
+    logger.info("  V3.2.76: NEAR-TP GRACE + THESIS EXIT — (1) Near-TP grace: max_hold skipped if trade >= 60%% toward TP (15min grace). (2) Judge thesis exit: WAIT for held position → close with thesis_degraded (zero cooldown).")
+    logger.info("  V3.2.75: REMOVE DYNAMIC BLACKOUT — Gemini event scanner removed.")
+    logger.info("  V3.2.74: FLOW CONTRA + CATALYST DRIVE + CONTINUATION HOLD.")
     logger.info("  V3.2.73: DIP RECOVERY + FLOW SEED + CONF DECAY + VEL PRE-SWEEP.")
-    logger.info("  V3.2.72: FLOW GATE + EMA FIX — FLOW >= 60%% gate + EMA snapback giveback 50%%.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
