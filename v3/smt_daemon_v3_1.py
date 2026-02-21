@@ -3982,12 +3982,10 @@ def run_daemon():
     _seeded = 0
     for _pair_key, _sh_data in _sh.items():
         if isinstance(_sh_data, dict) and _sh_data.get("direction") in ("LONG", "SHORT"):
-            _sym = None
-            for _tp in TRADING_PAIRS:
-                if _tp["pair"] == _pair_key:
-                    _sym = _tp["symbol"]
-                    break
-            if _sym:
+            # TRADING_PAIRS is {"BTC": {"symbol": "cmt_btcusdt", ...}, ...}
+            _tp_info = TRADING_PAIRS.get(_pair_key)
+            if _tp_info:
+                _sym = _tp_info["symbol"]
                 _prev_flow_direction[_sym] = _sh_data["direction"]
                 _seeded += 1
                 logger.info(f"  [FLOW-SEED] {_pair_key}: seeded prev direction = {_sh_data['direction']} from signal_history")
