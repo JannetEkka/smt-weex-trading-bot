@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.78-OppositeRangePrecheck"
+PIPELINE_VERSION = "SMT-v3.2.79-OrphanVerifyLoop"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -5063,11 +5063,62 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
     # V3.1.83: Cancel any orphan trigger orders BEFORE setting leverage.
     # Orphan TP/SL triggers from previous trades block leverage changes on WEEX.
     # V3.2.6: Sleep 2s after cancellation so WEEX finishes processing before leverage set.
+    # V3.2.79: Verify-and-retry loop — re-query /currentPlan after cancel to confirm zero
+    #   orphan plan orders remain. Without this, WEEX cancel race conditions allow old TP/SL
+    #   triggers to persist, causing price mismatches on the new trade's plan orders.
+    #   Every manual close (velocity, thesis, slot_swap, opposite, peak_fade, ema_snapback,
+    #   flow_contra, early_exit, max_hold) can leave orphans if cancel_all_orders races.
+    _pair_clean = symbol.replace("cmt_", "").upper()
     try:
         _pre_cleanup = cancel_all_orders_for_symbol(symbol)
         if _pre_cleanup.get("cancelled"):
-            print(f"  [PRE-TRADE] Cancelled {len(_pre_cleanup['cancelled'])} orphan orders on {symbol}")
+            print(f"  [PRE-TRADE] Cancelled {len(_pre_cleanup['cancelled'])} orphan orders on {_pair_clean}")
             time.sleep(2)
+
+        # V3.2.79: Verify plan orders are actually gone — cancel can race with WEEX processing.
+        # Query /currentPlan up to 3 times. If orphans persist after cancel, re-cancel them.
+        _VERIFY_MAX_ATTEMPTS = 3
+        _VERIFY_SLEEP = 1.5
+        for _verify_attempt in range(_VERIFY_MAX_ATTEMPTS):
+            try:
+                _verify_ep = f"/capi/v2/order/currentPlan?symbol={symbol}"
+                _vr = requests.get(f"{WEEX_BASE_URL}{_verify_ep}",
+                                   headers=weex_headers("GET", _verify_ep), timeout=10)
+                if _vr.status_code != 200:
+                    print(f"  [PRE-TRADE] {_pair_clean}: /currentPlan returned HTTP {_vr.status_code} — cannot verify, proceeding")
+                    break  # Can't verify — proceed anyway
+                _vresp = _vr.json()
+                _vorders = _vresp if isinstance(_vresp, list) else (_vresp.get("data") or [])
+                if not _vorders:
+                    if _verify_attempt > 0:
+                        print(f"  [PRE-TRADE] {_pair_clean}: plan orders confirmed CLEAN after {_verify_attempt + 1} attempt(s)")
+                    break  # Clean — no orphan plan orders
+
+                # Still have plan orders — log each one and re-cancel
+                _stale_ids = []
+                for _vo in _vorders:
+                    _void = _vo.get("order_id") or _vo.get("orderId")
+                    _vtrigger = _vo.get("trigger_price") or _vo.get("triggerPrice") or "?"
+                    _vtype = _vo.get("type") or _vo.get("side") or "?"
+                    if _void:
+                        _stale_ids.append(_void)
+                        print(f"  [PRE-TRADE] {_pair_clean}: ORPHAN plan_id={_void} trigger=${_vtrigger} type={_vtype}")
+                        try:
+                            _cancel_ep = "/capi/v2/order/cancel_plan"
+                            _cancel_body = json.dumps({"order_id": str(_void)})
+                            requests.post(f"{WEEX_BASE_URL}{_cancel_ep}",
+                                          headers=weex_headers("POST", _cancel_ep, _cancel_body),
+                                          data=_cancel_body, timeout=10)
+                        except Exception:
+                            pass
+                print(f"  [PRE-TRADE] {_pair_clean}: {len(_stale_ids)} stale plan order(s) persisted — re-cancelled (attempt {_verify_attempt + 1}/{_VERIFY_MAX_ATTEMPTS})")
+                if _verify_attempt < _VERIFY_MAX_ATTEMPTS - 1:
+                    time.sleep(_VERIFY_SLEEP)
+            except Exception:
+                break  # Network error — proceed with what we have
+        else:
+            # Exhausted all attempts — orphans still present
+            print(f"  [PRE-TRADE] WARNING: {_pair_clean} still has plan orders after {_VERIFY_MAX_ATTEMPTS} cancel attempts — TP/SL mismatch risk")
     except Exception:
         pass
 
@@ -5501,28 +5552,47 @@ def check_position_status(symbol: str) -> Dict:
 
 
 def cancel_all_orders_for_symbol(symbol: str) -> Dict:
-    """Cancel all pending orders for a symbol"""
-    result = {"cancelled": []}
-    
+    """Cancel all pending orders for a symbol.
+    V3.2.79: Enhanced logging — prints every order/plan found with IDs, prices, types.
+    Visibility into what's being cancelled and what might be orphans.
+    """
+    result = {"cancelled": [], "regular_found": 0, "plan_found": 0}
+    _pair_tag = symbol.replace("cmt_", "").upper()
+
+    # Pass 1: Regular orders (limit orders, market orders)
     try:
         endpoint = "/capi/v2/order/orders"
         if symbol:
             endpoint += f"?symbol={symbol}"
         r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=15)
-        orders = r.json() if isinstance(r.json(), list) else []
-        
+        resp = r.json()
+        orders = resp if isinstance(resp, list) else (resp.get("data") or [])
+        result["regular_found"] = len(orders)
+
         for order in orders:
-            oid = order.get("order_id")
+            oid = order.get("order_id") or order.get("orderId")
+            _price = order.get("price") or order.get("avg_price") or "?"
+            _type = order.get("type") or order.get("side") or "?"
+            _status = order.get("status") or "?"
+            _size = order.get("size") or order.get("filled_qty") or "?"
             if oid:
+                print(f"  [CANCEL] {_pair_tag}: regular order_id={oid} type={_type} price={_price} size={_size} status={_status}", flush=True)
                 cancel_endpoint = "/capi/v2/order/cancel"
-                body = json.dumps({"order_id": oid})
-                requests.post(f"{WEEX_BASE_URL}{cancel_endpoint}", 
-                            headers=weex_headers("POST", cancel_endpoint, body), 
-                            data=body, timeout=15)
+                body = json.dumps({"order_id": str(oid)})
+                try:
+                    _cr = requests.post(f"{WEEX_BASE_URL}{cancel_endpoint}",
+                                headers=weex_headers("POST", cancel_endpoint, body),
+                                data=body, timeout=15)
+                    _crj = _cr.json()
+                    _ccode = _crj.get("code", "?")
+                    print(f"  [CANCEL] {_pair_tag}: regular order_id={oid} cancel response: code={_ccode}", flush=True)
+                except Exception as _ce:
+                    print(f"  [CANCEL] {_pair_tag}: regular order_id={oid} cancel FAILED: {_ce}", flush=True)
                 result["cancelled"].append(oid)
-    except:
-        pass
-    
+    except Exception as _e:
+        print(f"  [CANCEL] {_pair_tag}: regular orders query failed: {_e}", flush=True)
+
+    # Pass 2: Plan/trigger orders (TP/SL triggers)
     # V3.2.62: Fixed endpoint — /plan_orders returned 404; /currentPlan is the correct query endpoint
     try:
         endpoint = "/capi/v2/order/currentPlan"
@@ -5531,19 +5601,34 @@ def cancel_all_orders_for_symbol(symbol: str) -> Dict:
         r = requests.get(f"{WEEX_BASE_URL}{endpoint}", headers=weex_headers("GET", endpoint), timeout=15)
         resp = r.json()
         orders = resp if isinstance(resp, list) else (resp.get("data") or [])
+        result["plan_found"] = len(orders)
 
         for order in orders:
             oid = order.get("order_id") or order.get("orderId")
+            _trigger = order.get("trigger_price") or order.get("triggerPrice") or "?"
+            _type = order.get("type") or order.get("side") or "?"
+            _size = order.get("size") or "?"
+            _status = order.get("status") or "?"
             if oid:
+                print(f"  [CANCEL] {_pair_tag}: plan order_id={oid} trigger=${_trigger} type={_type} size={_size} status={_status}", flush=True)
                 cancel_endpoint = "/capi/v2/order/cancel_plan"
-                body = json.dumps({"order_id": oid})
-                requests.post(f"{WEEX_BASE_URL}{cancel_endpoint}",
-                            headers=weex_headers("POST", cancel_endpoint, body),
-                            data=body, timeout=15)
+                body = json.dumps({"order_id": str(oid)})
+                try:
+                    _cr = requests.post(f"{WEEX_BASE_URL}{cancel_endpoint}",
+                                headers=weex_headers("POST", cancel_endpoint, body),
+                                data=body, timeout=10)
+                    _crj = _cr.json()
+                    _ccode = _crj.get("code", "?")
+                    print(f"  [CANCEL] {_pair_tag}: plan order_id={oid} cancel response: code={_ccode}", flush=True)
+                except Exception as _ce:
+                    print(f"  [CANCEL] {_pair_tag}: plan order_id={oid} cancel FAILED: {_ce}", flush=True)
                 result["cancelled"].append(f"plan_{oid}")
-    except:
-        pass
-    
+    except Exception as _e:
+        print(f"  [CANCEL] {_pair_tag}: plan orders query failed: {_e}", flush=True)
+
+    if result["regular_found"] > 0 or result["plan_found"] > 0:
+        print(f"  [CANCEL] {_pair_tag}: TOTAL found={result['regular_found']} regular + {result['plan_found']} plan | cancelled={len(result['cancelled'])}", flush=True)
+
     return result
 
 
