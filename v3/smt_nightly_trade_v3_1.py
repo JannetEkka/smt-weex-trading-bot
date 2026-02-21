@@ -5462,7 +5462,10 @@ class TradeTracker:
             # Now ALL losses count toward both blacklist AND consecutive loss tracking.
             plain_sym = symbol.split(":")[0] if ":" in symbol else symbol
             is_force = "force_stop" in reason or "force_exit" in reason or "early_exit" in reason
-            is_loss = pnl_pct < -0.1  # Any meaningful loss (SL hit, PM close, etc.)
+            # V3.2.84: thesis_degraded/velocity_exit/flow_contra = zero-cooldown exits, no blacklist
+            # These free the slot immediately — blacklisting defeats the purpose
+            is_zero_cooldown_exit = any(x in reason for x in ("thesis_degraded", "velocity_exit", "flow_contra"))
+            is_loss = pnl_pct < -0.1 and not is_zero_cooldown_exit  # Any meaningful loss (SL hit, PM close, etc.)
 
             if is_force:
                 # Original: hard blacklist 4-12h for force exits
