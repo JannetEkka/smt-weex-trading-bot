@@ -637,6 +637,12 @@ def check_trading_signals():
         
         open_positions = get_open_positions()
 
+        # V3.2.85: Full sync + FLOW seed at start of EVERY cycle (was startup-only).
+        # 1. Sync tracker with WEEX (reconcile local state vs exchange)
+        # 2. Dust cleanup + orphan sweep
+        # 3. FLOW seed refresh (positions → RL data → signal_history)
+        sync_tracker_with_weex()
+
         # V3.2.25: Cycle-start housekeeping — dust + orphan sweep every signal cycle
         try:
             cleanup_dust_positions()
@@ -656,15 +662,24 @@ def check_trading_signals():
         # V3.2.85: Per-cycle FLOW seed refresh — sync _prev_flow_direction with reality every cycle.
         # Positions = ground truth (traded side). RL data fills gaps for pairs without positions.
         # Without this, _prev_flow_direction can go stale across restarts or after positions close.
+        _seeded = 0
+        _seeded_from_pos = 0
+        _seeded_from_rl = 0
+        _seeded_from_sh = 0
         try:
             for _at_key, _at_data in tracker.active_trades.items():
                 if isinstance(_at_data, dict) and _at_data.get("side") in ("LONG", "SHORT"):
                     _at_sym = _at_key.split(":")[0] if ":" in _at_key else _at_key
                     _prev_flow_direction[_at_sym] = _at_data["side"]
+                    _seeded += 1
+                    _seeded_from_pos += 1
+                    _at_pair = next((p for p, info in TRADING_PAIRS.items() if info["symbol"] == _at_sym), _at_sym)
+                    logger.info(f"  [FLOW-SEED] {_at_pair}: seeded = {_at_data['side']} from ACTIVE POSITION")
             # RL data: fill pairs without active positions (last known FLOW direction)
             import glob as _glob_mod
             _rl_files = sorted(_glob_mod.glob(os.path.join(os.path.dirname(__file__), "rl_training_data", "exp_*.jsonl")))
             if _rl_files:
+                _rl_flow_map = {}
                 for _rl_file in _rl_files[-2:]:
                     try:
                         with open(_rl_file, 'r') as _rf:
@@ -673,15 +688,39 @@ def check_trading_signals():
                             try:
                                 _rl_entry = json.loads(_rl_line)
                                 _rl_sym = _rl_entry.get("symbol", "")
+                                _rl_ts = _rl_entry.get("ts", "")
                                 _rl_flow_sig = _rl_entry.get("state", {}).get("flow_sig", 0.0)
-                                if _rl_sym and _rl_flow_sig != 0.0 and _rl_sym not in _prev_flow_direction:
-                                    _prev_flow_direction[_rl_sym] = "LONG" if _rl_flow_sig > 0 else "SHORT"
+                                if _rl_sym and _rl_flow_sig != 0.0:
+                                    _rl_dir = "LONG" if _rl_flow_sig > 0 else "SHORT"
+                                    if _rl_sym not in _rl_flow_map or _rl_ts > _rl_flow_map[_rl_sym][1]:
+                                        _rl_flow_map[_rl_sym] = (_rl_dir, _rl_ts)
                             except (json.JSONDecodeError, KeyError):
                                 continue
                     except Exception:
                         continue
+                for _rl_sym, (_rl_dir, _rl_ts) in _rl_flow_map.items():
+                    if _rl_sym not in _prev_flow_direction:
+                        _prev_flow_direction[_rl_sym] = _rl_dir
+                        _seeded += 1
+                        _seeded_from_rl += 1
+                        _rl_pair = next((p for p, info in TRADING_PAIRS.items() if info["symbol"] == _rl_sym), _rl_sym)
+                        logger.info(f"  [FLOW-SEED] {_rl_pair}: seeded = {_rl_dir} from RL data ({_rl_ts[:16]})")
+            # Signal history: last resort
+            _sh = tracker.signal_history
+            for _pair_key, _sh_data in _sh.items():
+                if isinstance(_sh_data, dict) and _sh_data.get("direction") in ("LONG", "SHORT"):
+                    _tp_info = TRADING_PAIRS.get(_pair_key)
+                    if _tp_info:
+                        _sym = _tp_info["symbol"]
+                        if _sym not in _prev_flow_direction:
+                            _prev_flow_direction[_sym] = _sh_data["direction"]
+                            _seeded += 1
+                            _seeded_from_sh += 1
+                            logger.info(f"  [FLOW-SEED] {_pair_key}: seeded = {_sh_data['direction']} from signal_history")
+            if _seeded:
+                logger.info(f"  [FLOW-SEED] Seeded {_seeded} pair(s): {_seeded_from_pos} from positions, {_seeded_from_rl} from RL, {_seeded_from_sh} from signal_history")
         except Exception as _seed_err:
-            logger.debug(f"FLOW seed refresh error: {_seed_err}")
+            logger.warning(f"FLOW seed refresh error: {_seed_err}")
 
         # V3.1.19: LIQUIDATION PROTECTION
         # Safety thresholds based on ACTUAL equity from WEEX
