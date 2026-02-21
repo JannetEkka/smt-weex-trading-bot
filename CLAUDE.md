@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.70** — all production code is in `v3/`.
+**Current version: V3.2.71** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -432,10 +432,16 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.70. Next change should be V3.2.71.
+Current: V3.2.71. Next change should be V3.2.72.
 
 **Recent version history:**
-- V3.2.70: (**CURRENT**) R:R UNLOCK — fixes TP ceiling vs R:R guard deadlock that blocked 4/7 pairs.
+- V3.2.71: (**CURRENT**) EXTRA SLOT DISABLED — 90%+ `CONFIDENCE_EXTRA_SLOT` bypass removed.
+  2-slot hard cap is now absolute. The bypass was supposed to be disabled in V3.2.46 but
+  the code was never removed — only commented. At $2-3K equity, a 3rd slot leaves ~$580
+  margin buffer which is margin call territory on any adverse spike.
+  Proper 3rd slot will be added when equity reaches $5K+ (with correct sizing).
+  `PIPELINE_VERSION = "SMT-v3.2.71-DisableExtraSlot-HardCap2"`.
+- V3.2.70: R:R UNLOCK — fixes TP ceiling vs R:R guard deadlock that blocked 4/7 pairs.
   `MIN_VIABLE_TP_PCT` raised 0.30%→0.50%: forces TP walk past 2H micro-bounce levels (0.30-0.45%)
   to the 4H structural anchor where real resistance lives (0.50-1.0%).
   Previously the 2H anchor at ~0.37% passed MIN_VIABLE (0.30%), the walk stopped, but then

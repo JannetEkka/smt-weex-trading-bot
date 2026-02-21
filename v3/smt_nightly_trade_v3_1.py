@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.70-RRUnlock-MinViable50-RR33"
+PIPELINE_VERSION = "SMT-v3.2.71-DisableExtraSlot-HardCap2"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes

@@ -727,9 +727,10 @@ def check_trading_signals():
         # V3.1.53: Confidence override constants (restored)
         CONFIDENCE_OVERRIDE_THRESHOLD = 0.85
         MAX_CONFIDENCE_SLOTS = 0  # V3.1.64a: DISABLED - hard cap is absolute
-        CONFIDENCE_EXTRA_SLOT = 0.90  # V3.2.39: 90%+ signals may open 5th slot when all 4 full
-        # V3.2.46: With 1-slot cross-margin strategy, disable extra slot bypass entirely.
-        # Full account is buffer for one 20x trade — no concurrent positions.
+        # CONFIDENCE_EXTRA_SLOT — DISABLED V3.2.71: was bypassing 2-slot cap at 90%+.
+        # At $2-3K equity, 3rd slot leaves ~$580 margin buffer = margin call risk.
+        # Proper 3rd slot at $5K+ equity, not via bypass hack.
+        CONFIDENCE_EXTRA_SLOT = None
 
         # V3.2.46: 1-slot hard cap — cross margin = full account as buffer for single trade
         can_open_new = not low_equity_mode and available_slots > 0
@@ -1510,11 +1511,9 @@ def check_trading_signals():
                 # Signals are collected during analysis regardless of can_open_new,
                 # but slot availability is enforced HERE with fresh position data.
                 if trade_type == "new" and available_slots <= 0:
-                    if confidence >= CONFIDENCE_EXTRA_SLOT and not low_equity_mode:
-                        logger.info(f"  90%+ EXTRA SLOT: {pair} {signal} {confidence:.0%} — bypassing slot cap")
-                    else:
-                        logger.info(f"  SLOT BLOCKED: {pair} {signal} {confidence:.0%} — {available_slots} slots, need 90%+ for extra")
-                        continue
+                    # V3.2.71: Extra slot bypass DISABLED — hard cap is absolute.
+                    logger.info(f"  SLOT BLOCKED: {pair} {signal} {confidence:.0%} — {available_slots} slots available (hard cap)")
+                    continue
 
                 logger.info(f"")
                 type_label = "[FLIP] " if trade_type == "flip" else ""
@@ -3771,7 +3770,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.70 - R:R UNLOCK: MIN_VIABLE 0.30%%→0.50%% (walk to 4H), R:R 0.5→0.33 (unblocks BTC/ETH/BNB/LTC at 1.5%% SL)")
+    logger.info("SMT Daemon V3.2.71 - EXTRA SLOT DISABLED: 90%%+ bypass removed, 2-slot hard cap absolute. Proper 3rd slot at $5K+ equity.")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3849,6 +3848,8 @@ def run_daemon():
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
     logger.info("  V3.2.70: R:R UNLOCK — MIN_VIABLE_TP_PCT 0.30%%→0.50%% (forces walk past 2H micro-bounce to 4H structural anchor). MIN_RR_RATIO 0.5→0.33 (unblocks BTC/ETH/BNB/LTC when SL at 1.5%% cap). Break-even 82.3%% win rate, 85%% floor covers. Fixes: TP ceiling vs R:R deadlock that blocked 4/7 pairs.")
+    logger.info("  V3.2.71: EXTRA SLOT DISABLED — 90%%+ CONFIDENCE_EXTRA_SLOT bypass removed. 2-slot hard cap is now absolute. At $2-3K equity, 3rd slot left ~$580 margin buffer = margin call risk. Proper 3rd slot when equity reaches $5K+.")
+    logger.info("  V3.2.70: R:R UNLOCK — MIN_VIABLE 0.30%%→0.50%% (walk to 4H), R:R 0.5→0.33 (unblocks BTC/ETH/BNB/LTC at 1.5%% SL).")
     logger.info("  V3.2.69: RANGE GATE 2H OVERRIDE — 12H range gate (55/45) now bypassed when TECHNICAL's 2H range confirms genuine dip (<30%%) or peak (>70%%). Fixes: BNB 90%% blocked at 12H=77%%/2H=11%%, SOL 85%% blocked at 12H=57%%/2H=7%%. Short-term dips in uptrends are valid entries.")
     logger.info("  V3.2.68: DIP DETECTION OVERHAUL — TECHNICAL: 5m RSI(14)+VWAP+30m momentum+volume spike(2x)+entry velocity(0.20%%/15m). FLOW: flip at dip/peak=+15%% boost (was 50%% discount). Range gate 55/45. TP haircut 90%%. 8-EMA snap-back EXIT in daemon (mean-reversion close). Judge: 2-persona dip rule, flip protocol.")
     logger.info("  V3.2.67: VELOCITY EXIT TIERED (T1=75m, T2=60m, T3=50m, was flat 40m — bounces need 60-90min). Peak threshold 0.15%%→0.10%%. ADX gate softened (5, not 10). Weekend restriction DISABLED (all 7 pairs). Signal persistence tracks ADX-gated signals.")
