@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.80-EventsToSentiment"
+PIPELINE_VERSION = "SMT-v3.2.81-TakerVolumeFloor-FlowStability"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3052,23 +3052,38 @@ class FlowPersona:
             is_bearish = regime.get("regime") == "BEARISH" or regime.get("btc_24h", 0) < -0.3
 
             depth = self._get_order_book_depth(symbol)
-            taker_ratio = self._get_taker_ratio(symbol)
+            taker_ratio, _taker_buy_vol, _taker_sell_vol = self._get_taker_ratio(symbol)
             funding = self._get_funding_rate(symbol)
-            
+
+            # V3.2.81: TAKER VOLUME FLOOR — if minority side is < 3% of total,
+            # the ratio is noise (one large order, not sustained flow).
+            # SOL case: Buy=0.8, Sell=545.9 → minority/total = 0.15% = pure noise
+            # gave EXTREME SHORT 95% and caused a bad entry that never went positive.
+            # When volume is too thin, cap extreme/heavy classifications.
+            _TAKER_MINORITY_FLOOR = 0.03  # 3% — minority side must be >= 3% of total
+            _taker_total = _taker_buy_vol + _taker_sell_vol
+            _taker_minority = min(_taker_buy_vol, _taker_sell_vol) if _taker_total > 0 else 0
+            _taker_minority_pct = _taker_minority / _taker_total if _taker_total > 0 else 0.5
+            _taker_vol_noise = _taker_minority_pct < _TAKER_MINORITY_FLOOR and _taker_total > 0
+            if _taker_vol_noise:
+                print(f"  [FLOW] VOLUME FLOOR: minority side {_taker_minority:.2f} = {_taker_minority_pct:.1%} of total — below {_TAKER_MINORITY_FLOOR:.0%} threshold, capping confidence (V3.2.81)")
+
             signals = []
             
             # V3.1.17: TAKER VOLUME IS KING
             # Extreme taker selling (< 0.3) = IGNORE ALL BIDS, they are fake/exit liquidity
             # Heavy taker selling (< 0.5) = Taker signal 3x weight of depth
             
-            extreme_selling = taker_ratio < 0.3
-            heavy_selling = taker_ratio < 0.5
-            extreme_buying = taker_ratio > 3.0
-            heavy_buying = taker_ratio > 2.0
-            
+            # V3.2.81: Volume floor degrades extreme/heavy when minority side is noise
+            extreme_selling = taker_ratio < 0.3 and not _taker_vol_noise
+            heavy_selling = taker_ratio < 0.5 and not _taker_vol_noise
+            extreme_buying = taker_ratio > 3.0 and not _taker_vol_noise
+            heavy_buying = taker_ratio > 2.0 and not _taker_vol_noise
+
             # Log for debugging
-            print(f"  [FLOW] Taker ratio: {taker_ratio:.2f} | Extreme sell: {extreme_selling} | Heavy sell: {heavy_selling}")
-            
+            _noise_tag = " | VOL NOISE" if _taker_vol_noise else ""
+            print(f"  [FLOW] Taker ratio: {taker_ratio:.2f} | Extreme sell: {extreme_selling} | Heavy sell: {heavy_selling}{_noise_tag}")
+
             # V3.1.96: REMOVED F&G cap on FLOW signals. The ensemble already handles
             # extreme F&G via REGIME contrarian bias + Judge context. Capping FLOW
             # before the Judge sees it weakens legitimate signals (e.g. ETH 85%->55%).
@@ -3244,25 +3259,26 @@ class FlowPersona:
             print(f"  [FLOW] Depth error: {e}")
             return {"bid_strength": 1.0, "ask_strength": 1.0, "nearest_ask_wall": None, "nearest_bid_wall": None}
     
-    def _get_taker_ratio(self, symbol: str) -> float:
+    def _get_taker_ratio(self, symbol: str) -> tuple:
+        """Returns (ratio, buyer_vol, seller_vol). V3.2.81: tuple for volume floor check."""
         try:
             url = f"{WEEX_BASE_URL}/capi/v2/market/trades?symbol={symbol}&limit=100"
             r = requests.get(url, timeout=10)
             data = r.json()
-            
+
             if isinstance(data, list) and len(data) > 0:
                 # WEEX uses isBuyerMaker: true = seller was taker, false = buyer was taker
                 buyer_taker_vol = sum(float(t.get("size", 0)) for t in data if not t.get("isBuyerMaker", True))
                 seller_taker_vol = sum(float(t.get("size", 0)) for t in data if t.get("isBuyerMaker", False))
-                
+
                 total = buyer_taker_vol + seller_taker_vol
                 if total > 0:
                     ratio = buyer_taker_vol / seller_taker_vol if seller_taker_vol > 0 else 2.0
                     print(f"  [FLOW] Taker - Buy: {buyer_taker_vol:.4f}, Sell: {seller_taker_vol:.4f}, Ratio: {ratio:.2f}")
-                    return ratio
+                    return (ratio, buyer_taker_vol, seller_taker_vol)
         except Exception as e:
             print(f"  [FLOW] Taker error: {e}")
-        return 1.0
+        return (1.0, 0.0, 0.0)
     
     def _get_funding_rate(self, symbol: str) -> float:
         try:

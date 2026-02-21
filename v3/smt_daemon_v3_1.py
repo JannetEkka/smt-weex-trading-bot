@@ -1631,6 +1631,26 @@ def check_trading_signals():
                     else:
                         logger.info(f"  FLOW GATE: {opportunity['pair']} {_trade_signal} — FLOW confirms {_flow_signal} {_flow_conf:.0%}")
 
+                # V3.2.81: FLOW STABILITY GATE — require 2-cycle confirmation after a flip.
+                # If signal_history shows this signal just flipped direction (count=1, prev_direction
+                # was opposite), block execution until the signal confirms on the next cycle.
+                # Fixes: SOL FLOW went LONG 85% → SHORT 95% → LONG 85% in 48 min. The SHORT entry
+                # at cycle 2 was based on a single-snapshot noise spike (Buy=0.8 SOL = $68) that reversed
+                # immediately. Requiring 2 cycles would have caught the flip-back before executing.
+                _sh_data = tracker.signal_history.get(opportunity['pair'], {})
+                _sh_count = _sh_data.get("count", 0)
+                _sh_prev = _sh_data.get("prev_direction")
+                _sh_dir = _sh_data.get("direction")
+                if _sh_count == 1 and _sh_prev and _sh_prev != _sh_dir:
+                    logger.info(f"  FLOW STABILITY: {opportunity['pair']} {opportunity['decision']['decision']} blocked — fresh flip (was {_sh_prev}, now {_sh_dir}), need 1 more cycle to confirm")
+                    upload_ai_log_to_weex(
+                        stage=f"Flow Stability: {opportunity['pair']} {opportunity['decision']['decision']} blocked",
+                        input_data={"pair": opportunity["pair"], "signal": opportunity["decision"]["decision"], "prev_dir": _sh_prev, "new_dir": _sh_dir, "count": _sh_count},
+                        output_data={"action": "FLOW_STABILITY_BLOCKED"},
+                        explanation=f"V3.2.81 FLOW stability gate blocked {opportunity['pair']} {opportunity['decision']['decision']}. Signal just flipped from {_sh_prev} to {_sh_dir} (count=1). Require 2 consecutive cycles of same direction to confirm genuine reversal, not transient noise."[:1000]
+                    )
+                    continue
+
                 # V3.1.75: REGIME VETO + F&G SANITY CHECK
                 # Rule 1: F&G < 15 = CAPITULATION = LONG ONLY (no shorts into bounces)
                 # Rule 2: F&G > 85 = EUPHORIA = SHORT ONLY (no longs into tops)
@@ -2259,9 +2279,15 @@ def monitor_positions():
                                 _fc_buy = sum(float(t.get("size", 0)) for t in _fc_data if not t.get("isBuyerMaker", True))
                                 _fc_sell = sum(float(t.get("size", 0)) for t in _fc_data if t.get("isBuyerMaker", False))
                                 _fc_ratio = _fc_buy / _fc_sell if _fc_sell > 0 else 2.0
+                                # V3.2.81: Volume floor — don't trust extreme ratio when minority side < 3% of total
+                                _fc_total = _fc_buy + _fc_sell
+                                _fc_minority = min(_fc_buy, _fc_sell) if _fc_total > 0 else 0
+                                _fc_vol_noise = (_fc_minority / _fc_total < 0.03) if _fc_total > 0 else False
+                                if _fc_vol_noise:
+                                    logger.debug(f"  [FLOW-CONTRA] {symbol}: volume floor — minority {_fc_minority:.2f} < 3% of total, skipping")
                                 # LONG + extreme selling (ratio < 0.15) = thesis dead
                                 # SHORT + extreme buying (ratio > 7.0) = thesis dead
-                                if (_fc_side == "LONG" and _fc_ratio < 0.15) or \
+                                elif (_fc_side == "LONG" and _fc_ratio < 0.15) or \
                                    (_fc_side == "SHORT" and _fc_ratio > 7.0):
                                     should_exit = True
                                     exit_reason = f"flow_contra_exit ({_fc_side}, taker_ratio={_fc_ratio:.2f}, pnl={pnl_pct:.2f}%, age={_fc_age_min:.0f}m, T{tier} limit={_fc_vel_limit}m)"
@@ -4002,7 +4028,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.80 - EVENTS TO SENTIMENT")
+    logger.info("SMT Daemon V3.2.81 - TAKER VOLUME FLOOR + FLOW STABILITY")
     logger.info("=" * 60)
     # --- Tier table ---
     logger.info("TIER CONFIG:")
@@ -4015,11 +4041,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.80: EVENTS TO SENTIMENT — Macro event scanner results now fed to SENTIMENT persona instead of raw dump to Judge. SENTIMENT synthesizes events with its own search findings. Judge prompt cleaner (one fewer raw section).")
-    logger.info("  V3.2.79: ORPHAN VERIFY LOOP — Pre-trade cancel now verify-and-retry: queries /currentPlan after cancel, re-cancels any surviving orphan plan orders up to 3x. Logs every order/plan with IDs, trigger prices, types. Fixes TP mismatch from cancel race condition.")
+    logger.info("  V3.2.81: TAKER VOLUME FLOOR + FLOW STABILITY — (1) Minority side < 3%% of total taker volume = noise, extreme/heavy classification suppressed. Fixes SOL Buy=0.8/$68 → fake EXTREME SHORT 95%%. (2) Fresh signal flips (count=1, prev_direction opposite) blocked until 2nd consecutive cycle confirms. Prevents entering on transient FLOW spikes.")
+    logger.info("  V3.2.80: EVENTS TO SENTIMENT — Macro event scanner results now fed to SENTIMENT persona instead of raw dump to Judge.")
+    logger.info("  V3.2.79: ORPHAN VERIFY LOOP — Pre-trade cancel now verify-and-retry: queries /currentPlan after cancel, re-cancels any surviving orphan plan orders up to 3x.")
     logger.info("  V3.2.78: OPPOSITE SWAP RANGE PRE-CHECK — Range gate checked BEFORE closing existing position for opposite swap.")
     logger.info("  V3.2.77: TECHNICAL MOMENTUM CONFLICT — Momentum/velocity signals gated on 1h momentum. Momentum conflict cap at 65%%.")
-    logger.info("  V3.2.76: NEAR-TP GRACE + THESIS EXIT — max_hold grace at 60%%+ toward TP. Judge thesis exit on WAIT.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
