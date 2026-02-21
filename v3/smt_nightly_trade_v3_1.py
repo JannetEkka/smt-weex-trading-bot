@@ -3997,7 +3997,7 @@ SIGNAL RELIABILITY (V3.2.59 — ALL PERSONAS MATTER):
     4. TECHNICAL (RSI/SMA/momentum) -- trend confirmation. In fear markets (F&G < 30), discount if it conflicts
        with FLOW, as SMA signals lag. But when TECHNICAL aligns with FLOW + SENTIMENT, it strengthens conviction.
 
-HOW TO DECIDE (V3.2.60 — MAJORITY VOTE, NO F&G OVERRIDES):
+HOW TO DECIDE (V3.2.68 — DIP-AWARE MAJORITY VOTE):
 Count how many personas agree on direction. F&G is CONTEXT, not a vote — never use it to inflate confidence.
 - 3+ personas agree LONG at 60%+ each: 85-90% confidence. This is the strong setup.
 - 3+ personas agree but some weakly (50-60%): 80-85% confidence. Borderline — only trade if no conflicting strong signal.
@@ -4009,6 +4009,16 @@ Count how many personas agree on direction. F&G is CONTEXT, not a vote — never
 - FLOW and WHALE both strong (>70%) in OPPOSITE directions: WAIT (genuine conflict).
 - No persona exceeds 50% confidence: WAIT (no conviction anywhere).
 CONFIDENCE 90%+ REQUIRES: 3+ personas at 65%+ each, all agreeing. Never give 90% with only 2 weak agreements.
+
+=== DIP-BOUNCE SPECIAL RULE (V3.2.68) ===
+WHALE and SENTIMENT are structurally blind to real-time dips. WHALE reflects backward-looking community fear. SENTIMENT scans qualitative news, not price action. Requiring 3+ personas for 85% is IMPOSSIBLE on dips because only FLOW and TECHNICAL can see them.
+THEREFORE: When ALL of these conditions are true:
+  1. FLOW >= 65% AND shows a direction FLIP (see signal history ★ FLIPPED tag or reasoning "[FLIP ... DIP/PEAK SIGNAL]")
+  2. TECHNICAL >= 50% in the same direction (5m RSI confirms oversold/overbought)
+  3. Price is in the lower 45% of 12H range (for LONG) or upper 55% (for SHORT) — shown in chart context
+  4. WHALE and SENTIMENT are NEUTRAL (not actively opposing)
+→ 2-PERSONA AGREEMENT IS SUFFICIENT FOR 85% CONFIDENCE. Output 85-90%.
+This is the dip-bounce pattern. FLOW flip + TECHNICAL oversold + price at range extreme = the trade. WHALE/SENTIMENT neutrality is EXPECTED, not a contra-indicator.
 
 VOLATILITY RISK (from SENTIMENT):
 - HIGH_RISK means a scheduled event COULD cause volatility. It does NOT mean "don't trade."
@@ -4393,9 +4403,17 @@ class MultiPersonaAnalyzer:
         tier_config = get_tier_config(tier)
         
         print(f"\n  === Multi-Persona Analysis: {pair} (Tier {tier}: {tier_config['name']}) ===")
-        
+
+        # V3.2.68 FIX: Populate chart range cache BEFORE persona analysis.
+        # The FLOW flip boost needs _chart_range_position_cache to determine if a flip
+        # is at a dip/peak. Previously this cache was only populated inside judge.decide()
+        # (step 5), but FLOW runs at step 3 — so the cache was empty/stale.
+        # get_chart_context() is cached for 10 min, so this call is free if already fetched.
+        symbol = pair_info.get("symbol", f"cmt_{pair.lower()}usdt")
+        get_chart_context(symbol, tier)
+
         votes = []
-        
+
         # 1. Whale Persona (V3.1.45: ALL pairs via Cryptoracle, BTC/ETH also use Etherscan)
         print(f"  [WHALE] Analyzing...")
         whale_vote = self.whale.analyze(pair, pair_info)
@@ -4444,7 +4462,10 @@ class MultiPersonaAnalyzer:
 
             if _dip_aligned:
                 # BOOST: flip at dip/peak = the signal we're looking for
-                _boost = min(0.85, round(flow_vote["confidence"] + 0.15, 2))
+                # V3.2.68 FIX: Cap at 0.95 not 0.85. FLOW is already hard-capped at 0.85 inside
+                # FlowPersona (line ~3130). min(0.85, 0.85+0.15) = 0.85 = boost does NOTHING.
+                # 0.95 cap lets the boost actually add value. Judge still makes final decision.
+                _boost = min(0.95, round(flow_vote["confidence"] + 0.15, 2))
                 print(f"  [FLOW] DIP/PEAK FLIP BOOST: {_flow_prev}->{_flow_dir} at range {_range_pos_flow:.0f}% — conf {flow_vote['confidence']:.0%} → {_boost:.0%} (V3.2.68)")
                 flow_vote = dict(flow_vote)
                 flow_vote["confidence"] = _boost
