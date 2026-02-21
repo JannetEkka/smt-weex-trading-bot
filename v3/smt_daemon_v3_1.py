@@ -1249,7 +1249,6 @@ def check_trading_signals():
                             trade_type = "opposite"
                             _flip_tag = "EMERGENCY FLIP" if confidence >= EMERGENCY_FLIP_CONFIDENCE else "OPPOSITE"
                             logger.info(f"    -> {_flip_tag}: SHORT {confidence:.0%} vs LONG. Closing LONG, opening SHORT")
-                            )
                     else:
                         # V3.2.59: Always collect 85%+ signals — slot check deferred to execution
                         if can_open_new or confidence >= MIN_CONFIDENCE_TO_TRADE:
