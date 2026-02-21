@@ -1483,7 +1483,38 @@ def check_trading_signals():
                     continue
                 else:
                     logger.info(f"SESSION [{session_name}]: {utc_hour}:00 UTC, {opp_confidence:.0%} >= {session_min_conf:.0%}, proceeding {opportunity['pair']}")
-                
+
+                # V3.2.72: FLOW CONFIDENCE GATE — require real-time orderbook confirmation.
+                # FLOW is the ONLY persona with real-time price/orderbook data. WHALE is backward-looking
+                # (hours-old on-chain transfers), SENTIMENT is narrative (news headlines), and TECHNICAL
+                # can be stale in fast moves. Without FLOW confirmation, the Judge can reach 85-90%
+                # on stale/narrative data alone (e.g., ETH LONG 90% with FLOW at 46% — zero momentum).
+                # Gate: FLOW must be >= 60% in the SAME direction as the trade signal.
+                # This blocks: WHALE+SENTIMENT+weak FLOW = high confidence with no real-time confirmation.
+                # This allows: FLOW 60%+ plus any other persona = real orderbook pressure confirmed.
+                MIN_FLOW_CONFIDENCE_GATE = 0.60  # FLOW must be at least 60% in signal direction
+                _flow_vote = None
+                for _pv in opportunity.get("decision", {}).get("persona_votes", []):
+                    if _pv.get("persona") == "FLOW":
+                        _flow_vote = _pv
+                        break
+                if _flow_vote:
+                    _flow_signal = _flow_vote.get("signal", "NEUTRAL")
+                    _flow_conf = _flow_vote.get("confidence", 0)
+                    _trade_signal = opportunity["decision"]["decision"]
+                    _flow_aligned = (_flow_signal == _trade_signal) and (_flow_conf >= MIN_FLOW_CONFIDENCE_GATE)
+                    if not _flow_aligned:
+                        logger.info(f"  FLOW GATE: {opportunity['pair']} {_trade_signal} blocked — FLOW is {_flow_signal} {_flow_conf:.0%} (need {_trade_signal} >= {MIN_FLOW_CONFIDENCE_GATE:.0%})")
+                        upload_ai_log_to_weex(
+                            stage=f"Flow Gate: {opportunity['pair']} {_trade_signal} blocked",
+                            input_data={"pair": opportunity["pair"], "signal": _trade_signal, "flow_signal": _flow_signal, "flow_conf": _flow_conf},
+                            output_data={"action": "FLOW_GATE_BLOCKED", "min_flow": MIN_FLOW_CONFIDENCE_GATE},
+                            explanation=f"V3.2.72 FLOW gate blocked {opportunity['pair']} {_trade_signal}. FLOW ({_flow_signal} {_flow_conf:.0%}) does not confirm trade direction at >= {MIN_FLOW_CONFIDENCE_GATE:.0%}. Without real-time orderbook confirmation, high confidence may be based on stale/narrative data."[:1000]
+                        )
+                        continue
+                    else:
+                        logger.info(f"  FLOW GATE: {opportunity['pair']} {_trade_signal} — FLOW confirms {_flow_signal} {_flow_conf:.0%}")
+
                 # V3.1.75: REGIME VETO + F&G SANITY CHECK
                 # Rule 1: F&G < 15 = CAPITULATION = LONG ONLY (no shorts into bounces)
                 # Rule 2: F&G > 85 = EUPHORIA = SHORT ONLY (no longs into tops)
@@ -2057,10 +2088,16 @@ def monitor_positions():
                 # instead of waiting for a fixed TP that may be too far.
                 # Only fires when: (1) trade is >= 10 min old, (2) peak was meaningful (>= 0.20%),
                 # (3) NOT already covered by breakeven SL (BE-SL handles the >= 0.40% case).
+                # V3.2.72: (4) trade must have GIVEN BACK >= 50% of peak profit (real reversal, not EMA convergence).
+                # Without this, trending trades get killed when the 8-EMA catches up to price in a steady move.
+                # LTC SHORT V3.2.71 bug: exited at +0.24% while price was actively declining — EMA converged
+                # to within $0.006 of price, triggering "snap-back" on noise, not an actual reversal.
                 # Zero cooldown (profit was taken).
+                EMA_SNAPBACK_GIVEBACK_PCT = 0.50  # Must give back 50% of peak before snapback fires
                 if not should_exit and not trade.get("sl_moved_to_breakeven", False):
                     _ema_age_min = hours_open * 60
-                    if _ema_age_min >= 10 and peak_pnl_pct >= 0.20 and pnl_pct > 0:
+                    _giveback_ok = peak_pnl_pct > 0 and pnl_pct <= peak_pnl_pct * (1.0 - EMA_SNAPBACK_GIVEBACK_PCT)
+                    if _ema_age_min >= 10 and peak_pnl_pct >= 0.20 and pnl_pct > 0 and _giveback_ok:
                         try:
                             _ema_url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={real_symbol}&granularity=5m&limit=10"
                             _ema_r = requests.get(_ema_url, timeout=8)
@@ -2088,8 +2125,12 @@ def monitor_positions():
                                         _snapped_back = True
                                 if _snapped_back:
                                     should_exit = True
-                                    exit_reason = f"ema_snapback ({_side}, price={_live_price:.4f} crossed 8-EMA={_ema_val:.4f}, pnl={pnl_pct:+.2f}%, peak={peak_pnl_pct:.2f}%)"
+                                    exit_reason = f"ema_snapback ({_side}, price={_live_price:.4f} crossed 8-EMA={_ema_val:.4f}, pnl={pnl_pct:+.2f}%, peak={peak_pnl_pct:.2f}%, giveback={((peak_pnl_pct - pnl_pct)/peak_pnl_pct*100) if peak_pnl_pct > 0 else 0:.0f}%)"
                                     logger.info(f"  [EMA-SNAP] {symbol}: {exit_reason}")
+                                elif _side == "LONG" and _live_price >= _ema_val or _side == "SHORT" and _live_price <= _ema_val:
+                                    # V3.2.72: EMA cross detected but giveback insufficient — log it
+                                    _gb_pct = ((peak_pnl_pct - pnl_pct) / peak_pnl_pct * 100) if peak_pnl_pct > 0 else 0
+                                    logger.info(f"  [EMA-SNAP] {symbol}: EMA cross but giveback {_gb_pct:.0f}% < {EMA_SNAPBACK_GIVEBACK_PCT*100:.0f}% — trade still trending (pnl={pnl_pct:+.2f}%, peak={peak_pnl_pct:.2f}%)")
                         except Exception as _ema_err:
                             logger.debug(f"  [EMA-SNAP] {symbol}: check failed: {_ema_err}")
 
@@ -3770,7 +3811,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.71 - EXTRA SLOT DISABLED: 90%%+ bypass removed, 2-slot hard cap absolute. Proper 3rd slot at $5K+ equity.")
+    logger.info("SMT Daemon V3.2.72 - FLOW GATE + EMA FIX: FLOW >= 60%% required (blocks stale/narrative signals). EMA snapback needs 50%% giveback from peak (stops killing trending trades).")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3847,8 +3888,8 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.70: R:R UNLOCK — MIN_VIABLE_TP_PCT 0.30%%→0.50%% (forces walk past 2H micro-bounce to 4H structural anchor). MIN_RR_RATIO 0.5→0.33 (unblocks BTC/ETH/BNB/LTC when SL at 1.5%% cap). Break-even 82.3%% win rate, 85%% floor covers. Fixes: TP ceiling vs R:R deadlock that blocked 4/7 pairs.")
-    logger.info("  V3.2.71: EXTRA SLOT DISABLED — 90%%+ CONFIDENCE_EXTRA_SLOT bypass removed. 2-slot hard cap is now absolute. At $2-3K equity, 3rd slot left ~$580 margin buffer = margin call risk. Proper 3rd slot when equity reaches $5K+.")
+    logger.info("  V3.2.72: FLOW GATE + EMA FIX — (1) FLOW >= 60%% gate: blocks trades where FLOW doesn't confirm direction (kills stale WHALE+SENTIMENT-only signals like ETH 90%% with FLOW 46%%). (2) EMA snapback giveback: requires 50%% peak giveback before firing (stops killing trending trades on EMA convergence, e.g. LTC SHORT +0.24%% actively climbing).")
+    logger.info("  V3.2.71: EXTRA SLOT DISABLED — 90%%+ CONFIDENCE_EXTRA_SLOT bypass removed. 2-slot hard cap absolute.")
     logger.info("  V3.2.70: R:R UNLOCK — MIN_VIABLE 0.30%%→0.50%% (walk to 4H), R:R 0.5→0.33 (unblocks BTC/ETH/BNB/LTC at 1.5%% SL).")
     logger.info("  V3.2.69: RANGE GATE 2H OVERRIDE — 12H range gate (55/45) now bypassed when TECHNICAL's 2H range confirms genuine dip (<30%%) or peak (>70%%). Fixes: BNB 90%% blocked at 12H=77%%/2H=11%%, SOL 85%% blocked at 12H=57%%/2H=7%%. Short-term dips in uptrends are valid entries.")
     logger.info("  V3.2.68: DIP DETECTION OVERHAUL — TECHNICAL: 5m RSI(14)+VWAP+30m momentum+volume spike(2x)+entry velocity(0.20%%/15m). FLOW: flip at dip/peak=+15%% boost (was 50%% discount). Range gate 55/45. TP haircut 90%%. 8-EMA snap-back EXIT in daemon (mean-reversion close). Judge: 2-persona dip rule, flip protocol.")

@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.71** — all production code is in `v3/`.
+**Current version: V3.2.72** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -426,16 +426,29 @@ python3 v3/cryptoracle_client.py
 28. **FLOW flip boost cap (V3.2.68)** — Flip boost cap is 0.95 (not 0.85). FLOW's internal cap is 0.85, but the flip boost in `MultiPersonaAnalyzer.analyze()` raises this to `min(0.95, conf + 0.15)`. Do not lower the cap back to 0.85 — that makes the boost a no-op.
 29. **Judge 2-persona dip rule (V3.2.68)** — When FLOW flip + TECHNICAL oversold + range extreme + WHALE/SENT neutral, 2 personas are sufficient for 85% confidence. Do not re-add the 3-persona requirement for dip scenarios — WHALE (backward-looking) and SENTIMENT (qualitative) are structurally blind to real-time 30-60 min dips.
 30. **Range gate 2H override (V3.2.69)** — The 12H range gate (55/45) is bypassed when TECHNICAL's 2H range_pos < 30% (LONG) or > 70% (SHORT). This is critical for dip-bounce entries in uptrends where the 12H range says "upper half" but a genuine 1-2H dip just happened. Do not remove the override — it fixes the most common trade-blocking scenario observed in V3.2.68 (5 trades blocked in 2 cycles). The 30%/70% thresholds are intentionally conservative (not 50/50) to ensure only genuine dips/peaks override.
+31. **FLOW confidence gate (V3.2.72)** — `MIN_FLOW_CONFIDENCE_GATE = 0.60`. FLOW must be >= 60% in the same direction as the trade signal before execution. Without this, Judge can reach 85-90% on stale WHALE (hours-old on-chain) + narrative SENTIMENT (news headlines) alone, with FLOW at 46% (zero orderbook confirmation). FLOW is the only persona with real-time data. Do not lower below 60% — that's barely above coin-flip and means the orderbook shows essentially nothing.
+32. **EMA snapback giveback (V3.2.72)** — `EMA_SNAPBACK_GIVEBACK_PCT = 0.50`. EMA snap-back exit requires 50% giveback from peak before firing. In trending moves, the 8-EMA on 5m candles converges toward price — any tiny pause triggers a false "cross" even though the trade is still moving in the right direction. LTC SHORT was at +0.24% and actively climbing when the EMA caught up to within $0.006, killing a trade headed for 0.69% TP. The giveback ensures an actual reversal, not EMA convergence. Do not remove — without it, every steady trend gets killed at 0.20-0.39% (the kill zone between snapback arm and BE-SL placement).
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.71. Next change should be V3.2.72.
+Current: V3.2.72. Next change should be V3.2.73.
 
 **Recent version history:**
-- V3.2.71: (**CURRENT**) EXTRA SLOT DISABLED — 90%+ `CONFIDENCE_EXTRA_SLOT` bypass removed.
+- V3.2.72: (**CURRENT**) FLOW GATE + EMA SNAPBACK FIX — two quality-of-signal improvements.
+  (1) FLOW CONFIDENCE GATE: `MIN_FLOW_CONFIDENCE_GATE = 0.60`. FLOW persona must be >= 60% in
+  the same direction as the trade signal. Blocks trades built on stale/narrative data alone
+  (e.g., ETH LONG 90% with FLOW at 46% — WHALE+SENTIMENT narrative produced high confidence
+  with zero real-time orderbook confirmation). FLOW is the only persona with live orderbook data.
+  (2) EMA SNAPBACK GIVEBACK: `EMA_SNAPBACK_GIVEBACK_PCT = 0.50`. EMA snap-back exit now requires
+  the trade to have given back >= 50% of peak profit before firing. Fixes: LTC SHORT at +0.24%
+  was actively climbing (price declining) when the 8-EMA converged to within $0.006 of price,
+  triggering a false "snap-back" on noise. The trade was trending, not reversing — the EMA was
+  simply catching up in a steady move. TP was at 0.69% — left 0.45% on the table.
+  `PIPELINE_VERSION = "SMT-v3.2.72-FlowGate60-EMAGiveback50"`.
+- V3.2.71: EXTRA SLOT DISABLED — 90%+ `CONFIDENCE_EXTRA_SLOT` bypass removed.
   2-slot hard cap is now absolute. The bypass was supposed to be disabled in V3.2.46 but
   the code was never removed — only commented. At $2-3K equity, a 3rd slot leaves ~$580
   margin buffer which is margin call territory on any adverse spike.
