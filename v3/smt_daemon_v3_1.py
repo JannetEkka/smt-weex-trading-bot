@@ -1352,7 +1352,15 @@ def check_trading_signals():
                 # Gates: (1) past early_exit_hours, (2) PnL below BE-SL trigger (0.4%),
                 # (3) BE-SL not placed (WEEX handles those). Uses structured decision enum only,
                 # NO string parsing (avoids the ANTI-WAIT V3.2.37 disaster).
-                if signal == "WAIT" and (has_long or has_short):
+                # V3.2.84: Skip thesis exit when WAIT was caused by "already have same direction".
+                # Judge said LONG 89% but daemon converted to WAIT because position already exists.
+                # That's thesis CONFIRMATION, not degradation. LTC was closed at +$22.8 profit because
+                # thesis exit couldn't tell the difference. same_direction_hold flag preserves raw Judge intent.
+                if decision.get("same_direction_hold"):
+                    _raw_d = decision.get("judge_raw_decision", "?")
+                    _raw_c = decision.get("judge_raw_confidence", 0)
+                    logger.info(f"  [THESIS] {pair}: Judge confirms {_raw_d} {_raw_c:.0%} — same direction as held position, thesis ALIVE (skip exit)")
+                if signal == "WAIT" and (has_long or has_short) and not decision.get("same_direction_hold"):
                     _td_side = "LONG" if has_long else "SHORT"
                     _td_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:{_td_side}")
                     if _td_trade and not _td_trade.get("sl_moved_to_breakeven", False):
@@ -4028,7 +4036,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.83 - FLOW SEED FROM RL DATA")
+    logger.info("SMT Daemon V3.2.84 - THESIS EXIT SAME-DIRECTION FIX")
     logger.info("=" * 60)
     # --- Tier table ---
     logger.info("TIER CONFIG:")
@@ -4041,11 +4049,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.83: FLOW SEED FROM RL DATA — 3-tier seed: (1) active positions, (2) RL training data (persistent, no expiry), (3) signal_history. Fixes XRP/SOL/ADA losing seeds on restarts due to 20-min signal_history expiry.")
-    logger.info("  V3.2.82: FLOW SEED FROM POSITIONS — Active positions as primary seed source (traded side = ground truth).")
-    logger.info("  V3.2.81: TAKER VOLUME FLOOR + FLOW STABILITY — Minority < 3%% = noise. Fresh flips blocked until 2nd cycle.")
+    logger.info("  V3.2.84: THESIS EXIT SAME-DIRECTION FIX — Judge LONG 89%% + already have LONG = thesis CONFIRMED, not degraded. Fixes LTC closed at +$22.8 profit because thesis exit couldn't tell confirmation from degradation.")
+    logger.info("  V3.2.83: FLOW SEED FROM RL DATA — 3-tier seed: positions → RL data → signal_history.")
+    logger.info("  V3.2.82: FLOW SEED FROM POSITIONS — Active positions as primary seed source.")
+    logger.info("  V3.2.81: TAKER VOLUME FLOOR + FLOW STABILITY — Minority < 3%% = noise. Fresh flips need 2 cycles.")
     logger.info("  V3.2.80: EVENTS TO SENTIMENT — Macro event scanner results fed to SENTIMENT persona.")
-    logger.info("  V3.2.79: ORPHAN VERIFY LOOP — Pre-trade cancel verify-and-retry up to 3x.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
