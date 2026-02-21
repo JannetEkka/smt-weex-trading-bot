@@ -1140,16 +1140,8 @@ def find_chart_based_tp_sl(symbol: str, signal: str, entry_price: float) -> dict
         "levels": {"resistances": [], "supports": [], "htf_resistances": [], "htf_supports": []}
     }
 
-    # V3.2.67: Lowered MIN_VIABLE_TP_PCT 0.40→0.30. Fee floor is 0.16% (0.08%×2 sides).
-    # 0.30% TP at 20x = 6% ROE gross - 3.2% fees = 2.8% net ROE. Still profitable.
-    # 0.40% was discarding viable close S/R levels, forcing walk to distant 4H/48H anchors.
-    MIN_SL_PCT = 1.0          # SL must be at least 1.0% from entry (20x = 20% margin loss min)
-    MAX_SL_PCT = 1.5          # V3.2.41: SL ceiling — cap if 4H structure requires SL > 1.5%.
-                              # 1.5% SL = 30% margin loss at 20x (survivable). Liquidation at ~4.5%.
-    MIN_VIABLE_TP_PCT = 0.30  # V3.2.67: Lowered from 0.40%. Allows closer S/R targets in tight ranges.
-    TP_HAIRCUT = 0.90         # V3.2.68: Take 90% of distance to S/R. Price often reverses 10-20%
-                              # before the exact level (limit clusters, front-running, other bots).
-                              # Applied to raw TP distance BEFORE ceiling check.
+    # V3.2.68: MIN_SL_PCT, MAX_SL_PCT, MIN_VIABLE_TP_PCT, TP_HAIRCUT are now module-level constants
+    # (defined near COMPETITION_FALLBACK_SL). Shared by find_chart_based_tp_sl() and execute_trade().
 
     try:
         # === 1H candles — primary source for both TP and SL ===
@@ -1599,6 +1591,13 @@ COMPETITION_FALLBACK_SL = {
     2: 1.2,   # Tier 2: 1.5% → 1.2%
     3: 1.5,   # Tier 3: 1.8% → 1.5%
 }
+
+# V3.2.68: Module-level TP/SL constants (promoted from find_chart_based_tp_sl() local scope).
+# Used by both find_chart_based_tp_sl() and execute_trade()'s Gemini TP override / ATR safety net.
+MIN_SL_PCT = 1.0          # SL floor: at least 1.0% from entry (20x = 20% margin loss minimum)
+MAX_SL_PCT = 1.5          # SL ceiling: cap at 1.5% (20x = 30% margin loss, survivable)
+MIN_VIABLE_TP_PCT = 0.30  # V3.2.67: skip SR levels < 0.30% from entry
+TP_HAIRCUT = 0.90         # V3.2.68: target 90% of distance to S/R level
 
 # V3.2.67: TP ceilings tightened to match ACTUAL observed swing sizes.
 # Charts show: BTC 0.74%, ETH 0.61%, BNB 0.64%, LTC 0.91%, XRP 0.99%, SOL 0.96%, ADA 1.06%
@@ -4954,7 +4953,7 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         _atr_pct_check = _atr_check.get("atr_pct", 0)
         if _atr_pct_check > 0:
             _min_atr_sl = round(_atr_pct_check * 0.8, 2)  # At least 0.8x ATR
-            _max_sl_cap = MAX_SL_PCT * 100  # 1.5% — hard ceiling
+            _max_sl_cap = MAX_SL_PCT  # 1.5 (percentage points) — hard ceiling
             _min_atr_sl = min(_min_atr_sl, _max_sl_cap)  # Never exceed ceiling
             if sl_pct_raw < _min_atr_sl:
                 print(f"  [ATR-SAFETY] SL {sl_pct_raw:.2f}% < 0.8x ATR ({_atr_pct_check * 0.8:.2f}%), widening to {_min_atr_sl:.2f}% (capped at {_max_sl_cap:.1f}%)")
@@ -5106,6 +5105,7 @@ COOLDOWN_MULTIPLIERS = {
     "profit_lock": 0.0,  # kept for TradeTracker compatibility
     "peak_fade": 0.0,
     "velocity_exit": 0.0,
+    "ema_snapback": 0.0,  # V3.2.68: mean-reversion exit, profit taken, immediate re-entry OK
     "tp_hit": 0.0,
     "regime_exit": 0.0,
     "default": 0.0,
@@ -5221,6 +5221,9 @@ class TradeTracker:
             elif "velocity_exit" in reason:
                 cd_mult = COOLDOWN_MULTIPLIERS["velocity_exit"]
                 cd_type = "VELOCITY_EXIT"
+            elif "ema_snapback" in reason:
+                cd_mult = COOLDOWN_MULTIPLIERS["ema_snapback"]
+                cd_type = "EMA_SNAPBACK"
             elif "profit_lock" in reason or "peak_fade" in reason:
                 cd_mult = COOLDOWN_MULTIPLIERS["profit_lock"]
                 cd_type = "PROFIT_LOCK"

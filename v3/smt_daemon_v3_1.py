@@ -2063,7 +2063,7 @@ def monitor_positions():
                     _ema_age_min = hours_open * 60
                     if _ema_age_min >= 10 and peak_pnl_pct >= 0.20 and pnl_pct > 0:
                         try:
-                            _ema_url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=5m&limit=10"
+                            _ema_url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={real_symbol}&granularity=5m&limit=10"
                             _ema_r = requests.get(_ema_url, timeout=8)
                             _ema_candles = _ema_r.json()
                             if isinstance(_ema_candles, list) and len(_ema_candles) >= 9:
@@ -2092,7 +2092,7 @@ def monitor_positions():
                                     exit_reason = f"ema_snapback ({_side}, price={_live_price:.4f} crossed 8-EMA={_ema_val:.4f}, pnl={pnl_pct:+.2f}%, peak={peak_pnl_pct:.2f}%)"
                                     logger.info(f"  [EMA-SNAP] {symbol}: {exit_reason}")
                         except Exception as _ema_err:
-                            pass  # EMA check failure = skip, not block
+                            logger.debug(f"  [EMA-SNAP] {symbol}: check failed: {_ema_err}")
 
                 if should_exit:
                     symbol_clean = symbol.replace("cmt_", "").upper()
@@ -3836,7 +3836,7 @@ def run_daemon():
     logger.info("  Gemini portfolio review (V3.2.17) | Stale auto-close (V3.2.17)")
     logger.info("  Regime-based auto-exits (V3.2.17) — SL handles exits")
     logger.info("  Chop score penalties (V3.2.18) — logging only")
-    logger.info("  Fee tracking: 0.06%%/side taker, logged per trade + session cumulative in HEALTH")
+    logger.info("  Fee tracking: 0.08%%/side taker (V3.2.50), logged per trade + session cumulative in HEALTH")
     # --- Tier table ---
     logger.info("TIER CONFIG:")
     for tier, config in TIER_CONFIG.items():
