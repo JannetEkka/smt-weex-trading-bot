@@ -1365,7 +1365,9 @@ def check_trading_signals():
                                 _td_pnl = ((_td_cur - _td_entry) / _td_entry * 100) if _td_side == "LONG" else ((_td_entry - _td_cur) / _td_entry * 100)
                             if _td_age_h >= _td_early_h and _td_pnl < BREAKEVEN_TRIGGER_PCT:
                                 _td_sym_clean = symbol.replace("cmt_", "").upper()
+                                _td_judge_reason = decision.get("reasoning", "no reason given")[:200]
                                 logger.warning(f"  [THESIS EXIT] {_td_sym_clean}: Judge WAIT for held {_td_side} — thesis degraded (age={_td_age_h:.1f}h >= {_td_early_h}h, pnl={_td_pnl:+.2f}% < {BREAKEVEN_TRIGGER_PCT}%)")
+                                logger.warning(f"  [THESIS EXIT] {_td_sym_clean}: Judge reason: {_td_judge_reason}")
                                 _td_pos = check_position_status(symbol)
                                 if _td_pos.get("is_open"):
                                     _td_close = close_position_manually(
@@ -1384,7 +1386,7 @@ def check_trading_signals():
                                         stage=f"Thesis Exit: {_td_side} {_td_sym_clean}",
                                         input_data={"symbol": symbol, "side": _td_side, "age_hours": round(_td_age_h, 2), "pnl_pct": round(_td_pnl, 2)},
                                         output_data={"action": "THESIS_DEGRADED", "judge_decision": "WAIT", "reason": _td_reason},
-                                        explanation=f"Judge re-evaluated {_td_sym_clean} and returned WAIT — original trade thesis degraded. {_td_side} held {_td_age_h:.1f}h, PnL {_td_pnl:+.2f}%. Past early exit time ({_td_early_h}h) and below breakeven trigger ({BREAKEVEN_TRIGGER_PCT}%). Slot freed for better opportunity."[:1000],
+                                        explanation=f"Judge re-evaluated {_td_sym_clean} and returned WAIT — thesis degraded. {_td_side} held {_td_age_h:.1f}h, PnL {_td_pnl:+.2f}%. Reason: {_td_judge_reason}"[:1000],
                                         order_id=int(_td_oid) if _td_oid and str(_td_oid).isdigit() else None,
                                     )
                                     logger.info(f"  [THESIS EXIT] {_td_sym_clean} {_td_side} closed. Slot freed.")
