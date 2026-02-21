@@ -4028,7 +4028,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.81 - TAKER VOLUME FLOOR + FLOW STABILITY")
+    logger.info("SMT Daemon V3.2.82 - FLOW SEED FROM POSITIONS")
     logger.info("=" * 60)
     # --- Tier table ---
     logger.info("TIER CONFIG:")
@@ -4041,32 +4041,50 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.81: TAKER VOLUME FLOOR + FLOW STABILITY — (1) Minority side < 3%% of total taker volume = noise, extreme/heavy classification suppressed. Fixes SOL Buy=0.8/$68 → fake EXTREME SHORT 95%%. (2) Fresh signal flips (count=1, prev_direction opposite) blocked until 2nd consecutive cycle confirms. Prevents entering on transient FLOW spikes.")
+    logger.info("  V3.2.82: FLOW SEED FROM POSITIONS — FLOW direction seed now uses active positions (traded side) as primary source, signal_history as fallback. Fixes BTC seeded LONG when actual position was SHORT. Positions are ground truth; signal_history can be stale/mismatched.")
+    logger.info("  V3.2.81: TAKER VOLUME FLOOR + FLOW STABILITY — (1) Minority side < 3%% of total taker volume = noise, extreme/heavy classification suppressed. (2) Fresh signal flips blocked until 2nd cycle confirms.")
     logger.info("  V3.2.80: EVENTS TO SENTIMENT — Macro event scanner results now fed to SENTIMENT persona instead of raw dump to Judge.")
     logger.info("  V3.2.79: ORPHAN VERIFY LOOP — Pre-trade cancel now verify-and-retry: queries /currentPlan after cancel, re-cancels any surviving orphan plan orders up to 3x.")
     logger.info("  V3.2.78: OPPOSITE SWAP RANGE PRE-CHECK — Range gate checked BEFORE closing existing position for opposite swap.")
-    logger.info("  V3.2.77: TECHNICAL MOMENTUM CONFLICT — Momentum/velocity signals gated on 1h momentum. Momentum conflict cap at 65%%.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
     sync_tracker_with_weex()
 
-    # V3.2.73: Seed FLOW direction history from persisted signal_history
-    # so FLOW flips can be detected on the first cycle after restart.
+    # V3.2.82: Seed FLOW direction from active positions FIRST (actual traded side),
+    # then fill gaps from signal_history. Active positions are the most reliable source —
+    # they represent actual capital commitment. signal_history can be stale or mismatched
+    # (e.g., BTC signal_history says LONG but actual position is SHORT).
     # Without this, _prev_flow_direction is empty → no flips → the core dip signal is dead on cycle 1.
-    _sh = tracker.signal_history
     _seeded = 0
+    _seeded_from_pos = 0
+    _seeded_from_sh = 0
+
+    # Step 1: Seed from active positions (traded side = ground truth)
+    for _at_key, _at_data in tracker.active_trades.items():
+        if isinstance(_at_data, dict) and _at_data.get("side") in ("LONG", "SHORT"):
+            _at_sym = _at_key.split(":")[0] if ":" in _at_key else _at_key  # handle symbol:SIDE keys
+            _prev_flow_direction[_at_sym] = _at_data["side"]
+            _seeded += 1
+            _seeded_from_pos += 1
+            # Find pair name for logging
+            _at_pair = next((p for p, info in TRADING_PAIRS.items() if info["symbol"] == _at_sym), _at_sym)
+            logger.info(f"  [FLOW-SEED] {_at_pair}: seeded prev direction = {_at_data['side']} from ACTIVE POSITION (traded side)")
+
+    # Step 2: Fill gaps from signal_history (for pairs without active positions)
+    _sh = tracker.signal_history
     for _pair_key, _sh_data in _sh.items():
         if isinstance(_sh_data, dict) and _sh_data.get("direction") in ("LONG", "SHORT"):
-            # TRADING_PAIRS is {"BTC": {"symbol": "cmt_btcusdt", ...}, ...}
             _tp_info = TRADING_PAIRS.get(_pair_key)
             if _tp_info:
                 _sym = _tp_info["symbol"]
-                _prev_flow_direction[_sym] = _sh_data["direction"]
-                _seeded += 1
-                logger.info(f"  [FLOW-SEED] {_pair_key}: seeded prev direction = {_sh_data['direction']} from signal_history")
+                if _sym not in _prev_flow_direction:  # don't overwrite position-based seed
+                    _prev_flow_direction[_sym] = _sh_data["direction"]
+                    _seeded += 1
+                    _seeded_from_sh += 1
+                    logger.info(f"  [FLOW-SEED] {_pair_key}: seeded prev direction = {_sh_data['direction']} from signal_history")
     if _seeded:
-        logger.info(f"  [FLOW-SEED] Seeded {_seeded} pair(s) from signal_history")
+        logger.info(f"  [FLOW-SEED] Seeded {_seeded} pair(s): {_seeded_from_pos} from positions, {_seeded_from_sh} from signal_history")
 
     # V3.1.53: Clean dust positions on startup
     try:
