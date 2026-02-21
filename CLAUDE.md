@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.91** — all production code is in `v3/`.
+**Current version: V3.2.92** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -473,16 +473,23 @@ python3 v3/cryptoracle_client.py
 50. **TP_HAIRCUT for swing trades (V3.2.89)** — TP_HAIRCUT changed 0.90→0.95. In scalp mode, targeting 90% of SR made sense (price rarely reaches exact SR on quick bounces). In swing mode with 4-8H holds, price has time to test the actual SR level. 95% captures nearly the full move. Do not lower back to 0.90 — that shaves 5% off every TP unnecessarily for swing timeframes.
 51. **Opposite swap SR pre-check was silently broken (V3.2.90)** — `find_chart_based_tp_sl` was never added to the daemon's import list when V3.2.86 introduced the SR pre-check. Every opposite swap since V3.2.86 hit a `NameError`, fell through to "proceeding cautiously" (no block), and the safety net was dead. ETH SHORT at +$16.33 was closed for a LONG swap, the SR pre-check NameError fell through, then the range gate blocked the LONG replacement — lost profit + zero positions. Two fixes: (1) added `find_chart_based_tp_sl` to daemon imports, (2) changed the except handler from fallthrough to `continue` (BLOCK swap). The error handler MUST block — "proceed cautiously" on an error means the safety net doesn't exist. Do not change the except handler back to fallthrough.
 52. **FLOW flip boost bypasses volume floor (V3.2.91)** — The V3.2.81 volume floor caps FLOW confidence when minority taker side < 3% of total (noise detection). But the V3.2.68 flip boost (+15%) applied AFTER the cap, re-inflating the noise signal. XRP: taker ratio 271.40 (sell side = 50 units = 0.4% of total = pure noise). Volume floor correctly capped FLOW to 70%, then flip boost took 70%→85%, presenting noise as "extreme taker buying" to Judge (who gave 88% LONG — only R:R guard prevented execution). Fix: `vol_noise` flag propagated from FLOW persona return dict to `MultiPersonaAnalyzer.analyze()`; flip boost checks `flow_vote.get("vol_noise", False)` and skips boost when True. Do not remove this gate — if the underlying volume data is noise, a flip based on that noise is also noise.
+53. **R:R guard ignores round-trip fees (V3.2.92)** — R:R was calculated as raw `tp_pct / sl_pct`, ignoring the 0.16% round-trip taker fee (0.08%/side). BNB: TP 0.78% / SL 1.01% = raw R:R 0.77:1 (passed 0.67 minimum). After fees: net TP = 0.78% - 0.16% = 0.62%, net SL = 1.01% + 0.16% = 1.17%, true R:R = 0.53:1 (should have been rejected). On tight TPs (< 1.0%), fees are 20%+ of profit — a trade that looks viable raw is actually uneconomic. Fix: R:R calculation subtracts `_ROUND_TRIP_FEE_PCT = 0.16` from TP and adds to SL before comparing against `MIN_RR_RATIO`. Effective minimum TP: ~0.94% at 1.0% SL, ~1.27% at 1.5% SL. Do not remove fee adjustment — raw R:R is misleading for any TP below ~1.5%.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.91. Next change should be V3.2.92.
+Current: V3.2.92. Next change should be V3.2.93.
 
 **Recent version history (last 5):**
-- V3.2.91: (**CURRENT**) FLIP BOOST VOL NOISE GATE.
+- V3.2.92: (**CURRENT**) FEE-AWARE R:R GUARD.
+  R:R calculation now subtracts 0.16% round-trip taker fees from TP and adds to SL before ratio check.
+  BNB V3.2.91 bug: TP 0.78% / SL 1.01% = raw R:R 0.77:1 (passed 0.67), but after fees: net TP 0.62%,
+  net SL 1.17%, true R:R 0.53:1 (should have been rejected). On tight TPs (< 1.0%), fees are 20%+ of
+  profit — the guard must account for this. Effective minimum TP: ~0.94% at 1.0% SL, ~1.27% at 1.5% SL.
+  `PIPELINE_VERSION = "SMT-v3.2.92-FeeAwareRR"`.
+- V3.2.91: FLIP BOOST VOL NOISE GATE.
   FLOW flip boost (+15%) now blocked when volume floor fired (minority side < 3% of total taker volume).
   XRP V3.2.90 bug: taker ratio 271.40 from noise (sell side = 50 units = 0.4% of total). Volume floor
   correctly capped FLOW to 70%, but flip boost took 70%→85%, presenting noise as "extreme taker buying"
@@ -492,24 +499,17 @@ Current: V3.2.91. Next change should be V3.2.92.
 - V3.2.90: FIX OPPOSITE SWAP SR PRE-CHECK.
   (1) `find_chart_based_tp_sl` was missing from daemon imports since V3.2.86 → NameError on every SR
   pre-check (the feature was silently broken since introduction). (2) SR pre-check error handler changed
-  from "proceed cautiously" (fallthrough) to BLOCK (continue). Bug: ETH SHORT at +$16.33 was closed for
-  LONG swap, SR pre-check NameError fell through, range gate blocked LONG replacement → lost profit + zero positions.
+  from "proceed cautiously" (fallthrough) to BLOCK (continue).
   `PIPELINE_VERSION = "SMT-v3.2.90-FixOppositeSRPrecheck"`.
 - V3.2.89: SWING TRADE GUARDS.
-  TP ceilings raised from scalp-era 0.50-0.80% to swing-level 1.5-2.0% (ADA bug: 0.80% TP / 1.50% SL = 0.53:1 R:R).
-  R:R guard raised 0.33→0.67. TP haircut 0.90→0.95. Momentum gate: dual 1h+15m check (blocks entry when
-  both oppose). FLOW flip boost gate: requires 65% base confidence before +15% boost (SOL 0.84 taker ratio
-  inflated to 95% was wrong). Execution sort: persona agreement count tiebreak (was tier desc, which
-  preferred T3 ADA over T2 BNB when BNB had 3 agreeing personas vs ADA's 2).
+  TP ceilings raised from scalp-era 0.50-0.80% to swing-level 1.5-2.0%. R:R guard raised 0.33→0.67.
+  TP haircut 0.90→0.95. Momentum gate: dual 1h+15m. FLOW flip boost gate: requires 65% base confidence.
+  Execution sort: persona agreement count tiebreak (was tier desc).
   `PIPELINE_VERSION = "SMT-v3.2.89-SwingTradeGuards"`.
 - V3.2.88: LONG TERM PIVOT.
   Personas analyze hours-to-days; execution now matches. Hold: T1=8H T2=6H T3=4H. Momentum confirmation
   gate. TECHNICAL momentum conflict = hard BLOCK (NEUTRAL). EMA snapback DISABLED. BE trigger 0.8%.
-  Peak-fade/velocity widened for swing. Judge prompt: swing trade strategy, removed dip-bounce language.
   `PIPELINE_VERSION = "SMT-v3.2.88-LongTermPivot"`.
-- V3.2.87: REMOVE STALE CONF COMPARISON.
-  Removed old "existing conf > new conf = hold" for opposite swaps. Swap gates are the real guards.
-  `PIPELINE_VERSION = "SMT-v3.2.87-RemoveStaleConfComparison"`.
 
 **CRITICAL RULE (V3.2.57): The 85% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that
