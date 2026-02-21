@@ -3978,7 +3978,7 @@ def run_daemon():
     # V3.2.73: Seed FLOW direction history from persisted signal_history
     # so FLOW flips can be detected on the first cycle after restart.
     # Without this, _prev_flow_direction is empty → no flips → the core dip signal is dead on cycle 1.
-    _sh = tracker.state.get("signal_history", {})
+    _sh = tracker.signal_history
     _seeded = 0
     for _pair_key, _sh_data in _sh.items():
         if isinstance(_sh_data, dict) and _sh_data.get("direction") in ("LONG", "SHORT"):
