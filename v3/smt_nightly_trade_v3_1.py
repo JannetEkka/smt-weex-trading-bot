@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.75-RemoveDynamicBlackout"
+PIPELINE_VERSION = "SMT-v3.2.76-NearTPGrace-ThesisExit"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -5164,6 +5164,7 @@ COOLDOWN_MULTIPLIERS = {
     "peak_fade": 0.0,
     "velocity_exit": 0.0,
     "ema_snapback": 0.0,  # V3.2.68: mean-reversion exit, profit taken, immediate re-entry OK
+    "thesis_degraded": 0.0,  # V3.2.76: Judge says WAIT for held position, thesis dead, free slot immediately
     "tp_hit": 0.0,
     "regime_exit": 0.0,
     "default": 0.0,
@@ -5282,6 +5283,9 @@ class TradeTracker:
             elif "ema_snapback" in reason:
                 cd_mult = COOLDOWN_MULTIPLIERS["ema_snapback"]
                 cd_type = "EMA_SNAPBACK"
+            elif "thesis_degraded" in reason:
+                cd_mult = COOLDOWN_MULTIPLIERS["thesis_degraded"]
+                cd_type = "THESIS_DEGRADED"
             elif "profit_lock" in reason or "peak_fade" in reason:
                 cd_mult = COOLDOWN_MULTIPLIERS["profit_lock"]
                 cd_type = "PROFIT_LOCK"

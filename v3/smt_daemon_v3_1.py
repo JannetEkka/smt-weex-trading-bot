@@ -783,9 +783,28 @@ def check_trading_signals():
             _pre_exit_reason = ""
             _pre_pnl_pct = 0.0
             # Gate 1: max_hold — timestamp only, no API call needed
+            # V3.2.76: Near-TP grace — skip if trade >= 60% toward TP (within 15min grace window)
             if _pre_hours >= _pre_max_hold:
-                _pre_should_exit = True
-                _pre_exit_reason = f"max_hold_T{_pre_tier} ({_pre_hours:.1f}h > {_pre_max_hold}h)"
+                _pre_tp_progress = 0.0
+                _pre_tp_price = _pre_trade.get("tp_price", 0)
+                _pre_entry = _pre_trade.get("entry_price", 0)
+                _pre_side = _pre_trade.get("side", "LONG")
+                if _pre_entry > 0 and _pre_tp_price > 0:
+                    try:
+                        _pre_cur_price = get_price(_pre_real_sym)
+                        if _pre_cur_price and _pre_cur_price > 0:
+                            if _pre_side == "LONG" and _pre_tp_price > _pre_entry:
+                                _pre_tp_progress = (_pre_cur_price - _pre_entry) / (_pre_tp_price - _pre_entry)
+                            elif _pre_side == "SHORT" and _pre_entry > _pre_tp_price:
+                                _pre_tp_progress = (_pre_entry - _pre_cur_price) / (_pre_entry - _pre_tp_price)
+                    except Exception:
+                        pass
+                _pre_grace_deadline = _pre_max_hold + NEAR_TP_GRACE_MINUTES / 60.0
+                if _pre_tp_progress >= NEAR_TP_GRACE_PCT and _pre_hours < _pre_grace_deadline:
+                    logger.info(f"[PRE-CYCLE] {_pre_clean}: max_hold reached but {_pre_tp_progress:.0%} toward TP — near-TP grace ({NEAR_TP_GRACE_MINUTES}min)")
+                else:
+                    _pre_should_exit = True
+                    _pre_exit_reason = f"max_hold_T{_pre_tier} ({_pre_hours:.1f}h > {_pre_max_hold}h)"
             else:
                 # Gates 2+3: PnL-based exits (early_exit, force_stop) — need current price
                 try:
@@ -1322,7 +1341,72 @@ def check_trading_signals():
                     except Exception as e:
                         logger.warning(f"RL log error: {e}")
 
-                
+                # V3.2.76: JUDGE THESIS DEGRADATION EXIT
+                # Judge evaluated this pair and returned WAIT — thesis can't reach 85% anymore.
+                # If we're holding a position on this pair, the trade's original thesis is degraded.
+                # Gates: (1) past early_exit_hours, (2) PnL below BE-SL trigger (0.4%),
+                # (3) BE-SL not placed (WEEX handles those). Uses structured decision enum only,
+                # NO string parsing (avoids the ANTI-WAIT V3.2.37 disaster).
+                if signal == "WAIT" and (has_long or has_short):
+                    _td_side = "LONG" if has_long else "SHORT"
+                    _td_trade = tracker.get_active_trade(symbol) or tracker.get_active_trade(f"{symbol}:{_td_side}")
+                    if _td_trade and not _td_trade.get("sl_moved_to_breakeven", False):
+                        try:
+                            _td_opened = datetime.fromisoformat(str(_td_trade["opened_at"]).replace("Z", "+00:00"))
+                            _td_age_h = (datetime.now(timezone.utc) - _td_opened).total_seconds() / 3600
+                            _td_early_h = tier_config["early_exit_hours"]
+                            _td_entry = _td_trade.get("entry_price", 0)
+                            _td_cur = get_price(symbol)
+                            _td_pnl = 0.0
+                            if _td_entry > 0 and _td_cur and _td_cur > 0:
+                                _td_pnl = ((_td_cur - _td_entry) / _td_entry * 100) if _td_side == "LONG" else ((_td_entry - _td_cur) / _td_entry * 100)
+                            if _td_age_h >= _td_early_h and _td_pnl < BREAKEVEN_TRIGGER_PCT:
+                                _td_sym_clean = symbol.replace("cmt_", "").upper()
+                                logger.warning(f"  [THESIS EXIT] {_td_sym_clean}: Judge WAIT for held {_td_side} — thesis degraded (age={_td_age_h:.1f}h >= {_td_early_h}h, pnl={_td_pnl:+.2f}% < {BREAKEVEN_TRIGGER_PCT}%)")
+                                _td_pos = check_position_status(symbol)
+                                if _td_pos.get("is_open"):
+                                    _td_close = close_position_manually(
+                                        symbol=symbol,
+                                        side=_td_pos["side"],
+                                        size=float(_td_pos["size"])
+                                    )
+                                    _td_reason = f"thesis_degraded_T{tier} (Judge WAIT after {_td_age_h:.1f}h, pnl={_td_pnl:+.2f}%)"
+                                    tracker.close_trade(
+                                        symbol if symbol in tracker.active_trades else f"{symbol}:{_td_side}",
+                                        {"reason": _td_reason, "tier": tier, "hours_open": _td_age_h, "final_pnl_pct": _td_pnl}
+                                    )
+                                    state.trades_closed += 1
+                                    _td_oid = _td_close.get("order_id") if _td_close else None
+                                    upload_ai_log_to_weex(
+                                        stage=f"Thesis Exit: {_td_side} {_td_sym_clean}",
+                                        input_data={"symbol": symbol, "side": _td_side, "age_hours": round(_td_age_h, 2), "pnl_pct": round(_td_pnl, 2)},
+                                        output_data={"action": "THESIS_DEGRADED", "judge_decision": "WAIT", "reason": _td_reason},
+                                        explanation=f"Judge re-evaluated {_td_sym_clean} and returned WAIT — original trade thesis degraded. {_td_side} held {_td_age_h:.1f}h, PnL {_td_pnl:+.2f}%. Past early exit time ({_td_early_h}h) and below breakeven trigger ({BREAKEVEN_TRIGGER_PCT}%). Slot freed for better opportunity."[:1000],
+                                        order_id=int(_td_oid) if _td_oid and str(_td_oid).isdigit() else None,
+                                    )
+                                    logger.info(f"  [THESIS EXIT] {_td_sym_clean} {_td_side} closed. Slot freed.")
+                                    # Refresh position state
+                                    open_positions = get_open_positions()
+                                    weex_position_count = len(open_positions)
+                                    available_slots = effective_max_positions - weex_position_count
+                                    can_open_new = not low_equity_mode and available_slots > 0
+                                    # Rebuild position_map for remaining pair analyses
+                                    position_map = {}
+                                    for pos in open_positions:
+                                        _pm_sym = pos.get("symbol")
+                                        _pm_side = pos.get("side", "").upper()
+                                        if _pm_sym not in position_map:
+                                            position_map[_pm_sym] = {}
+                                        position_map[_pm_sym][_pm_side] = pos
+                                else:
+                                    logger.info(f"  [THESIS EXIT] {_td_sym_clean}: position already closed on WEEX, cleaning tracker")
+                                    tracker.close_trade(
+                                        symbol if symbol in tracker.active_trades else f"{symbol}:{_td_side}",
+                                        {"reason": "thesis_degraded_already_closed", "tier": tier, "hours_open": _td_age_h, "final_pnl_pct": _td_pnl}
+                                    )
+                        except Exception as _td_err:
+                            logger.error(f"  [THESIS EXIT] Error for {pair}: {_td_err}")
+
                 # Add to opportunities if tradeable
                 if can_trade_this:
                     trade_opportunities.append({
@@ -1748,6 +1832,11 @@ PEAK_FADE_TRIGGER_PCT = {1: 0.15, 2: 0.25, 3: 0.25}  # Drop threshold per tier (
 # T3 (SOL/ADA): 1.5h hold → 50 min velocity exit (56% of hold)
 VELOCITY_EXIT_MINUTES = {1: 75, 2: 60, 3: 50}  # Per-tier velocity exit (was flat 40)
 VELOCITY_MIN_PEAK_PCT = 0.10    # V3.2.67: Lowered from 0.15% → 0.10%. If peak < 0.10% in full velocity window, truly dead.
+# V3.2.76: Near-TP grace — skip max_hold exit if trade is >= 60% toward TP.
+# Trade is actively approaching target; killing it wastes the move and fees paid to get here.
+# Grace period: 15 minutes past max_hold. If still not TP'd after grace, exit normally.
+NEAR_TP_GRACE_PCT = 0.60          # TP progress threshold (60% of distance to TP)
+NEAR_TP_GRACE_MINUTES = 15        # Extra time granted when near TP
 
 def _move_sl_to_breakeven(symbol: str, side: str, entry_price: float, tp_price: float, size: float) -> bool:
     """V3.2.46: Cancel existing SL and replace with breakeven SL at entry price.
@@ -2064,9 +2153,26 @@ def monitor_positions():
                     exit_reason = f"macro_blackout_exit ({_blackout_label}, pnl={pnl_pct:.2f}%)"
 
                 # 1. Max hold time exceeded (tier-specific)
+                # V3.2.76: Near-TP grace — if trade is >= 60% toward TP, grant 15 min grace.
+                # Don't kill a trade that's almost at its target.
                 elif hours_open >= max_hold:
-                    should_exit = True
-                    exit_reason = f"max_hold_T{tier} ({hours_open:.1f}h > {max_hold}h)"
+                    _tp_progress = 0.0
+                    _tp_price = trade.get("tp_price", 0)
+                    if entry_price > 0 and _tp_price > 0 and current_price > 0:
+                        if trade.get("side") == "LONG" and _tp_price > entry_price:
+                            _tp_progress = (current_price - entry_price) / (_tp_price - entry_price)
+                        elif trade.get("side") == "SHORT" and entry_price > _tp_price:
+                            _tp_progress = (entry_price - current_price) / (entry_price - _tp_price)
+                    _grace_deadline = max_hold + NEAR_TP_GRACE_MINUTES / 60.0
+                    if _tp_progress >= NEAR_TP_GRACE_PCT and hours_open < _grace_deadline:
+                        if not trade.get("_near_tp_grace_logged"):
+                            logger.info(f"  [NEAR-TP GRACE] {symbol}: {_tp_progress:.0%} toward TP, granting {NEAR_TP_GRACE_MINUTES}min grace (expires {_grace_deadline:.2f}h)")
+                            trade["_near_tp_grace_logged"] = True
+                            tracker.save_state()
+                    else:
+                        should_exit = True
+                        _grace_note = f", near-TP grace expired" if _tp_progress >= NEAR_TP_GRACE_PCT else ""
+                        exit_reason = f"max_hold_T{tier} ({hours_open:.1f}h > {max_hold}h{_grace_note})"
                 
                 # 2. Early exit if losing after tier-specific hours
                 elif hours_open >= early_exit_hours and pnl_pct <= early_exit_loss:
@@ -3863,7 +3969,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.75 - REMOVE DYNAMIC BLACKOUT")
+    logger.info("SMT Daemon V3.2.76 - NEAR-TP GRACE + THESIS EXIT")
     logger.info("=" * 60)
     # --- Tier table ---
     logger.info("TIER CONFIG:")
@@ -3876,11 +3982,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
+    logger.info("  V3.2.76: NEAR-TP GRACE + THESIS EXIT — (1) Near-TP grace: max_hold skipped if trade >= 60%% toward TP (15min grace). (2) Judge thesis exit: when Judge returns WAIT for held position, trade past early_exit time and below BE-SL trigger → close with thesis_degraded (zero cooldown). Structured enum only, no string parsing.")
     logger.info("  V3.2.75: REMOVE DYNAMIC BLACKOUT — Gemini event scanner removed. Was blocking ALL signal cycles on Deribit derivatives expiry (separate exchange, not relevant to WEEX futures). Hardcoded MACRO_BLACKOUT_WINDOWS still active for known events.")
     logger.info("  V3.2.74: FLOW CONTRA + CATALYST DRIVE + CONTINUATION HOLD — (1) FLOW contra exit: close underwater when FLOW extreme opposite. (2) Judge CATALYST DRIVE rule. (3) Judge CONTINUATION HOLD. (4) Range gate 2H override reverted 45/55→30/70. (5) FLOW flip log fix. (6) Banner cleanup.")
     logger.info("  V3.2.73: DIP RECOVERY + FLOW SEED + CONF DECAY + VEL PRE-SWEEP.")
     logger.info("  V3.2.72: FLOW GATE + EMA FIX — FLOW >= 60%% gate + EMA snapback giveback 50%%.")
-    logger.info("  V3.2.71: EXTRA SLOT DISABLED — 2-slot hard cap absolute.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup
