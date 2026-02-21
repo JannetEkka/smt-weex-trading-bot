@@ -1467,8 +1467,21 @@ def check_trading_signals():
         trades_executed = 0  # V3.2.36 fix: initialize before if/else so it's always defined
 
         if trade_opportunities:
-            # V3.2.58: Sort by confidence desc, then tier desc (altcoin tiebreak — T3 > T2 > T1 at equal confidence)
-            trade_opportunities.sort(key=lambda x: (x["decision"]["confidence"], x["pair_info"].get("tier", 1)), reverse=True)
+            # V3.2.89: Sort by confidence desc, then persona agreement count desc.
+            # Old tiebreaker was tier desc (T3>T2>T1), a scalp-era bias for volatile alts.
+            # New: at equal confidence, prefer trades with MORE personas agreeing (stronger consensus).
+            # BNB 88% (3 personas: WHALE+SENT+FLOW) > ADA 88% (2 personas: FLOW+TECH).
+            def _opp_sort_key(x):
+                _conf = x["decision"]["confidence"]
+                # Count how many persona votes agree with the signal direction at 50%+
+                _signal = x["decision"].get("decision", "WAIT")
+                _votes = x["decision"].get("persona_votes", [])
+                _agree_count = 0
+                for v in _votes:
+                    if v.get("signal") == _signal and v.get("confidence", 0) >= 0.50:
+                        _agree_count += 1
+                return (_conf, _agree_count)
+            trade_opportunities.sort(key=_opp_sort_key, reverse=True)
 
             # V3.2.59: Re-query positions BEFORE execution — catches TP/SL that fired during
             # the ~7 min analysis window. Without this, slots show as occupied when positions
@@ -1681,42 +1694,59 @@ def check_trading_signals():
                     )
                     continue
 
-                # V3.2.88: MOMENTUM CONFIRMATION GATE — don't enter against active price momentum.
+                # V3.2.89: MOMENTUM CONFIRMATION GATE — don't enter against active price momentum.
                 # Trust persona DIRECTION (they analyze on hours-to-days timeframes).
-                # But confirm TIMING: recent candles should show price starting to move in our direction.
-                # "Enter later when slight shift in candle" — momentum must be turning, not still opposing.
-                # Fetch last 6 5m candles (30 min). Check 15-min momentum (last 3 candles).
+                # But confirm TIMING: candles should show price starting to move in our direction.
+                # Checks BOTH 15m and 1h momentum:
+                #   - If 1h momentum opposes AND 15m also opposes → BLOCK (no turn yet)
+                #   - If 1h opposes BUT 15m is turning favorable → ALLOW (the turn is happening)
+                #   - If both align with trade → ALLOW
+                # ADA V3.2.88 bug: 1h mom -0.14% (opposing), 15m mom -0.071% (also opposing) → should block
+                # but old gate only checked 15m at 0.15% threshold. Price went to -0.14% PnL immediately.
                 _mom_signal = opportunity["decision"]["decision"]
                 _mom_blocked = False
+                _mom_15m_pct = 0.0
+                _mom_1h_pct = 0.0
                 try:
                     _mom_symbol = TRADING_PAIRS[opportunity['pair']]['symbol']
-                    _mom_url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={_mom_symbol}&granularity=5m&limit=6"
+                    _mom_url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={_mom_symbol}&granularity=5m&limit=13"
                     _mom_r = requests.get(_mom_url, timeout=8)
                     _mom_candles = _mom_r.json()
                     if isinstance(_mom_candles, list) and len(_mom_candles) >= 4:
-                        # WEEX candles newest first: [0]=latest, [3]=30min ago
+                        # WEEX candles newest first: [0]=latest
                         _mom_now = float(_mom_candles[0][4])   # latest close
-                        _mom_30m = float(_mom_candles[3][4])   # 15-20min ago close
-                        _mom_15m_pct = ((_mom_now - _mom_30m) / _mom_30m) * 100
-                        _MOM_GATE_THRESH = 0.15  # 0.15% opposing momentum = block
-                        # LONG blocked if price is still falling sharply (15m momentum < -0.15%)
-                        if _mom_signal == "LONG" and _mom_15m_pct < -_MOM_GATE_THRESH:
+                        _mom_15m_ago = float(_mom_candles[3][4])   # ~15min ago close
+                        _mom_15m_pct = ((_mom_now - _mom_15m_ago) / _mom_15m_ago) * 100
+                        # 1h momentum: use candle[11] if available (55 min ago), else last available
+                        _mom_1h_idx = min(11, len(_mom_candles) - 1)
+                        _mom_1h_ago = float(_mom_candles[_mom_1h_idx][4])
+                        _mom_1h_pct = ((_mom_now - _mom_1h_ago) / _mom_1h_ago) * 100
+                        _MOM_15M_THRESH = 0.10  # V3.2.89: lowered from 0.15% (catches ADA -0.071% with 1h confirm)
+                        _MOM_1H_THRESH = 0.10   # 1h momentum opposing by > 0.10% = meaningful downtrend
+                        # BLOCK logic: 1h opposing AND 15m not turning favorable
+                        _1h_opposes = False
+                        _15m_opposes = False
+                        if _mom_signal == "LONG":
+                            _1h_opposes = _mom_1h_pct < -_MOM_1H_THRESH
+                            _15m_opposes = _mom_15m_pct < _MOM_15M_THRESH  # 15m must be POSITIVE to confirm turn
+                        elif _mom_signal == "SHORT":
+                            _1h_opposes = _mom_1h_pct > _MOM_1H_THRESH
+                            _15m_opposes = _mom_15m_pct > -_MOM_15M_THRESH  # 15m must be NEGATIVE to confirm turn
+                        if _1h_opposes and _15m_opposes:
                             _mom_blocked = True
-                            logger.info(f"  MOMENTUM GATE: {opportunity['pair']} LONG blocked — 15m momentum {_mom_15m_pct:+.3f}% (still falling, need > -{_MOM_GATE_THRESH}%)")
-                        # SHORT blocked if price is still rising sharply (15m momentum > +0.15%)
-                        elif _mom_signal == "SHORT" and _mom_15m_pct > _MOM_GATE_THRESH:
-                            _mom_blocked = True
-                            logger.info(f"  MOMENTUM GATE: {opportunity['pair']} SHORT blocked — 15m momentum {_mom_15m_pct:+.3f}% (still rising, need < +{_MOM_GATE_THRESH}%)")
+                            logger.info(f"  MOMENTUM GATE: {opportunity['pair']} {_mom_signal} blocked — 1h mom {_mom_1h_pct:+.3f}% opposes, 15m mom {_mom_15m_pct:+.3f}% not turning yet")
+                        elif _1h_opposes and not _15m_opposes:
+                            logger.info(f"  MOMENTUM GATE: {opportunity['pair']} {_mom_signal} — 1h mom {_mom_1h_pct:+.3f}% opposes BUT 15m mom {_mom_15m_pct:+.3f}% turning (ALLOW)")
                         else:
-                            logger.info(f"  MOMENTUM GATE: {opportunity['pair']} {_mom_signal} — 15m momentum {_mom_15m_pct:+.3f}% confirms (or neutral)")
+                            logger.info(f"  MOMENTUM GATE: {opportunity['pair']} {_mom_signal} — 1h mom {_mom_1h_pct:+.3f}%, 15m mom {_mom_15m_pct:+.3f}% confirms")
                 except Exception as _mom_err:
                     logger.debug(f"  MOMENTUM GATE: {opportunity['pair']} check failed ({_mom_err}), allowing trade")
                 if _mom_blocked:
                     upload_ai_log_to_weex(
                         stage=f"Momentum Gate: {opportunity['pair']} {_mom_signal} blocked",
-                        input_data={"pair": opportunity["pair"], "signal": _mom_signal, "mom_15m": _mom_15m_pct},
+                        input_data={"pair": opportunity["pair"], "signal": _mom_signal, "mom_15m": _mom_15m_pct, "mom_1h": _mom_1h_pct},
                         output_data={"action": "MOMENTUM_GATE_BLOCKED"},
-                        explanation=f"V3.2.88 Momentum gate blocked {opportunity['pair']} {_mom_signal}. 15m price momentum ({_mom_15m_pct:+.3f}%) still opposing trade direction. Personas trust direction, but timing needs momentum confirmation. Wait for candle shift."[:1000]
+                        explanation=f"V3.2.89 Momentum gate blocked {opportunity['pair']} {_mom_signal}. 1h momentum ({_mom_1h_pct:+.3f}%) opposes direction AND 15m momentum ({_mom_15m_pct:+.3f}%) not turning yet. Wait for candle shift."[:1000]
                     )
                     continue
 
@@ -4111,10 +4141,10 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.88 - LONG TERM PIVOT + MOMENTUM CONFIRMATION")
+    logger.info("SMT Daemon V3.2.89 - SWING TRADE GUARDS")
     logger.info("=" * 60)
     # --- Tier table ---
-    logger.info("TIER CONFIG (V3.2.88 SWING TRADE):")
+    logger.info("TIER CONFIG (V3.2.89 SWING TRADE):")
     for tier, config in TIER_CONFIG.items():
         tier_config = TIER_CONFIG[tier]
         pairs = [p for p, info in TRADING_PAIRS.items() if info["tier"] == tier]
@@ -4124,11 +4154,11 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.88: LONG TERM PIVOT. Personas analyze hours-to-days; execution now matches. Hold: T1=8H T2=6H T3=4H. Momentum confirmation gate blocks entry against active price movement. TECHNICAL momentum conflict = hard BLOCK (was cap). EMA snapback DISABLED. BE trigger 0.8%% (was 0.4%%). Peak-fade/velocity widened for swing.")
-    logger.info("  V3.2.87: REMOVE STALE CONF COMPARISON. Old 'existing conf > new conf = hold' blocked flips when market reversed. Swap gates (age/TP proximity/range/SR pre-check) are the real guards now.")
-    logger.info("  V3.2.86: OPPOSITE SWAP SR PRE-CHECK. Chart SR pre-checked before closing existing position for opposite swap. If replacement has no valid TP, keep existing position (prevents close-for-nothing disaster).")
-    logger.info("  V3.2.85: PNL LEVERAGE FIX + PER-CYCLE FLOW SEED. (1) PnL was margin not notional (missing ×20) — broke BE-SL detection, display, AI logs. (2) FLOW seed refresh every signal cycle (positions + RL), not just daemon startup.")
-    logger.info("  V3.2.84: THESIS EXIT SAME-DIRECTION FIX + BLACKLIST EXEMPT. (1) Judge LONG 89%% + already have LONG = thesis CONFIRMED, not degraded. (2) Zero-cooldown exits (thesis/velocity/flow_contra) exempt from 2h loss blacklist.")
+    logger.info("  V3.2.89: SWING TRADE GUARDS. TP ceilings raised (BTC/ETH 2.0%%, SOL 2.0%%, alts 1.5%% — was 0.50-0.80%%). R:R guard 0.33→0.67. TP haircut 0.90→0.95. Momentum gate: 1h+15m dual check. FLOW flip boost needs 65%% base. Execution sort: persona count tiebreak (was tier).")
+    logger.info("  V3.2.88: LONG TERM PIVOT. Hold: T1=8H T2=6H T3=4H. Momentum gate. TECHNICAL momentum = BLOCK. EMA snapback DISABLED. BE 0.8%%. Peak-fade/velocity widened.")
+    logger.info("  V3.2.87: REMOVE STALE CONF COMPARISON. Swap gates (age/TP/range/SR) are the real guards now.")
+    logger.info("  V3.2.86: OPPOSITE SWAP SR PRE-CHECK. Chart SR pre-checked before closing existing position for opposite swap.")
+    logger.info("  V3.2.85: PNL LEVERAGE FIX + PER-CYCLE FLOW SEED. (1) PnL was margin not notional (missing ×20). (2) FLOW seed refresh every signal cycle.")
     logger.info("=" * 60)
 
     # V3.1.9: Sync with WEEX on startup

@@ -1582,11 +1582,11 @@ def get_chart_context(symbol: str, tier: int = 1) -> str:
         return fallback
 
 
-# V3.2.0: Competition fallback TPs — dip-signal strategy, 0.5% grab-and-go
+# V3.2.89: Fallback TPs raised for swing trades (was 0.5% scalp). Only used when pair not in PAIR_TP_CEILING.
 COMPETITION_FALLBACK_TP = {
-    1: 0.5,   # Tier 1 (ETH, BNB): 0.5% fast exit
-    2: 0.5,   # Tier 2 (BTC, LTC, XRP): 0.5% fast exit
-    3: 0.5,   # Tier 3 (SOL, DOGE, ADA): 0.5% fast exit
+    1: 2.0,   # Tier 1: 8H hold, structural targets
+    2: 1.5,   # Tier 2: 6H hold, structural targets
+    3: 1.5,   # Tier 3: 4H hold, structural targets
 }
 COMPETITION_FALLBACK_SL = {
     1: 1.2,   # Tier 1: 1.5% → 1.2%
@@ -1599,21 +1599,21 @@ COMPETITION_FALLBACK_SL = {
 MIN_SL_PCT = 1.0          # SL floor: at least 1.0% from entry (20x = 20% margin loss minimum)
 MAX_SL_PCT = 1.5          # SL ceiling: cap at 1.5% (20x = 30% margin loss, survivable)
 MIN_VIABLE_TP_PCT = 0.50  # V3.2.70: skip SR levels < 0.50% — forces walk past 2H micro-bounce to 4H structural anchor. Aligned with MIN_RR(0.33) × MAX_SL(1.5%) = 0.50%.
-TP_HAIRCUT = 0.90         # V3.2.68: target 90% of distance to S/R level
+TP_HAIRCUT = 0.95         # V3.2.89: target 95% of S/R distance (was 0.90 scalp-era). Swing targets are structural — get closer.
 
-# V3.2.67: TP ceilings tightened to match ACTUAL observed swing sizes.
-# Charts show: BTC 0.74%, ETH 0.61%, BNB 0.64%, LTC 0.91%, XRP 0.99%, SOL 0.96%, ADA 1.06%
-# Old 0.8-1.5% ceilings meant TPs were set BEYOND the swing — guaranteed to never hit.
-# New ceilings = ~75-80% of observed swing. Capture the bulk, don't wait for the exact tail.
-# Ceiling-only: if chart SR < ceiling, use chart SR. Never raises a low TP.
+# V3.2.89: TP ceilings raised for SWING TRADE hold times (was scalp-era 0.50-0.80%).
+# With 4-8H holds, chart SR often finds levels at 1.0-2.0%. Old ceilings destroyed R:R
+# by capping TP below the structural level while ATR widened SL to 1.5%.
+# ADA V3.2.88 bug: chart SR found 1.35% TP, ceiling capped to 0.80%, ATR widened SL to 1.50% = 0.53:1 R:R.
+# New ceilings = allow structural levels to breathe. Still below TIER_CONFIG fallback TPs.
 PAIR_TP_CEILING = {
-    "BTC": 0.60,   # Swing 0.74%. Capture 0.60% of the bounce, bank fast.
-    "ETH": 0.50,   # Swing 0.61%. 4 V-bounces missed with old 1.0% ceiling.
-    "BNB": 0.50,   # Swing 0.64%. Tight range, take what the market gives.
-    "LTC": 0.70,   # Swing 0.91%. More room, wider target OK.
-    "XRP": 0.75,   # Swing 0.99%. Biggest altcoin swings.
-    "SOL": 0.75,   # Swing 0.96%. High beta but realistic ceiling.
-    "ADA": 0.80,   # Swing 1.06%. Most volatile, keep some room.
+    "BTC": 2.00,   # T1: 8H hold. BTC structural swings 1.0-2.5%. Ceiling at 2.0%.
+    "ETH": 2.00,   # T1: 8H hold. ETH structural swings 1.0-2.5%. Ceiling at 2.0%.
+    "BNB": 1.50,   # T2: 6H hold. BNB structural swings 0.8-2.0%. Ceiling at 1.5%.
+    "LTC": 1.50,   # T2: 6H hold. LTC structural swings 0.8-2.0%. Ceiling at 1.5%.
+    "XRP": 1.50,   # T2: 6H hold. XRP structural swings 0.8-2.0%. Ceiling at 1.5%.
+    "SOL": 2.00,   # T3: 4H hold. SOL high-beta, 1.0-3.0% swings. Ceiling at 2.0%.
+    "ADA": 1.50,   # T3: 4H hold. ADA moderate vol, 0.8-2.0% swings. Ceiling at 1.5%.
 }
 
 # V3.2.41: Per-pair max position size. Default: MAX_SINGLE_POSITION_PCT = 0.50.
@@ -2045,7 +2045,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.88-LongTermPivot"
+PIPELINE_VERSION = "SMT-v3.2.89-SwingTradeGuards"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4600,15 +4600,20 @@ class MultiPersonaAnalyzer:
                     _dip_aligned = True
 
             if _dip_aligned:
-                # BOOST: flip at dip/peak = the signal we're looking for
-                # V3.2.68 FIX: Cap at 0.95 not 0.85. FLOW is already hard-capped at 0.85 inside
-                # FlowPersona (line ~3130). min(0.85, 0.85+0.15) = 0.85 = boost does NOTHING.
-                # 0.95 cap lets the boost actually add value. Judge still makes final decision.
-                _boost = min(0.95, round(flow_vote["confidence"] + 0.15, 2))
-                print(f"  [FLOW] DIP/PEAK FLIP BOOST: {_flow_prev}->{_flow_dir} at range {_range_pos_flow:.0f}% — conf {flow_vote['confidence']:.0%} → {_boost:.0%} (V3.2.68)")
-                flow_vote = dict(flow_vote)
-                flow_vote["confidence"] = _boost
-                flow_vote["reasoning"] = flow_vote.get("reasoning", "") + f" [FLIP {_flow_prev}->{_flow_dir} = DIP/PEAK SIGNAL, boosted]"
+                # V3.2.89: BOOST requires minimum FLOW confidence before flip boost applies.
+                # SOL V3.2.88 bug: taker ratio 0.84 (mild selling) → FLOW 80% → boosted to 95% SHORT.
+                # A 0.84 taker ratio is NOT extreme conviction. The flip boost inflated a moderate signal.
+                # Gate: FLOW must already be >= 65% before the flip boost adds +15%.
+                # At 65%: 65→80%. At 70%: 70→85%. At 80%: 80→95%. Below 65%: no boost (log + skip).
+                _MIN_FLOW_FOR_BOOST = 0.65
+                if flow_vote["confidence"] >= _MIN_FLOW_FOR_BOOST:
+                    _boost = min(0.95, round(flow_vote["confidence"] + 0.15, 2))
+                    print(f"  [FLOW] DIP/PEAK FLIP BOOST: {_flow_prev}->{_flow_dir} at range {_range_pos_flow:.0f}% — conf {flow_vote['confidence']:.0%} → {_boost:.0%} (V3.2.89)")
+                    flow_vote = dict(flow_vote)
+                    flow_vote["confidence"] = _boost
+                    flow_vote["reasoning"] = flow_vote.get("reasoning", "") + f" [FLIP {_flow_prev}->{_flow_dir} = DIP/PEAK SIGNAL, boosted]"
+                else:
+                    print(f"  [FLOW] FLIP {_flow_prev}->{_flow_dir} at range {_range_pos_flow:.0f}% — flip aligned but FLOW too weak ({flow_vote['confidence']:.0%} < {_MIN_FLOW_FOR_BOOST:.0%}), no boost")
             else:
                 # Non-boosted flip: log actual reason (not always "mid-range")
                 _rp_str = f"{_range_pos_flow:.0f}%" if _range_pos_flow is not None else "unknown"
@@ -5104,11 +5109,11 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         print(f"  [FEE-FLOOR] {_reason}")
         return {"executed": False, "reason": _reason}
 
-    # V3.2.70: R:R guard lowered 0.5→0.33. At 20x + 0.16% round-trip fees:
-    # TP 0.50% / SL 1.50% = 0.33:1 → break-even win rate 82.3%. 85% confidence floor covers this.
-    # Old 0.5:1 was incompatible with PAIR_TP_CEILING for BTC/ETH/BNB/LTC when SL hits 1.5% cap.
-    # Strategy exits via snap-back/peak-fade/BE-SL, not TP — classical R:R overstates the risk.
-    MIN_RR_RATIO = 0.33
+    # V3.2.89: R:R guard raised 0.33→0.67 for swing trades.
+    # With raised TP ceilings (1.5-2.0%) and MAX_SL 1.5%, structural TPs now pass.
+    # 0.67:1 R:R = TP must be >= 1.0% when SL = 1.5%. Break-even win rate ~60%.
+    # ADA V3.2.88 bug: 0.80% TP / 1.50% SL = 0.53:1 → would now be REJECTED (correct).
+    MIN_RR_RATIO = 0.67
     _rr_ratio = tp_pct_raw / sl_pct_raw if sl_pct_raw > 0 else 0
     if _rr_ratio < MIN_RR_RATIO:
         _reason = f"R:R {_rr_ratio:.2f}:1 below minimum {MIN_RR_RATIO}:1 (TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}%)"

@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.87** — all production code is in `v3/`.
+**Current version: V3.2.89** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -69,19 +69,21 @@ v4/                              # Future version — not in production
 └── (experimental; ignore)
 ```
 
-## Trading Philosophy — Dip Signals, Fast Banking
+## Trading Philosophy — Swing Trade with Momentum Confirmation (V3.2.88+)
 
-**This is a high-frequency, high-margin, small-move strategy. Do NOT evaluate it with classical swing-trade R:R logic.**
+**This is a swing-trade strategy. Personas analyze on hours-to-days timeframes; execution matches.**
 
-Key pattern: **FLOW/WHALE fire first → dip completes → bot enters at the bottom.** FLOW detects buying pressure building and WHALE detects accumulation as the dip is forming — signals are predictive/concurrent, not reactive to a completed move. The bot rides the signal into the low and targets a quick bounce recovery — NOT a full trend reversal.
+Key insight: **Personas give DIRECTION correctly (hours-ahead analysis) but TIMING requires momentum confirmation.** The bot trusts the signal direction but waits for price to start moving that way before entering. A late entry that catches the move beats an early entry that eats the SL.
 
-- **Preferred TP is ~0.5%.** Grab the dip bounce and exit fast. If the move continues, the next 10-min signal cycle catches re-entry. Do NOT hold waiting for a bigger move — the 10-min daemon loop IS the strategy.
-- **High win rate > high R:R.** With correct dip entries the win rate is high enough that small TPs are profitable at scale. Classical swing-trade R:R math does not apply here.
-- **The chop filter exists for logging only (V3.2.18).** Chop penalties have been removed — the 85% confidence floor (V3.2.57) + 0.5% minimum TP handle signal quality. Chop data is still computed and logged for diagnostics.
-- **FLOW EXTREME overrides chop (V3.2.3):** If FLOW confidence >=85% and matches signal direction, MEDIUM chop penalty is skipped. HIGH chop is reduced to medium (15% penalty). Now historical reference only since V3.2.18 removed all chop penalties.
-- **Compound fast.** Many small wins × leverage × reinvestment beats waiting for 3% moves. Capital rotation speed is the edge.
+- **Hold times: T1=8H, T2=6H, T3=4H.** These are swing windows, not scalp windows. Chart SR targets structural 4H/Daily levels.
+- **TP targets structural levels.** Chart SR walks 2H→4H→48H resistance/support. Per-pair TP ceilings: BTC/ETH/SOL 2.0%, alts 1.5%. TP_HAIRCUT = 0.95 (target 95% of SR distance).
+- **R:R must be ≥ 0.67:1.** MIN_RR_RATIO = 0.67 → TP must be ≥ 1.0% when SL is 1.5%. Trades with worse R:R are rejected.
+- **Momentum confirmation gate.** Daemon checks 1h AND 15m momentum before entry. If 1h opposes AND 15m hasn't turned → BLOCK. If 1h opposes but 15m is turning → ALLOW (the turn is starting).
+- **TECHNICAL momentum conflict = HARD BLOCK.** If 1h momentum opposes TECHNICAL's signal at > 0.20%, TECHNICAL returns NEUTRAL (not capped at 65%). Judge sees fewer agreeing personas.
+- **The chop filter exists for logging only (V3.2.18).** Chop penalties have been removed — the 85% confidence floor (V3.2.57) + 0.50% minimum TP handle signal quality.
+- **EMA snapback exit DISABLED (V3.2.88).** This was a scalp exit tool (8-EMA on 5m candles). Incompatible with swing holds. Breakeven SL + peak-fade handle exits.
 
-**Do NOT flag small TPs or "poor R:R" — that framing is wrong for this strategy.** A 0.5% TP on a dip-bottom entry with a 10-min re-entry loop is the design, not a flaw.
+**Do NOT re-add scalp-era TP ceilings (0.50-0.80%).** Those destroyed R:R when ATR widened SL to 1.5%, producing 0.5:1 R:R trades.
 
 ## Critical Rules
 
@@ -165,8 +167,9 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 #   Forces TP walk past 2H micro-bounce levels to 4H structural anchor where real resistance lives.
 #   In chop, 2H levels are 0.30-0.45% (noise); 4H levels are 0.50-1.0% (structural).
 #   Effective TP range after all guards: [0.40%, per-pair ceiling]
-# PAIR_TP_CEILING (V3.2.41) — per-pair TP max, replaces flat 0.5% COMPETITION_FALLBACK_TP:
-#   BTC=1.5%, ETH=1.5%, SOL=2.0%, XRP=1.0%, BNB=1.0%, LTC=1.0%, ADA=1.0%
+# PAIR_TP_CEILING (V3.2.89) — per-pair TP max for SWING TRADES:
+#   BTC=2.0%, ETH=2.0%, SOL=2.0%, BNB=1.5%, LTC=1.5%, XRP=1.5%, ADA=1.5%
+#   V3.2.89: raised from scalp-era 0.50-0.80%. Old ceilings destroyed R:R (ADA: 0.80% TP / 1.50% SL = 0.53:1).
 #   Ceiling-only: never raises a low TP. Falls back to COMPETITION_FALLBACK_TP for unlisted pairs.
 #   NOT a fallback for missing SR — if chart SR finds no TP, the trade is DISCARDED (V3.2.29)
 # TP method: 2H anchor → 4H anchor (V3.2.41) → 48H walk
@@ -185,17 +188,18 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 #   4H anchors can produce wide SLs; 1.5% = 30% margin loss at 20x (survivable)
 #   Hard liquidation at 20x requires ~4.5% adverse move; 1.5% is well clear
 
-# Breakeven SL + peak-fade (V3.2.46/V3.2.54)
-# BREAKEVEN_TRIGGER_PCT = 0.4   # Move SL to entry when trade reaches +0.4% profit
-#   Protects principal once a trade is in profit. Stored per-trade: sl_moved_to_breakeven=True
+# Breakeven SL + peak-fade (V3.2.88/V3.2.46)
+# BREAKEVEN_TRIGGER_PCT = 0.8   # V3.2.88: Move SL to entry when trade reaches +0.8% profit (was 0.4%)
+#   Swing trades need room to breathe. 0.4% was too tight for 4-8H holds.
+#   Protects principal once a trade is in meaningful profit. Stored per-trade: sl_moved_to_breakeven=True
 # Peak-fade soft stop (fires ONLY when SL not yet at breakeven — mutually exclusive with BE-SL):
-# PEAK_FADE_MIN_PEAK   = {1: 0.30, 2: 0.45, 3: 0.45}   # Min peak% per tier to activate fade
-# PEAK_FADE_TRIGGER_PCT = {1: 0.15, 2: 0.25, 3: 0.25}   # Drop from peak to trigger soft exit
-#   T1 (BTC/ETH): tighter (majors have less wick noise). T2/T3 (altcoins): 2× breathing room.
+# PEAK_FADE_MIN_PEAK   = {1: 0.80, 2: 1.00, 3: 1.00}   # V3.2.88: swing-level (was 0.30/0.45/0.45)
+# PEAK_FADE_TRIGGER_PCT = {1: 0.40, 2: 0.50, 3: 0.50}   # V3.2.88: swing-level (was 0.15/0.25/0.25)
+#   T1 (BTC/ETH): tighter (majors have less wick noise). T2/T3 (altcoins): more room for swings.
 #   exit_reason "peak_fade_T{n}" → zero cooldown (profit was taken).
-# Velocity exit (V3.2.57/V3.2.67): exits flat/stale trades that never moved
-# VELOCITY_EXIT_MINUTES = {1: 75, 2: 60, 3: 50}  # V3.2.67: tiered per-tier (was flat 40min)
-# VELOCITY_MIN_PEAK_PCT = 0.10   # V3.2.67: lowered from 0.15%
+# Velocity exit (V3.2.88): exits flat/stale trades that never moved — SWING-LEVEL TIMING
+# VELOCITY_EXIT_MINUTES = {1: 180, 2: 120, 3: 90}  # V3.2.88: swing windows (was 75/60/50)
+# VELOCITY_MIN_PEAK_PCT = 0.15   # V3.2.88: raised from 0.10% (swing trades should show some move in 2-3 hours)
 #   Distinct from early_exit (needs actual loss) and peak_fade (needs peak then reversal).
 #   Covers "trade opened but price never moved in our direction" — thesis is dead.
 #   exit_reason "velocity_exit" → zero cooldown (slot freed immediately).
@@ -306,18 +310,18 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 
 **Active pairs (V3.2.16+): BTC, ETH, BNB, LTC, XRP, SOL, ADA — 2 slots (V3.2.59 cross-margin)**
 
-| Pair | Symbol | Tier | TP (fallback) | SL (fallback) | Max Hold | Early Exit | Shorts? |
-|------|--------|------|---------------|---------------|----------|------------|---------|
-| BTC  | cmt_btcusdt  | 1 | 3.0% | 1.5% | 3h  | 1h   | Yes (V3.2.18) |
-| ETH  | cmt_ethusdt  | 1 | 3.0% | 1.5% | 3h  | 1h   | Yes (V3.2.18) |
-| BNB  | cmt_bnbusdt  | 2 | 3.5% | 1.5% | 2h  | 45m  | Yes (V3.2.18) |
-| LTC  | cmt_ltcusdt  | 2 | 3.5% | 1.5% | 2h  | 45m  | Yes |
-| XRP  | cmt_xrpusdt  | 2 | 3.5% | 1.5% | 2h  | 45m  | Yes (V3.2.18) |
-| SOL  | cmt_solusdt  | 3 | 3.0% | 1.8% | 1.5h | 30m  | Yes (V3.2.18) |
-| ADA  | cmt_adausdt  | 3 | 3.0% | 1.8% | 1.5h | 30m  | Yes (V3.2.18) |
+| Pair | Symbol | Tier | TP (ceiling) | SL (fallback) | Max Hold | Early Exit | Shorts? |
+|------|--------|------|-------------|---------------|----------|------------|---------|
+| BTC  | cmt_btcusdt  | 1 | 2.0% | 1.5% | 8h  | 2h   | Yes (V3.2.18) |
+| ETH  | cmt_ethusdt  | 1 | 2.0% | 1.5% | 8h  | 2h   | Yes (V3.2.18) |
+| BNB  | cmt_bnbusdt  | 2 | 1.5% | 1.5% | 6h  | 1.5h | Yes (V3.2.18) |
+| LTC  | cmt_ltcusdt  | 2 | 1.5% | 1.5% | 6h  | 1.5h | Yes |
+| XRP  | cmt_xrpusdt  | 2 | 1.5% | 1.5% | 6h  | 1.5h | Yes (V3.2.18) |
+| SOL  | cmt_solusdt  | 3 | 2.0% | 1.8% | 4h  | 1h   | Yes (V3.2.18) |
+| ADA  | cmt_adausdt  | 3 | 1.5% | 1.8% | 4h  | 1h   | Yes (V3.2.18) |
 
-V3.2.56: **Macro blackout exit + funding rate direction fix** — current version.
-V3.2.49: **Final stretch hold times** — aggressive rotation for last 72h of competition.
+V3.2.89: **Swing trade guards** — TP ceilings raised, R:R guard, momentum gate, execution sort.
+V3.2.88: **Long term pivot** — swing hold times (8/6/4H), momentum confirmation, EMA snapback disabled.
 Previously: T1=24h/6h, T2=12h/4h, T3=8h/3h. Single-slot mode means stale positions block all capital.
 DOGE removed V3.2.11 (erratic SL/orphan behavior). BTC/ETH/BNB re-added V3.2.16.
 TP/SL above are **fallback values only** — chart-based SR (find_chart_based_tp_sl) is primary.
@@ -453,42 +457,50 @@ python3 v3/cryptoracle_client.py
 34. **Catalyst drive rule (V3.2.74)** — Judge prompt: SENTIMENT named catalyst (ETF inflow, partnership, protocol upgrade, institutional adoption) + FLOW >= 60% same direction = 85%+ confidence. Bypasses 3-persona requirement because news moves markets before WHALE/TECHNICAL react. Previously ETH with BNP Paribas catalyst + FLOW 51% would WAIT because only 2 of 4 personas agreed. Do not raise FLOW threshold above 60% — catalysts create flow, so FLOW confirmation may be building (60%) rather than fully established (70%+).
 35. **Continuation hold thesis check (V3.2.74)** — Judge prompt: when re-evaluating a pair with an open position in the same direction, Judge explicitly told to re-evaluate the thesis honestly. If signals degraded (FLOW flipped, TECHNICAL reversed), return WAIT/opposite. Do not inflate confidence just because a position is already open. The daemon uses the Judge's re-evaluation to inform exit decisions.
 36. **Range gate 2H override thresholds (V3.2.74 revert)** — V3.2.73 widened thresholds from 30/70 to 45/55, which effectively disabled the 12H range gate (any sub-midpoint reading triggered override). V3.2.74 reverted to 30/70. Do not widen past 30/70 — the thresholds are intentionally conservative to ensure only genuine dips/peaks override the 12H gate.
-37. **Near-TP grace for max_hold (V3.2.76)** — `NEAR_TP_GRACE_PCT = 0.60`, `NEAR_TP_GRACE_MINUTES = 15`. If trade is >= 60% toward TP when max_hold fires, grant 15-min grace. Applied in both `monitor_positions()` and pre-cycle sweep. Do not remove — killing a trade at 60%+ toward TP wastes the move and all fees paid. After grace expires, max_hold fires normally (no infinite grace).
+37. **Near-TP grace for max_hold (V3.2.88)** — `NEAR_TP_GRACE_PCT = 0.60`, `NEAR_TP_GRACE_MINUTES = 30` (V3.2.88: was 15). If trade is >= 60% toward TP when max_hold fires, grant 30-min grace. Applied in both `monitor_positions()` and pre-cycle sweep. Do not remove — killing a trade at 60%+ toward TP wastes the move and all fees paid. After grace expires, max_hold fires normally (no infinite grace).
 38. **Judge thesis degradation exit (V3.2.76)** — When Judge returns WAIT (structured enum, not string parse) for a pair with an open position, and trade is past `early_exit_hours` AND PnL < 0.4% AND no BE-SL placed → close with `thesis_degraded`. Uses ONLY the structured `decision` field — NO reasoning text parsing. This is the OPPOSITE of ANTI-WAIT (V3.2.37): ANTI-WAIT parsed reasoning to override WAIT into a trade; thesis exit RESPECTS WAIT to inform an exit. Do not add string parsing of Judge reasoning — that was the ANTI-WAIT disaster. Zero cooldown (slot freed immediately for better opportunity).
-39. **TECHNICAL momentum conflict (V3.2.77)** — When TECHNICAL's mean-reversion signals (RSI overbought, top of range, above VWAP) say SHORT but 1h momentum > 0.20% (confirmed uptrend), confidence is capped at 65%. Also, 30m momentum and 15m velocity signals are gated: only treated as reversal when 1h momentum disagrees. When both timeframes agree (e.g. 30m +0.39% AND 1h +0.58%), that's a trend, not a spike to fade — those signals become NEUTRAL. Do not remove the 1h momentum gate — without it, TECHNICAL stacks 5 SHORT signals (RSI + momentum + velocity + range + VWAP) to 85% in every uptrend, causing the bot to short into bounces. The 0.20% threshold for the conflict cap is intentionally high enough to avoid triggering on noise but low enough to catch real trends. Do not lower the cap below 0.65 — at lower values, TECHNICAL becomes irrelevant even in genuine reversals.
+39. **TECHNICAL momentum conflict (V3.2.88 HARD BLOCK)** — When TECHNICAL's mean-reversion signals conflict with 1h momentum > 0.20%, TECHNICAL returns NEUTRAL (was: cap at 65%). This is a HARD BLOCK — Judge sees "TECHNICAL: NEUTRAL" and counts fewer agreeing personas. Also, 30m momentum and 15m velocity signals are gated: only treated as reversal when 1h momentum disagrees. Do not remove the 1h momentum gate — without it, TECHNICAL stacks 5 signals to 85% in every uptrend, causing the bot to short into bounces. Do not soften back to a cap — at 65%, Judge still sees "TECHNICAL SHORT 65%" and counts it as partially agreeing, which inflated consensus counts.
 40. **Opposite swap range pre-check (V3.2.78)** — Before closing an existing position for an opposite swap, the range gate is pre-checked. If the replacement trade would be blocked (e.g. LONG at 91% of 12H range with 2H=88%), the existing position is kept instead. Without this, the bot closes the existing position (taking a loss), then the replacement is blocked by the range gate, leaving zero positions and a realized loss with nothing to show for it. Uses the same 12H 55/45 gate with 2H 30/70 override thresholds as `execute_trade()`. Do not move the pre-check after the close — the whole point is to avoid closing when the replacement can't open.
 41. **Thesis exit same-direction false positive (V3.2.84)** — When Judge returns LONG 89% but a LONG already exists, the "already have same direction" block converts it to WAIT 0% before returning to the daemon. The thesis exit then sees WAIT and closes the position thinking signals degraded — but Judge actually *confirmed* the thesis. Fix: `same_direction_hold=True` flag and `judge_raw_decision`/`judge_raw_confidence` are preserved on the WAIT decision. Thesis exit checks this flag and logs "thesis ALIVE (skip exit)" instead of closing. Do not remove the flag or fall back to string parsing of the WAIT reason — that's the ANTI-WAIT disaster (V3.2.37) in reverse.
 42. **Zero-cooldown exit blacklist leak (V3.2.84)** — thesis_degraded, velocity_exit, and flow_contra exits all have 0.0 cooldown multiplier (slot freed immediately). But the loss blacklist at `close_trade()` line 5465 checked `pnl_pct < -0.1` independently of exit reason, applying a 2h blacklist even on zero-cooldown exits. BTC SHORT was thesis-exited at -0.32% and got a 2h blacklist despite the exit being designed for immediate re-entry. Fix: `is_zero_cooldown_exit` flag exempts these reasons from the loss blacklist. Do not remove — the blacklist and cooldown are separate mechanisms, and both must respect zero-cooldown exit semantics.
 43. **Opposite swap SR pre-check (V3.2.86)** — Before closing an existing position for an opposite swap, `find_chart_based_tp_sl()` is called with the current price and replacement direction. If no valid TP exists (`tp_not_found=True` or `method == "fallback"`), the swap is skipped and the existing position is kept. Without this, the bot closes the existing position (taking a loss + blacklist), then the replacement trade is discarded because chart SR found no valid TP — resulting in zero positions, a realized loss, and a 2h blacklist. Triggered by LTC SHORT closed at -$40, LONG replacement failed ("Chart SR returned no valid TP"), left with nothing. Do not move the pre-check after the close — the whole point is to verify the replacement can open before destroying the existing position.
 44. **Stale confidence comparison removed (V3.2.87)** — The old "existing conf > new conf = hold" logic for opposite swaps has been removed. It predated all modern swap guards: age gate (V3.1.100), TP proximity (V3.1.100), range pre-check (V3.2.78), SR pre-check (V3.2.86), FLOW gate (V3.2.72), and thesis exit (V3.2.76). The confidence comparison blocked legitimate flips — e.g. BNB LONG at 88% (from 17 min ago) blocked SHORT 85% when FLOW had violently flipped to 95% SHORT (taker ratio 0.09 = extreme selling). Now: if Judge says opposite at 85%+, the swap gates (age, TP proximity, range, SR) decide. Do not re-add confidence comparison — stale numbers from 10-30 min ago don't reflect current market conditions. The confidence decay hack (V3.2.73) was also removed as it was a band-aid on this broken logic.
+45. **TP ceilings must match hold times (V3.2.89)** — PAIR_TP_CEILING was 0.50-0.80% (scalp-era). With V3.2.88 swing hold times (4-8H), ATR-SAFETY widens SL to 1.5% but the old TP ceiling kept TP at 0.80%, producing 0.53:1 R:R. ADA: chart SR found 1.35% TP (excellent), ceiling capped to 0.80%, SL widened to 1.50% → R:R destroyed. New ceilings: BTC/ETH/SOL 2.0%, alts 1.5%. Do not lower ceilings back to scalp levels — that's incompatible with swing holds.
+46. **MIN_RR_RATIO must reject bad R:R (V3.2.89)** — MIN_RR_RATIO was 0.33 (from scalp era: "strategy exits via snap-back, not TP"). With EMA snapback disabled and swing holds, TP IS the exit. 0.33 R:R means TP < SL/3, requiring >75% win rate. New: 0.67 (TP must be >= 67% of SL). Do not lower below 0.50 — that allows trades where the loss is 2x the win.
+47. **Momentum gate dual check (V3.2.89)** — Old momentum gate (V3.2.88) only checked 15m at 0.15% threshold. ADA LONG entered with 1h mom -0.14% (opposing) + 15m -0.071% (also opposing), passing the 0.15% gate. New: checks BOTH 1h and 15m. Block when 1h opposes (> 0.10%) AND 15m hasn't turned favorable. Allow when 1h opposes but 15m IS turning (the shift is starting). Do not remove the 1h check — it catches cases where the 15m noise says "neutral" but the underlying hourly trend still opposes.
+48. **FLOW flip boost minimum confidence gate (V3.2.89)** — FLOW flip boost (+15%, cap 0.95) previously applied to any FLOW signal at a range extreme. SOL: taker ratio 0.84 (mild selling) → FLOW ~80% → boosted to 95% SHORT. That's extreme-conviction labeling from moderate data. New: FLOW base must be >= 65% before boost applies. Below 65%, the flip is logged but no boost. Do not lower below 65% — that's barely above neutral and doesn't justify a +15% boost.
+49. **Execution sort by persona agreement (V3.2.89)** — Old sort: confidence desc, then tier desc (T3>T2>T1). When BNB (88%, 3 personas agreeing) and ADA (88%, 2 personas + WHALE opposing) tied on confidence, ADA was executed first because T3>T2. ADA had worse R:R and weaker consensus. New: confidence desc, then persona agreement count desc. At equal confidence, prefer trades with more personas agreeing. Do not re-add tier bias — it was a scalp-era preference for volatile alts that made sense for quick bounces but not for swing trades.
+50. **TP_HAIRCUT for swing trades (V3.2.89)** — TP_HAIRCUT changed 0.90→0.95. In scalp mode, targeting 90% of SR made sense (price rarely reaches exact SR on quick bounces). In swing mode with 4-8H holds, price has time to test the actual SR level. 95% captures nearly the full move. Do not lower back to 0.90 — that shaves 5% off every TP unnecessarily for swing timeframes.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.87. Next change should be V3.2.88.
+Current: V3.2.89. Next change should be V3.2.90.
 
 **Recent version history (last 5):**
-- V3.2.87: (**CURRENT**) REMOVE STALE CONF COMPARISON.
-  Removed old "existing conf > new conf = hold" for opposite swaps. Swap gates (age, TP proximity,
-  range pre-check, SR pre-check, FLOW gate) are the real guards. Also removed conf decay hack (V3.2.73).
+- V3.2.89: (**CURRENT**) SWING TRADE GUARDS.
+  TP ceilings raised from scalp-era 0.50-0.80% to swing-level 1.5-2.0% (ADA bug: 0.80% TP / 1.50% SL = 0.53:1 R:R).
+  R:R guard raised 0.33→0.67. TP haircut 0.90→0.95. Momentum gate: dual 1h+15m check (blocks entry when
+  both oppose). FLOW flip boost gate: requires 65% base confidence before +15% boost (SOL 0.84 taker ratio
+  inflated to 95% was wrong). Execution sort: persona agreement count tiebreak (was tier desc, which
+  preferred T3 ADA over T2 BNB when BNB had 3 agreeing personas vs ADA's 2).
+  `PIPELINE_VERSION = "SMT-v3.2.89-SwingTradeGuards"`.
+- V3.2.88: LONG TERM PIVOT.
+  Personas analyze hours-to-days; execution now matches. Hold: T1=8H T2=6H T3=4H. Momentum confirmation
+  gate. TECHNICAL momentum conflict = hard BLOCK (NEUTRAL). EMA snapback DISABLED. BE trigger 0.8%.
+  Peak-fade/velocity widened for swing. Judge prompt: swing trade strategy, removed dip-bounce language.
+  `PIPELINE_VERSION = "SMT-v3.2.88-LongTermPivot"`.
+- V3.2.87: REMOVE STALE CONF COMPARISON.
+  Removed old "existing conf > new conf = hold" for opposite swaps. Swap gates are the real guards.
   `PIPELINE_VERSION = "SMT-v3.2.87-RemoveStaleConfComparison"`.
 - V3.2.86: OPPOSITE SWAP SR PRE-CHECK.
-  `find_chart_based_tp_sl()` called before closing existing position. If no valid TP for replacement,
-  keep existing position. Prevents close-for-nothing disaster (LTC SHORT -$40, no replacement opened).
+  Chart SR pre-checked before closing existing position. If no valid TP for replacement, keep existing.
   `PIPELINE_VERSION = "SMT-v3.2.86-OppositeSRPrecheck"`.
 - V3.2.85: PNL LEVERAGE FIX + PER-CYCLE FLOW SEED.
-  (1) PnL was margin not notional (missing ×20) — broke BE-SL detection, display, AI logs.
-  (2) Full sync_tracker_with_weex() + 3-tier FLOW seed every signal cycle, not just daemon startup.
+  (1) PnL was margin not notional (missing ×20). (2) FLOW seed refresh every signal cycle.
   `PIPELINE_VERSION = "SMT-v3.2.85-PnLLeverageFix"`.
-- V3.2.84: THESIS EXIT SAME-DIRECTION FIX + BLACKLIST EXEMPT.
-  (1) Judge LONG 89% + already have LONG = thesis CONFIRMED, not degraded.
-  (2) Zero-cooldown exits exempt from 2h loss blacklist.
-  `PIPELINE_VERSION = "SMT-v3.2.84-ThesisExitSameDirFix"`.
-- V3.2.78: OPPOSITE SWAP RANGE PRE-CHECK.
-  Range gate checked BEFORE closing existing position for opposite swap.
-  `PIPELINE_VERSION = "SMT-v3.2.78-OppositeRangePrecheck"`.
 
 **CRITICAL RULE (V3.2.57): The 85% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that
