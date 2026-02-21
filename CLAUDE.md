@@ -457,23 +457,27 @@ python3 v3/cryptoracle_client.py
 38. **Judge thesis degradation exit (V3.2.76)** — When Judge returns WAIT (structured enum, not string parse) for a pair with an open position, and trade is past `early_exit_hours` AND PnL < 0.4% AND no BE-SL placed → close with `thesis_degraded`. Uses ONLY the structured `decision` field — NO reasoning text parsing. This is the OPPOSITE of ANTI-WAIT (V3.2.37): ANTI-WAIT parsed reasoning to override WAIT into a trade; thesis exit RESPECTS WAIT to inform an exit. Do not add string parsing of Judge reasoning — that was the ANTI-WAIT disaster. Zero cooldown (slot freed immediately for better opportunity).
 39. **TECHNICAL momentum conflict (V3.2.77)** — When TECHNICAL's mean-reversion signals (RSI overbought, top of range, above VWAP) say SHORT but 1h momentum > 0.20% (confirmed uptrend), confidence is capped at 65%. Also, 30m momentum and 15m velocity signals are gated: only treated as reversal when 1h momentum disagrees. When both timeframes agree (e.g. 30m +0.39% AND 1h +0.58%), that's a trend, not a spike to fade — those signals become NEUTRAL. Do not remove the 1h momentum gate — without it, TECHNICAL stacks 5 SHORT signals (RSI + momentum + velocity + range + VWAP) to 85% in every uptrend, causing the bot to short into bounces. The 0.20% threshold for the conflict cap is intentionally high enough to avoid triggering on noise but low enough to catch real trends. Do not lower the cap below 0.65 — at lower values, TECHNICAL becomes irrelevant even in genuine reversals.
 40. **Opposite swap range pre-check (V3.2.78)** — Before closing an existing position for an opposite swap, the range gate is pre-checked. If the replacement trade would be blocked (e.g. LONG at 91% of 12H range with 2H=88%), the existing position is kept instead. Without this, the bot closes the existing position (taking a loss), then the replacement is blocked by the range gate, leaving zero positions and a realized loss with nothing to show for it. Uses the same 12H 55/45 gate with 2H 30/70 override thresholds as `execute_trade()`. Do not move the pre-check after the close — the whole point is to avoid closing when the replacement can't open.
+41. **Thesis exit same-direction false positive (V3.2.84)** — When Judge returns LONG 89% but a LONG already exists, the "already have same direction" block converts it to WAIT 0% before returning to the daemon. The thesis exit then sees WAIT and closes the position thinking signals degraded — but Judge actually *confirmed* the thesis. Fix: `same_direction_hold=True` flag and `judge_raw_decision`/`judge_raw_confidence` are preserved on the WAIT decision. Thesis exit checks this flag and logs "thesis ALIVE (skip exit)" instead of closing. Do not remove the flag or fall back to string parsing of the WAIT reason — that's the ANTI-WAIT disaster (V3.2.37) in reverse.
+42. **Zero-cooldown exit blacklist leak (V3.2.84)** — thesis_degraded, velocity_exit, and flow_contra exits all have 0.0 cooldown multiplier (slot freed immediately). But the loss blacklist at `close_trade()` line 5465 checked `pnl_pct < -0.1` independently of exit reason, applying a 2h blacklist even on zero-cooldown exits. BTC SHORT was thesis-exited at -0.32% and got a 2h blacklist despite the exit being designed for immediate re-entry. Fix: `is_zero_cooldown_exit` flag exempts these reasons from the loss blacklist. Do not remove — the blacklist and cooldown are separate mechanisms, and both must respect zero-cooldown exit semantics.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.78. Next change should be V3.2.79.
+Current: V3.2.84. Next change should be V3.2.85.
 
 **Recent version history (last 5):**
-- V3.2.78: (**CURRENT**) OPPOSITE SWAP RANGE PRE-CHECK.
-  Range gate checked BEFORE closing existing position for opposite swap. If the replacement
-  trade would be blocked by the range gate (e.g. LONG at 91% of 12H range, 2H=88%), the bot
-  keeps the existing position instead of closing it and getting nothing in return.
-  Fixes: SOL SHORT closed at -$75 loss to flip to LONG, but LONG was blocked by range gate
-  (price at top of range = not a dip). Bot ended up with no position AND took the loss.
-  With this fix, the bot would keep the SHORT and let it play out.
-  Uses same thresholds as execute_trade(): 12H 55/45 gate with 2H 30/70 override.
+- V3.2.84: (**CURRENT**) THESIS EXIT SAME-DIRECTION FIX + BLACKLIST EXEMPT.
+  (1) When Judge says LONG 89% but we already have LONG, the "already have same direction" block
+  converted it to WAIT 0%. Thesis exit then saw WAIT and closed the position thinking signals
+  degraded. Fix: `same_direction_hold=True` flag preserves raw Judge intent — thesis exit skips
+  when Judge actually confirms the held direction. (2) Zero-cooldown exits (thesis_degraded,
+  velocity_exit, flow_contra) now exempt from the 2h loss blacklist. These exits free the slot
+  immediately by design — blacklisting defeats the purpose.
+  `PIPELINE_VERSION = "SMT-v3.2.84-ThesisExitSameDirFix"`.
+- V3.2.78: OPPOSITE SWAP RANGE PRE-CHECK.
+  Range gate checked BEFORE closing existing position for opposite swap.
   `PIPELINE_VERSION = "SMT-v3.2.78-OppositeRangePrecheck"`.
 - V3.2.77: TECHNICAL MOMENTUM CONFLICT FIX.
   Momentum/velocity signals gated on 1h momentum. Conflict cap at 65%.
@@ -484,8 +488,6 @@ Current: V3.2.78. Next change should be V3.2.79.
   `PIPELINE_VERSION = "SMT-v3.2.76-NearTPGrace-ThesisExit"`.
 - V3.2.75: REMOVE DYNAMIC BLACKOUT — Gemini event scanner removed.
   `PIPELINE_VERSION = "SMT-v3.2.75-RemoveDynamicBlackout"`.
-- V3.2.74: FLOW CONTRA + CATALYST DRIVE + CONTINUATION HOLD.
-  `PIPELINE_VERSION = "SMT-v3.2.74-FlowContra-CatalystDrive-ContinuationHold-RangeRevert"`.
 
 **CRITICAL RULE (V3.2.57): The 85% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that

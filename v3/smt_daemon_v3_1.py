@@ -4049,7 +4049,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.84: THESIS EXIT SAME-DIRECTION FIX — Judge LONG 89%% + already have LONG = thesis CONFIRMED, not degraded. Fixes LTC closed at +$22.8 profit because thesis exit couldn't tell confirmation from degradation.")
+    logger.info("  V3.2.84: THESIS EXIT SAME-DIRECTION FIX + BLACKLIST EXEMPT. (1) Judge LONG 89%% + already have LONG = thesis CONFIRMED, not degraded. (2) Zero-cooldown exits (thesis/velocity/flow_contra) exempt from 2h loss blacklist.")
     logger.info("  V3.2.83: FLOW SEED FROM RL DATA — 3-tier seed: positions → RL data → signal_history.")
     logger.info("  V3.2.82: FLOW SEED FROM POSITIONS — Active positions as primary seed source.")
     logger.info("  V3.2.81: TAKER VOLUME FLOOR + FLOW STABILITY — Minority < 3%% = noise. Fresh flips need 2 cycles.")
