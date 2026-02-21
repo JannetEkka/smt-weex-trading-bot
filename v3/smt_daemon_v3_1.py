@@ -1004,14 +1004,19 @@ def check_trading_signals():
                             "count": _prev.get("count", 0) + 1,
                             "entry_time": _prev.get("entry_time", _now_iso),  # first time this direction appeared
                             "last_seen": _now_iso,
+                            "prev_direction": _prev.get("prev_direction"),  # V3.2.68: preserve previous direction
                         }
                     else:
+                        # V3.2.68: Store the previous direction when a flip happens.
+                        # Judge needs to know "was SHORT last cycle, now LONG" = dip bounce signal.
+                        _prev_dir = _prev.get("direction")  # What it WAS before this flip
                         tracker.signal_history[pair] = {
                             "direction": _raw_dir,
                             "confidence": _raw_conf,
                             "count": 1,
                             "entry_time": _now_iso,
                             "last_seen": _now_iso,
+                            "prev_direction": _prev_dir,  # V3.2.68: what direction was BEFORE this flip
                         }
                 else:
                     tracker.signal_history.pop(pair, None)

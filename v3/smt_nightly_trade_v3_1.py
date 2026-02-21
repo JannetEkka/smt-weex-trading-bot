@@ -3635,8 +3635,13 @@ class JudgePersona:
                         except Exception:
                             pass
                     _is_current = " ← THIS PAIR" if _sh_pair == pair else ""
+                    # V3.2.68: Show flip explicitly — Judge needs to see "was SHORT, now LONG"
+                    _sh_prev = _sh_data.get("prev_direction")
+                    _flip_tag = ""
+                    if _sh_count == 1 and _sh_prev and _sh_prev != _sh_dir:
+                        _flip_tag = f" ★ FLIPPED from {_sh_prev} → {_sh_dir} (DIP/PEAK SIGNAL)"
                     _sh_lines.append(
-                        f"  {_sh_pair}: {_sh_dir} {_sh_conf:.0%} × {_sh_count} cycles ({_sh_age_min}min ago){_is_current}"
+                        f"  {_sh_pair}: {_sh_dir} {_sh_conf:.0%} × {_sh_count} cycles ({_sh_age_min}min ago){_flip_tag}{_is_current}"
                     )
                 signal_history_text = "\n".join(_sh_lines)
         except Exception as _sh_err:
