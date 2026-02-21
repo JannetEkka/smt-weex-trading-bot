@@ -666,6 +666,7 @@ def check_trading_signals():
         _seeded_from_pos = 0
         _seeded_from_rl = 0
         _seeded_from_sh = 0
+        _prev_flow_direction.clear()  # Rebuild from scratch every cycle so all 7 pairs get logged
         try:
             for _at_key, _at_data in tracker.active_trades.items():
                 if isinstance(_at_data, dict) and _at_data.get("side") in ("LONG", "SHORT"):
