@@ -1669,8 +1669,6 @@ def check_trading_signals():
                             opp_entry = float(opp_pos.get("entry_price", 0))
                             opp_pnl = float(opp_pos.get("unrealized_pnl", 0))
 
-                            from smt_nightly_trade_v3_1 import close_position_manually
-
                             logger.info(f"  [OPPOSITE] Closing {opp_side} {pair} (entry=${opp_entry:.4f}, PnL={opp_pnl:.2f}) before opening {signal}")
                             try:
                                 close_result = close_position_manually(sym, opp_side, opp_size)
