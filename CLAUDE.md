@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.69** — all production code is in `v3/`.
+**Current version: V3.2.70** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -160,9 +160,10 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 
 # TP/SL bounds (V3.2.41: per-pair ceiling + MAX_SL + 4H anchor; V3.2.46: SL cap instead of discard)
 # MIN_TP_PCT removed (V3.2.24) — chart SR is the TP, whatever distance that is
-# MIN_VIABLE_TP_PCT = 0.40% (V3.2.41, was 0.20% in V3.2.36) — SKIP SR levels < 0.40% from entry
-#   NOT a floor (old behavior); SR candidates too close are skipped entirely.
-#   Forces TP walk to 4H anchor or 48H list where genuine 0.6-2% levels live.
+# MIN_VIABLE_TP_PCT = 0.50% (V3.2.70, was 0.30% in V3.2.67) — SKIP SR levels < 0.50% from entry
+#   Aligned with MIN_RR_RATIO(0.33) × MAX_SL_PCT(1.5%) = 0.50%. Ensures any selected TP can pass R:R.
+#   Forces TP walk past 2H micro-bounce levels to 4H structural anchor where real resistance lives.
+#   In chop, 2H levels are 0.30-0.45% (noise); 4H levels are 0.50-1.0% (structural).
 #   Effective TP range after all guards: [0.40%, per-pair ceiling]
 # PAIR_TP_CEILING (V3.2.41) — per-pair TP max, replaces flat 0.5% COMPETITION_FALLBACK_TP:
 #   BTC=1.5%, ETH=1.5%, SOL=2.0%, XRP=1.0%, BNB=1.0%, LTC=1.0%, ADA=1.0%
@@ -431,10 +432,21 @@ python3 v3/cryptoracle_client.py
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.69. Next change should be V3.2.70.
+Current: V3.2.70. Next change should be V3.2.71.
 
 **Recent version history:**
-- V3.2.69: (**CURRENT**) RANGE GATE 2H OVERRIDE — 12H range gate (55/45) now bypassed when
+- V3.2.70: (**CURRENT**) R:R UNLOCK — fixes TP ceiling vs R:R guard deadlock that blocked 4/7 pairs.
+  `MIN_VIABLE_TP_PCT` raised 0.30%→0.50%: forces TP walk past 2H micro-bounce levels (0.30-0.45%)
+  to the 4H structural anchor where real resistance lives (0.50-1.0%).
+  Previously the 2H anchor at ~0.37% passed MIN_VIABLE (0.30%), the walk stopped, but then
+  R:R guard killed it (0.37%/1.50% = 0.25:1 < 0.50). Now the walk skips to the 4H anchor.
+  `MIN_RR_RATIO` lowered 0.5→0.33: PAIR_TP_CEILING for BTC(0.60%), ETH(0.50%), BNB(0.50%),
+  LTC(0.70%) was structurally incompatible with R:R 0.5:1 at 1.5% SL.
+  At 0.33:1: break-even win rate = 82.3% (with 20x leverage + 0.16% round-trip fees).
+  The 85% confidence floor provides margin. Strategy exits via snap-back/peak-fade/BE-SL (not TP),
+  so classical R:R overstates the risk. The alternative was zero trades on 4/7 pairs.
+  `PIPELINE_VERSION = "SMT-v3.2.70-RRUnlock-MinViable50-RR33"`.
+- V3.2.69: RANGE GATE 2H OVERRIDE — 12H range gate (55/45) now bypassed when
   TECHNICAL's 2H range confirms genuine dip (<30%) or peak (>70%).
   `_technical_range_pos_cache`: new global cache storing TECHNICAL persona's 2H range_pos per symbol.
   Populated in `TechnicalPersona.analyze()`, cleared with chart context cache (10min TTL).

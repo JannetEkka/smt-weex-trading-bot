@@ -1598,7 +1598,7 @@ COMPETITION_FALLBACK_SL = {
 # Used by both find_chart_based_tp_sl() and execute_trade()'s Gemini TP override / ATR safety net.
 MIN_SL_PCT = 1.0          # SL floor: at least 1.0% from entry (20x = 20% margin loss minimum)
 MAX_SL_PCT = 1.5          # SL ceiling: cap at 1.5% (20x = 30% margin loss, survivable)
-MIN_VIABLE_TP_PCT = 0.30  # V3.2.67: skip SR levels < 0.30% from entry
+MIN_VIABLE_TP_PCT = 0.50  # V3.2.70: skip SR levels < 0.50% — forces walk past 2H micro-bounce to 4H structural anchor. Aligned with MIN_RR(0.33) × MAX_SL(1.5%) = 0.50%.
 TP_HAIRCUT = 0.90         # V3.2.68: target 90% of distance to S/R level
 
 # V3.2.67: TP ceilings tightened to match ACTUAL observed swing sizes.
@@ -2042,7 +2042,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.69-RangeGate2HOverride-DipInUptrend"
+PIPELINE_VERSION = "SMT-v3.2.70-RRUnlock-MinViable50-RR33"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -4995,8 +4995,11 @@ def execute_trade(pair_info: Dict, decision: Dict, balance: float) -> Dict:
         print(f"  [FEE-FLOOR] {_reason}")
         return {"executed": False, "reason": _reason}
 
-    # V3.2.66: Restore R:R guard — minimum 0.5:1 (break-even at ~65% win rate).
-    MIN_RR_RATIO = 0.5
+    # V3.2.70: R:R guard lowered 0.5→0.33. At 20x + 0.16% round-trip fees:
+    # TP 0.50% / SL 1.50% = 0.33:1 → break-even win rate 82.3%. 85% confidence floor covers this.
+    # Old 0.5:1 was incompatible with PAIR_TP_CEILING for BTC/ETH/BNB/LTC when SL hits 1.5% cap.
+    # Strategy exits via snap-back/peak-fade/BE-SL, not TP — classical R:R overstates the risk.
+    MIN_RR_RATIO = 0.33
     _rr_ratio = tp_pct_raw / sl_pct_raw if sl_pct_raw > 0 else 0
     if _rr_ratio < MIN_RR_RATIO:
         _reason = f"R:R {_rr_ratio:.2f}:1 below minimum {MIN_RR_RATIO}:1 (TP {tp_pct_raw:.2f}% / SL {sl_pct_raw:.2f}%)"
