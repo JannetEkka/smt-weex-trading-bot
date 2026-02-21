@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.64** — all production code is in `v3/`.
+**Current version: V3.2.68** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -199,6 +199,38 @@ TAKER_FEE_RATE = 0.0008              # V3.2.50: 0.08%/side taker fee (corrected 
 #   Covers "trade opened but price never moved in our direction" — thesis is dead.
 #   exit_reason "velocity_exit" → zero cooldown (slot freed immediately).
 
+# 8-EMA snap-back exit (V3.2.68): mean-reversion exit for dip-bounce trades
+# Computes 8-period EMA on 5m candles in monitor_positions()
+# Fires when: age >= 10 min, peak >= 0.20%, pnl > 0, BE-SL not yet placed
+# LONG: price crosses ABOVE 8-EMA = snap-back complete → exit
+# SHORT: price crosses BELOW 8-EMA = snap-back complete → exit
+# exit_reason "ema_snapback" → zero cooldown (profit taken at mean reversion)
+# Mutually exclusive with BE-SL (once BE-SL placed, WEEX SL handles downside)
+
+# Volume spike detection (V3.2.68): confirms institutional dip/peak moves
+# In TECHNICAL persona: avg vol of last 3 5m candles vs avg of prior 12 candles
+# vol_ratio >= 2.0 = volume spike confirmed → +0.25 confidence to dominant direction
+# Prevents entering low-volume fakeout dips
+
+# Entry velocity check (V3.2.68): ensures active dip, not slow grind
+# In TECHNICAL persona: velocity_15m = price change over last 3 5m candles
+# |velocity| > 0.20% = sharp move confirmed → +0.35 confidence to direction
+# Drop = LONG signal (buying the dip), Rally = SHORT signal (fading the peak)
+
+# Range gate (V3.2.68): tightened 70/30 → 55/45
+# _RANGE_LONG_BLOCK = 55  # LONGs must be in lower half of 12H range (dip territory)
+# _RANGE_SHORT_BLOCK = 45  # SHORTs must be in upper half (peak territory)
+
+# TP haircut (V3.2.68): TP_HAIRCUT = 0.90
+# All SR-based TPs target 90% of distance from entry to S/R level
+# Price typically reverses before reaching exact S/R → 90% captures the move
+
+# FLOW flip boost (V3.2.68): replaces V3.2.1 flip discount
+# SHORT→LONG flip at range < 45% = +15% boost (cap 0.95). Dip signal.
+# LONG→SHORT flip at range > 55% = +15% boost (cap 0.95). Peak signal.
+# Mid-range flips (45-55%) = neutral (no penalty, no boost).
+# Replaces blanket 50% discount that killed confidence at dip bottoms.
+
 # Emergency flip (V3.2.51)
 # EMERGENCY_FLIP_CONFIDENCE = 0.90  # At 90%+ opposite confidence, bypass the 20-min age gate
 #   TP proximity gate (>= 30% toward TP) is STILL enforced — never abandon a nearly-won trade.
@@ -284,9 +316,9 @@ Key endpoints:
 
 1. **WHALE** — On-chain wallet tracking (Etherscan + Cryptoracle). CEX inflow/outflow signals. Cryptoracle provides community sentiment, prediction market, sentiment momentum Z-score. V3.2.20: BTC and ETH always run Etherscan on-chain flow regardless of `has_whale_data` flag (dual source: Etherscan + Cryptoracle combined).
 2. **SENTIMENT** — Gemini 2.5 Flash with Search Grounding. Macro news analyst role (V3.2.41): catalysts, macro_bias, volatility_risk, volatility_event, pair_specific_news — qualitative only, no price targets. V3.2.45: dynamic date injection in search queries + regex JSON parser immune to grounding citation injection.
-3. **FLOW** — WEEX order book + trades. Taker ratios, bid/ask depth, funding rates. V3.2.20: order book wall detection (depth limit=200) — nearest significant ask/bid wall passed to Judge as context.
-4. **TECHNICAL** — RSI(14), SMA 20/50, 5-candle momentum on 1h candles.
-5. **JUDGE** — Aggregates all votes with regime-aware weights. Final LONG/SHORT/WAIT. V3.2.16: receives Gemini chart context (1D + 4H structural levels). V3.2.17: receives signal cycle memory + live chop microstructure. V3.2.20: receives FLOW order book wall prices as additional TP context. V3.2.37: ANTI-WAIT removed — if Judge returns WAIT, it is WAIT with no overrides. V3.2.45: regex JSON extractor immune to grounding citation markers. V3.2.48: receives funding hold-cost and macro event context. V3.2.56: funding direction-aware — told "paying" or "receiving" based on position side vs rate sign (fixes bonus mislabeled as drag for LONGs on negative funding).
+3. **FLOW** — WEEX order book + trades. Taker ratios, bid/ask depth, funding rates. V3.2.20: order book wall detection (depth limit=200) — nearest significant ask/bid wall passed to Judge as context. V3.2.68: FLOW flip (SHORT→LONG or LONG→SHORT) at dip/peak territory = +15% confidence boost (was 50% discount). Mid-range flips = neutral.
+4. **TECHNICAL** — V3.2.68: 5m RSI(14) + VWAP + 30m momentum + 2H range position + volume spike (2x avg) + entry velocity (0.20%/15m). Was: RSI(14), SMA 20/50 on 1H candles (14-hour lookback, blind to 30-60 min dips).
+5. **JUDGE** — Aggregates all votes with regime-aware weights. Final LONG/SHORT/WAIT. V3.2.16: receives Gemini chart context (1D + 4H structural levels). V3.2.17: receives signal cycle memory + live chop microstructure. V3.2.20: receives FLOW order book wall prices as additional TP context. V3.2.37: ANTI-WAIT removed — if Judge returns WAIT, it is WAIT with no overrides. V3.2.45: regex JSON extractor immune to grounding citation markers. V3.2.48: receives funding hold-cost and macro event context. V3.2.56: funding direction-aware — told "paying" or "receiving" based on position side vs rate sign (fixes bonus mislabeled as drag for LONGs on negative funding). V3.2.68: DIP/PEAK DETECTION PROTOCOL — FLOW flip is the dip signal, 2-persona dip rule (FLOW+TECHNICAL sufficient for 85% when WHALE/SENT neutral), explicit flip visibility in signal_history.
 
 Post-judge filters (V3.2.18): Freshness filter, Regime veto, Consecutive loss block.
 Chop filter kept for **logging only** — no score penalties applied as of V3.2.18.
@@ -367,7 +399,7 @@ python3 v3/cryptoracle_client.py
 6. **Consecutive losses** — Block re-entry after 2 losses (any type) same direction in 24h (V3.1.91: counts ALL losses, not just force-stops)
 7. **AI log missing** — Every trade MUST upload logs or competition results won't count
 8. **Premature opposite flips** — V3.1.100 gates: don't flip if position >= 30% toward TP or < 20min old. Blocked signals queue for deferred execution. V3.2.35: opposite signal now closes existing position first (via `close_position_manually()`), then opens the new direction — no more dual LONG+SHORT on same pair.
-9. **FLOW noise** — V3.2.1: if FLOW flips direction 180° from last cycle, confidence is halved. One-cycle flip = noise (single large print); sustained direction = real signal.
+9. **FLOW flip = dip signal (V3.2.68)** — FLOW flip at dip/peak territory (range position < 45% for LONG, > 55% for SHORT) gets +15% confidence boost. Mid-range flips: neutral (no penalty, no boost). Replaces V3.2.1 behavior where ALL flips were penalized 50% — that halved confidence at exactly the moment dip-bounce entries need it most.
 10. **TECHNICAL in fear markets** — V3.2.1: TECHNICAL weight halved (0.8→0.4) when F&G < 30. SMA signals lag in fear/capitulation; FLOW + WHALE are more reliable.
 11. **Watchdog hang detection** — If daemon logs go stale for 15min, watchdog force-kills and restarts. This is intentional; don't disable it.
 12. **Gemini portfolio review disabled** — `gemini_portfolio_review()` is disabled in V3.2.17. Do not re-enable without testing.
@@ -384,16 +416,33 @@ python3 v3/cryptoracle_client.py
 23. **Velocity exit vs peak-fade vs early exit (V3.2.57)** — Three distinct exit mechanisms: (1) early_exit = trade open > X min AND losing > -1%; (2) peak_fade = trade peaked then reversed (peak > threshold, current < peak - trigger); (3) velocity_exit = trade never moved at all (peak < 0.15% after 40 min). Velocity exit gate: `peak_pnl_pct < VELOCITY_MIN_PEAK_PCT` — fires ONLY when breakeven SL NOT placed (peak too low to trigger BE-SL). All three are distinct conditions; do not merge or confuse them.
 24. **Judge hold-time mismatch (V3.2.57 FIX)** — Prior versions told Judge "4-5H planning horizon" but TIER_CONFIG kills at 1.5-3H. Judge was picking unreachable TP targets. V3.2.57 adds explicit HOLD TIME LIMITS section to Judge prompt with actual per-tier limits. Do not re-add "4-5H" references.
 25. **Plan orders endpoint 404 (V3.2.64 FIX)** — `_fetch_plan_order_ids()` and `cancel_all_orders_for_symbol()` were using `/capi/v2/order/plan_orders` which returns HTTP 404. Correct endpoint is `/capi/v2/order/currentPlan`. This was causing: (1) plan order IDs stored as None at trade open, (2) orphan TP/SL triggers not being cleaned up on manual close, (3) mismatch detection disabled. The runner code (line 5504) was already using the correct endpoint.
+26. **8-EMA snap-back exit mutual exclusion (V3.2.68)** — `ema_snapback` exit fires ONLY when `sl_moved_to_breakeven=False` — mutually exclusive with breakeven SL (same gate as peak_fade). Once BE-SL is placed, WEEX SL handles exit. Do not remove this gate.
+27. **FLOW flip boost ordering (V3.2.68)** — `get_chart_context()` MUST run BEFORE persona analysis so `_chart_range_position_cache` is populated when FLOW flip checks range position. Moving `get_chart_context()` after persona analysis makes the flip boost a no-op (cache empty/stale).
+28. **FLOW flip boost cap (V3.2.68)** — Flip boost cap is 0.95 (not 0.85). FLOW's internal cap is 0.85, but the flip boost in `MultiPersonaAnalyzer.analyze()` raises this to `min(0.95, conf + 0.15)`. Do not lower the cap back to 0.85 — that makes the boost a no-op.
+29. **Judge 2-persona dip rule (V3.2.68)** — When FLOW flip + TECHNICAL oversold + range extreme + WHALE/SENT neutral, 2 personas are sufficient for 85% confidence. Do not re-add the 3-persona requirement for dip scenarios — WHALE (backward-looking) and SENTIMENT (qualitative) are structurally blind to real-time 30-60 min dips.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.64. Next change should be V3.2.65.
+Current: V3.2.68. Next change should be V3.2.69.
 
 **Recent version history:**
-- V3.2.64: (**CURRENT**) Shorts re-enabled + bidirectional Judge + plan_orders endpoint fix.
+- V3.2.68: (**CURRENT**) DIP DETECTION OVERHAUL — complete rewrite of how the bot detects and enters dip-bounce patterns.
+  TECHNICAL persona: Rewritten from 1H RSI(14) (14-hour lookback, blind to dips) to 5m RSI(14) + VWAP + 30m momentum + 2H range position.
+  Volume spike detection: Current 3-candle avg volume > 2x baseline 12-candle avg = institutional move confirmation (+0.25 conf).
+  Entry velocity check: Price drop > 0.20% in 15 min = active dip, not slow grind (+0.35 conf to dominant direction).
+  FLOW flip boost: SHORT→LONG flip at dip territory (range < 45%) = +15% confidence boost (was 50% discount). Cap raised 0.85→0.95.
+  Range gate tightened: 70/30 → 55/45 (must be in dip/peak territory, not mid-range).
+  TP haircut 90%: All SR-based TPs target 90% of distance to level (price reverses before exact S/R).
+  Chart context pre-fetch: `get_chart_context()` called BEFORE persona analysis so range cache populated when FLOW flip checks.
+  Judge DIP/PEAK DETECTION PROTOCOL: FLOW flip IS the dip signal. 2-persona dip rule (FLOW+TECHNICAL sufficient for 85%).
+  Signal history flip tag: Judge sees "★ FLIPPED from SHORT → LONG (DIP/PEAK SIGNAL)" with prev_direction tracked.
+  8-EMA snap-back EXIT: Mean-reversion exit in daemon — when price crosses back through 8-period EMA on 5m candles (age>=10m, peak>=0.20%, pnl>0, no BE-SL).
+  `PIPELINE_VERSION = "SMT-v3.2.68-DipDetection-5mRSI-VolSpike-Velocity-EMAExit"`.
+- V3.2.67: VELOCITY EXIT TIERED (T1=75m, T2=60m, T3=50m). Peak threshold 0.15%→0.10%. ADX gate softened. Weekend restriction DISABLED. Signal persistence tracks ADX-gated signals.
+- V3.2.64: Shorts re-enabled + bidirectional Judge + plan_orders endpoint fix.
   Judge prompt rewritten: removed LONG-only bias language, added CONTINUATION SHORT strategy for extreme fear.
   Shorts now evaluated equally with LONGs based on FLOW/SENTIMENT/WHALE confluence.
   `_fetch_plan_order_ids()` + `cancel_all_orders_for_symbol()`: endpoint fixed `/plan_orders` → `/currentPlan` (was returning HTTP 404).

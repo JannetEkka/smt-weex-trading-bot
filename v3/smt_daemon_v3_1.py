@@ -2050,6 +2050,50 @@ def monitor_positions():
                             should_exit = True
                             exit_reason = f"velocity_exit ({_age_min:.0f}m open, peak={peak_pnl_pct:.2f}% never reached {VELOCITY_MIN_PEAK_PCT:.2f}%, T{tier} limit={_vel_limit}m)"
 
+                # V3.2.68: 8-EMA SNAP-BACK EXIT — mean-reversion exit for dip-bounce trades.
+                # The natural dip-bounce exit is when price snaps back to the short-term mean.
+                # 8-period EMA on 5m candles = 40 min of data = matches the dip-bounce timeframe.
+                # Logic: if trade is profitable (peak >= 0.20%) AND price crosses back through the 8-EMA
+                # in the direction of mean reversion → exit. This catches the natural bounce completion
+                # instead of waiting for a fixed TP that may be too far.
+                # Only fires when: (1) trade is >= 10 min old, (2) peak was meaningful (>= 0.20%),
+                # (3) NOT already covered by breakeven SL (BE-SL handles the >= 0.40% case).
+                # Zero cooldown (profit was taken).
+                if not should_exit and not trade.get("sl_moved_to_breakeven", False):
+                    _ema_age_min = hours_open * 60
+                    if _ema_age_min >= 10 and peak_pnl_pct >= 0.20 and pnl_pct > 0:
+                        try:
+                            _ema_url = f"{WEEX_BASE_URL}/capi/v2/market/candles?symbol={symbol}&granularity=5m&limit=10"
+                            _ema_r = requests.get(_ema_url, timeout=8)
+                            _ema_candles = _ema_r.json()
+                            if isinstance(_ema_candles, list) and len(_ema_candles) >= 9:
+                                # 5m candles newest first. Compute 8-EMA from chronological order.
+                                _ema_closes = [float(c[4]) for c in reversed(_ema_candles[:9])]  # 9 candles chron
+                                _ema_mult = 2.0 / (8 + 1)  # EMA smoothing factor for period 8
+                                _ema_val = _ema_closes[0]
+                                for _ec in _ema_closes[1:]:
+                                    _ema_val = (_ec - _ema_val) * _ema_mult + _ema_val
+                                _live_price = float(_ema_candles[0][4])  # Most recent close
+                                _side = trade.get("side", "LONG")
+                                # LONG: entered below EMA (dip). Snap-back = price crosses ABOVE EMA.
+                                # SHORT: entered above EMA (peak). Snap-back = price crosses BELOW EMA.
+                                _snapped_back = False
+                                if _side == "LONG" and _live_price >= _ema_val:
+                                    # Confirm: previous candle was BELOW EMA (just crossed)
+                                    _prev_close = float(_ema_candles[1][4])
+                                    if _prev_close < _ema_val:
+                                        _snapped_back = True
+                                elif _side == "SHORT" and _live_price <= _ema_val:
+                                    _prev_close = float(_ema_candles[1][4])
+                                    if _prev_close > _ema_val:
+                                        _snapped_back = True
+                                if _snapped_back:
+                                    should_exit = True
+                                    exit_reason = f"ema_snapback ({_side}, price={_live_price:.4f} crossed 8-EMA={_ema_val:.4f}, pnl={pnl_pct:+.2f}%, peak={peak_pnl_pct:.2f}%)"
+                                    logger.info(f"  [EMA-SNAP] {symbol}: {exit_reason}")
+                        except Exception as _ema_err:
+                            pass  # EMA check failure = skip, not block
+
                 if should_exit:
                     symbol_clean = symbol.replace("cmt_", "").upper()
                     logger.warning(f"{symbol_clean}: Force close - {exit_reason}")
@@ -3727,7 +3771,7 @@ def regime_aware_exit_check():
 
 def run_daemon():
     logger.info("=" * 60)
-    logger.info("SMT Daemon V3.2.68 - DIP DETECTION: 5m RSI TECHNICAL, smart FLOW flip, range gate 55/45, TP haircut 90%%")
+    logger.info("SMT Daemon V3.2.68 - DIP DETECTION: 5m RSI + volume spike + velocity | FLOW flip boost | 8-EMA snap-back exit | TP haircut 90%%")
     logger.info("=" * 60)
     # --- Trading pairs & slots ---
     logger.info("PAIRS & SLOTS:")
@@ -3784,8 +3828,8 @@ def run_daemon():
     logger.info("PERSONA CONFIG:")
     logger.info("  WHALE: 1.0 | Etherscan on-chain + Cryptoracle (always combined for BTC/ETH)")
     logger.info("  SENTIMENT: 1.0 | Gemini 2.5 Flash w/ Search Grounding")
-    logger.info("  FLOW: 1.0 | Taker ratio beats depth | 180-flip = confidence halved")
-    logger.info("  TECHNICAL: 1.0 (halved to 0.4 when F&G<30) | RSI(14), SMA 20/50, 5-candle momentum")
+    logger.info("  FLOW: 1.0 | Taker ratio beats depth | 180-flip at dip/peak = +15%% boost (V3.2.68)")
+    logger.info("  TECHNICAL: 1.0 (halved when F&G<30) | 5m RSI(14) + VWAP + 30m momentum + volume spike (2x) + entry velocity (0.20%%/15m) (V3.2.68)")
     logger.info("  JUDGE: Gemini aggregator | Receives chart structure (1D+4H) + 12H price action candles for entry timing")
     # --- Disabled features ---
     logger.info("DISABLED:")
@@ -3804,7 +3848,7 @@ def run_daemon():
         logger.info(f"    TP: {tier_config['take_profit']*100:.1f}%%, SL: {tier_config['stop_loss']*100:.1f}%%, Hold: {tier_config['time_limit']/60:.0f}h | {runner_str}")
     # --- Recent changelog (last 5 versions) ---
     logger.info("CHANGELOG (recent):")
-    logger.info("  V3.2.68: DIP DETECTION OVERHAUL — TECHNICAL rewritten with 5m RSI(14)+VWAP+30m momentum (was 1H RSI=blind to dips). FLOW FLIP = DIP SIGNAL: SHORT→LONG flip at bottom of range gets +15%% confidence BOOST (was 50%% discount!). Mid-range flips: neutral (no penalty). Range gate tightened 70/30→55/45. TP haircut 90%%.")
+    logger.info("  V3.2.68: DIP DETECTION OVERHAUL — TECHNICAL: 5m RSI(14)+VWAP+30m momentum+volume spike(2x)+entry velocity(0.20%%/15m). FLOW: flip at dip/peak=+15%% boost (was 50%% discount). Range gate 55/45. TP haircut 90%%. 8-EMA snap-back EXIT in daemon (mean-reversion close). Judge: 2-persona dip rule, flip protocol.")
     logger.info("  V3.2.67: VELOCITY EXIT TIERED (T1=75m, T2=60m, T3=50m, was flat 40m — bounces need 60-90min). Peak threshold 0.15%%→0.10%%. ADX gate softened (5, not 10). Weekend restriction DISABLED (all 7 pairs). Signal persistence tracks ADX-gated signals.")
     logger.info("  V3.2.63: 1D candle granularity FIX (1Dutc→1d — was rejected by WEEX API, breaking ALL chart context). 4H fallback when 1D unavailable. datetime.utcfromtimestamp→fromtimestamp(tz=utc). Judge now gets daily+4H S/R levels again.")
     logger.info("  V3.2.62: Chart context FIX — 12H price action fetch now INDEPENDENT of 1D/4H (was silently failing when 1D/4H returned errors). 30m→15m fallback for T2 if WEEX rejects 30m granularity. Fixed datetime.datetime bug (was datetime.utcfromtimestamp). Judge TP ceiling prompt now reads PAIR_TP_CEILING dynamically.")

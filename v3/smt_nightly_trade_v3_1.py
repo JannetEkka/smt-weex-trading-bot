@@ -2041,7 +2041,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.68-DipDetection-5mRSI-FlipBoost-TPHaircut"
+PIPELINE_VERSION = "SMT-v3.2.68-DipDetection-5mRSI-VolSpike-Velocity-EMAExit"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3341,9 +3341,29 @@ class TechnicalPersona:
             vwap = sum(closes_5m[i] * volumes_5m[i] for i in range(_vwap_n)) / _vwap_vol
             vwap_dist = ((current_price - vwap) / vwap) * 100 if vwap > 0 else 0.0
 
+            # === VOLUME SPIKE DETECTION (V3.2.68) ===
+            # Dip on 2x+ normal volume = real institutional selling/buying, not noise.
+            # Compare last 3 candles (15min) avg volume vs prior 12 candles (1h) avg volume.
+            _recent_vol = volumes_5m[:3]  # Last 15 min (newest first)
+            _baseline_vol = volumes_5m[3:15]  # Prior 1h
+            _avg_recent = sum(_recent_vol) / len(_recent_vol) if _recent_vol else 0
+            _avg_baseline = sum(_baseline_vol) / len(_baseline_vol) if _baseline_vol else 1
+            vol_ratio = _avg_recent / _avg_baseline if _avg_baseline > 0 else 1.0
+            vol_spike = vol_ratio >= 2.0  # 2x+ = significant volume spike
+
+            # === ENTRY VELOCITY (V3.2.68) ===
+            # How fast did price move in the last 15 min (3 × 5m candles)?
+            # Sharp drop > 0.3% in 15 min = active dip (better entry than slow grind)
+            # Sharp rise > 0.3% in 15 min = active spike
+            if closes_5m[3] > 0:
+                velocity_15m = ((closes_5m[0] - closes_5m[3]) / closes_5m[3]) * 100
+            else:
+                velocity_15m = 0.0
+
             print(f"  [TECHNICAL] 5m RSI={rsi_5m:.1f} | 30m mom={momentum_30m:+.2f}% | "
                   f"1h mom={momentum_1h:+.2f}% | range_pos={range_pos:.0f}% | "
-                  f"VWAP dist={vwap_dist:+.3f}% | trend={trend_bias}")
+                  f"VWAP dist={vwap_dist:+.3f}% | trend={trend_bias} | "
+                  f"vol_ratio={vol_ratio:.1f}x{' SPIKE' if vol_spike else ''} | vel_15m={velocity_15m:+.3f}%")
 
             # === SIGNAL GENERATION ===
             signals = []
@@ -3365,6 +3385,18 @@ class TechnicalPersona:
                 signals.append(("LONG", 0.45, f"Sharp 30m dip: {momentum_30m:+.2f}%"))
             elif momentum_30m > 0.3:
                 signals.append(("SHORT", 0.45, f"Sharp 30m spike: {momentum_30m:+.2f}%"))
+
+            # Entry velocity — sharp 15m move = active dip/spike (not slow grind)
+            if velocity_15m < -0.20:
+                signals.append(("LONG", 0.35, f"Active dip velocity: {velocity_15m:+.3f}%/15m"))
+            elif velocity_15m > 0.20:
+                signals.append(("SHORT", 0.35, f"Active spike velocity: {velocity_15m:+.3f}%/15m"))
+
+            # Volume spike — confirms the move is real, not noise
+            # Only adds to existing direction signals (doesn't create a direction on its own)
+            if vol_spike and signals:
+                _dominant = "LONG" if sum(s[1] for s in signals if s[0] == "LONG") > sum(s[1] for s in signals if s[0] == "SHORT") else "SHORT"
+                signals.append((_dominant, 0.25, f"Volume spike {vol_ratio:.1f}x confirms {_dominant.lower()} pressure"))
 
             # Range position — lower half = dip territory, upper half = peak territory
             if range_pos < 20:
