@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.92** — all production code is in `v3/`.
+**Current version: V3.2.93** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -459,7 +459,7 @@ python3 v3/cryptoracle_client.py
 36. **Range gate 2H override thresholds (V3.2.74 revert)** — V3.2.73 widened thresholds from 30/70 to 45/55, which effectively disabled the 12H range gate (any sub-midpoint reading triggered override). V3.2.74 reverted to 30/70. Do not widen past 30/70 — the thresholds are intentionally conservative to ensure only genuine dips/peaks override the 12H gate.
 37. **Near-TP grace for max_hold (V3.2.88)** — `NEAR_TP_GRACE_PCT = 0.60`, `NEAR_TP_GRACE_MINUTES = 30` (V3.2.88: was 15). If trade is >= 60% toward TP when max_hold fires, grant 30-min grace. Applied in both `monitor_positions()` and pre-cycle sweep. Do not remove — killing a trade at 60%+ toward TP wastes the move and all fees paid. After grace expires, max_hold fires normally (no infinite grace).
 38. **Judge thesis degradation exit (V3.2.76)** — When Judge returns WAIT (structured enum, not string parse) for a pair with an open position, and trade is past `early_exit_hours` AND PnL < 0.4% AND no BE-SL placed → close with `thesis_degraded`. Uses ONLY the structured `decision` field — NO reasoning text parsing. This is the OPPOSITE of ANTI-WAIT (V3.2.37): ANTI-WAIT parsed reasoning to override WAIT into a trade; thesis exit RESPECTS WAIT to inform an exit. Do not add string parsing of Judge reasoning — that was the ANTI-WAIT disaster. Zero cooldown (slot freed immediately for better opportunity).
-39. **TECHNICAL momentum conflict (V3.2.88 HARD BLOCK)** — When TECHNICAL's mean-reversion signals conflict with 1h momentum > 0.20%, TECHNICAL returns NEUTRAL (was: cap at 65%). This is a HARD BLOCK — Judge sees "TECHNICAL: NEUTRAL" and counts fewer agreeing personas. Also, 30m momentum and 15m velocity signals are gated: only treated as reversal when 1h momentum disagrees. Do not remove the 1h momentum gate — without it, TECHNICAL stacks 5 signals to 85% in every uptrend, causing the bot to short into bounces. Do not soften back to a cap — at 65%, Judge still sees "TECHNICAL SHORT 65%" and counts it as partially agreeing, which inflated consensus counts.
+39. **TECHNICAL momentum conflict (V3.2.88 HARD BLOCK, V3.2.93 threshold fix)** — When TECHNICAL's mean-reversion signals conflict with 1h momentum > 0.40% (V3.2.93: was 0.20%), TECHNICAL returns NEUTRAL. This is a HARD BLOCK — Judge sees "TECHNICAL: NEUTRAL" and counts fewer agreeing personas. V3.2.93 raised from 0.20% to 0.40%: at 0.20%, TECHNICAL was NEUTRAL on 100% of analyses because any positive 1h movement (normal crypto oscillation) blocked all SHORT signals — effectively removing the persona. 0.40% still blocks in genuine strong trends but allows signals in mild oscillation. The daemon's execution gate (0.10% dual 1h+15m check) provides a second safety layer. Do not remove the 1h momentum gate — without it, TECHNICAL stacks 5 signals to 85% in every uptrend. Do not soften to a confidence cap — at 65%, Judge still counts TECHNICAL as partially agreeing, inflating consensus.
 40. **Opposite swap range pre-check (V3.2.78)** — Before closing an existing position for an opposite swap, the range gate is pre-checked. If the replacement trade would be blocked (e.g. LONG at 91% of 12H range with 2H=88%), the existing position is kept instead. Without this, the bot closes the existing position (taking a loss), then the replacement is blocked by the range gate, leaving zero positions and a realized loss with nothing to show for it. Uses the same 12H 55/45 gate with 2H 30/70 override thresholds as `execute_trade()`. Do not move the pre-check after the close — the whole point is to avoid closing when the replacement can't open.
 41. **Thesis exit same-direction false positive (V3.2.84)** — When Judge returns LONG 89% but a LONG already exists, the "already have same direction" block converts it to WAIT 0% before returning to the daemon. The thesis exit then sees WAIT and closes the position thinking signals degraded — but Judge actually *confirmed* the thesis. Fix: `same_direction_hold=True` flag and `judge_raw_decision`/`judge_raw_confidence` are preserved on the WAIT decision. Thesis exit checks this flag and logs "thesis ALIVE (skip exit)" instead of closing. Do not remove the flag or fall back to string parsing of the WAIT reason — that's the ANTI-WAIT disaster (V3.2.37) in reverse.
 42. **Zero-cooldown exit blacklist leak (V3.2.84)** — thesis_degraded, velocity_exit, and flow_contra exits all have 0.0 cooldown multiplier (slot freed immediately). But the loss blacklist at `close_trade()` line 5465 checked `pnl_pct < -0.1` independently of exit reason, applying a 2h blacklist even on zero-cooldown exits. BTC SHORT was thesis-exited at -0.32% and got a 2h blacklist despite the exit being designed for immediate re-entry. Fix: `is_zero_cooldown_exit` flag exempts these reasons from the loss blacklist. Do not remove — the blacklist and cooldown are separate mechanisms, and both must respect zero-cooldown exit semantics.
@@ -474,16 +474,29 @@ python3 v3/cryptoracle_client.py
 51. **Opposite swap SR pre-check was silently broken (V3.2.90)** — `find_chart_based_tp_sl` was never added to the daemon's import list when V3.2.86 introduced the SR pre-check. Every opposite swap since V3.2.86 hit a `NameError`, fell through to "proceeding cautiously" (no block), and the safety net was dead. ETH SHORT at +$16.33 was closed for a LONG swap, the SR pre-check NameError fell through, then the range gate blocked the LONG replacement — lost profit + zero positions. Two fixes: (1) added `find_chart_based_tp_sl` to daemon imports, (2) changed the except handler from fallthrough to `continue` (BLOCK swap). The error handler MUST block — "proceed cautiously" on an error means the safety net doesn't exist. Do not change the except handler back to fallthrough.
 52. **FLOW flip boost bypasses volume floor (V3.2.91)** — The V3.2.81 volume floor caps FLOW confidence when minority taker side < 3% of total (noise detection). But the V3.2.68 flip boost (+15%) applied AFTER the cap, re-inflating the noise signal. XRP: taker ratio 271.40 (sell side = 50 units = 0.4% of total = pure noise). Volume floor correctly capped FLOW to 70%, then flip boost took 70%→85%, presenting noise as "extreme taker buying" to Judge (who gave 88% LONG — only R:R guard prevented execution). Fix: `vol_noise` flag propagated from FLOW persona return dict to `MultiPersonaAnalyzer.analyze()`; flip boost checks `flow_vote.get("vol_noise", False)` and skips boost when True. Do not remove this gate — if the underlying volume data is noise, a flip based on that noise is also noise.
 53. **R:R guard ignores round-trip fees (V3.2.92)** — R:R was calculated as raw `tp_pct / sl_pct`, ignoring the 0.16% round-trip taker fee (0.08%/side). BNB: TP 0.78% / SL 1.01% = raw R:R 0.77:1 (passed 0.67 minimum). After fees: net TP = 0.78% - 0.16% = 0.62%, net SL = 1.01% + 0.16% = 1.17%, true R:R = 0.53:1 (should have been rejected). On tight TPs (< 1.0%), fees are 20%+ of profit — a trade that looks viable raw is actually uneconomic. Fix: R:R calculation subtracts `_ROUND_TRIP_FEE_PCT = 0.16` from TP and adds to SL before comparing against `MIN_RR_RATIO`. Effective minimum TP: ~0.94% at 1.0% SL, ~1.27% at 1.5% SL. Do not remove fee adjustment — raw R:R is misleading for any TP below ~1.5%.
+54. **TECHNICAL momentum threshold too tight (V3.2.93)** — `_MOMENTUM_TREND_THRESH` was 0.20%, which blocked TECHNICAL signals on 100% of analyses (21/21 across 3 cycles). Any positive 1h movement > 0.20% (normal crypto noise) caused TECHNICAL to return NEUTRAL for all SHORT setups. With TECHNICAL always NEUTRAL, Judge could only reach 85% when the other 3 personas (WHALE, SENTIMENT, FLOW) unanimously agreed — which is rare. BTC SHORT had all 4 personas agreeing at 90% but only because 1h momentum was exactly 0.20% (not >0.20%). Raised to 0.40%: still blocks in strong trends, allows TECHNICAL to participate in mild oscillation. Daemon execution gate (0.10% dual check) is the second layer. Do not lower below 0.30% — that approaches the noise floor where the gate becomes meaningless.
+55. **TIER_CONFIG TP values misaligned with ceiling architecture (V3.2.93)** — TIER_CONFIG `tp_pct` was 3.0/3.5/3.0% (vestigial from pre-V3.2.89 when there were no per-pair ceilings). PAIR_TP_CEILING is 2.0/1.5/2.0%. Though TIER_CONFIG tp_pct is never used in the execution path (chart SR is primary, discard on failure), it's used in: (1) startup banner display, (2) AI log uploads for WAIT decisions (`tier_config["tp_pct"]` at daemon line 1312). The startup banner showed "TP: 3.0%" (misleading), and WEEX competition AI logs showed `tp_pct: 3.0` for WAIT analyses. Fixed to 2.0/1.5/2.0% matching PAIR_TP_CEILING max per tier. Do not raise above ceiling values — that's misleading.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.92. Next change should be V3.2.93.
+Current: V3.2.93. Next change should be V3.2.94.
 
 **Recent version history (last 5):**
-- V3.2.92: (**CURRENT**) FEE-AWARE R:R GUARD.
+- V3.2.93: (**CURRENT**) TECHNICAL THRESHOLD + TIER ALIGN.
+  TECHNICAL momentum block threshold raised from 0.20% to 0.40%. At 0.20%, TECHNICAL returned NEUTRAL
+  on 100% of analyses (21/21 pair-analyses across 3 signal cycles) because any positive 1h movement
+  > 0.20% blocked all SHORT signals. A gate that fires 100% of the time removes the persona entirely.
+  0.40% still blocks in genuine strong trends but allows TECHNICAL signals in mild oscillation (0.20-0.40%
+  1h movement is normal noise in crypto). The daemon's execution gate (0.10% dual 1h+15m check) provides
+  a second safety layer. Also: TIER_CONFIG tp_pct/take_profit aligned with PAIR_TP_CEILING (was
+  3.0/3.5/3.0% — vestigial scalp values that predated V3.2.89 ceiling architecture). Now 2.0/1.5/2.0%
+  matching the max ceiling per tier. These are fallback/display values only (chart SR is primary), but
+  the startup banner and WEEX AI log uploads were showing misleading 3.0-3.5% TP values.
+  `PIPELINE_VERSION = "SMT-v3.2.93-TechnicalThresholdAlign"`.
+- V3.2.92: FEE-AWARE R:R GUARD.
   R:R calculation now subtracts 0.16% round-trip taker fees from TP and adds to SL before ratio check.
   BNB V3.2.91 bug: TP 0.78% / SL 1.01% = raw R:R 0.77:1 (passed 0.67), but after fees: net TP 0.62%,
   net SL 1.17%, true R:R 0.53:1 (should have been rejected). On tight TPs (< 1.0%), fees are 20%+ of
@@ -506,10 +519,6 @@ Current: V3.2.92. Next change should be V3.2.93.
   TP haircut 0.90→0.95. Momentum gate: dual 1h+15m. FLOW flip boost gate: requires 65% base confidence.
   Execution sort: persona agreement count tiebreak (was tier desc).
   `PIPELINE_VERSION = "SMT-v3.2.89-SwingTradeGuards"`.
-- V3.2.88: LONG TERM PIVOT.
-  Personas analyze hours-to-days; execution now matches. Hold: T1=8H T2=6H T3=4H. Momentum confirmation
-  gate. TECHNICAL momentum conflict = hard BLOCK (NEUTRAL). EMA snapback DISABLED. BE trigger 0.8%.
-  `PIPELINE_VERSION = "SMT-v3.2.88-LongTermPivot"`.
 
 **CRITICAL RULE (V3.2.57): The 85% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that

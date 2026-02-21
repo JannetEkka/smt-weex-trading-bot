@@ -2024,9 +2024,11 @@ TIER_CONFIG = {
     # V3.2.88: LONG TERM PIVOT — hold times aligned with persona analysis timeframes.
     # Personas analyze on hours-to-days horizons (WHALE: on-chain flows, SENTIMENT: news catalysts).
     # Old scalp hold times (1.5-3H) killed trades before the thesis could play out.
-    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.03, "trailing_stop": 0.01, "time_limit": 480, "tp_pct": 3.0, "sl_pct": 1.5, "max_hold_hours": 8, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.035, "trailing_stop": 0.012, "time_limit": 360, "tp_pct": 3.5, "sl_pct": 1.5, "max_hold_hours": 6, "early_exit_hours": 1.5, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
-    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.03, "trailing_stop": 0.015, "time_limit": 240, "tp_pct": 3.0, "sl_pct": 1.8, "max_hold_hours": 4, "early_exit_hours": 1, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    # V3.2.93: tp_pct/take_profit aligned with PAIR_TP_CEILING (was 3.0/3.5/3.0 — vestigial scalp values).
+    # Chart SR is the primary TP source; these are fallback/display values. Must match ceiling architecture.
+    1: {"name": "Blue Chip", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.020, "trailing_stop": 0.01, "time_limit": 480, "tp_pct": 2.0, "sl_pct": 1.5, "max_hold_hours": 8, "early_exit_hours": 2, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    2: {"name": "Mid Cap", "leverage": 20, "stop_loss": 0.015, "take_profit": 0.015, "trailing_stop": 0.012, "time_limit": 360, "tp_pct": 1.5, "sl_pct": 1.5, "max_hold_hours": 6, "early_exit_hours": 1.5, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
+    3: {"name": "Small Cap", "leverage": 20, "stop_loss": 0.018, "take_profit": 0.020, "trailing_stop": 0.015, "time_limit": 240, "tp_pct": 2.0, "sl_pct": 1.8, "max_hold_hours": 4, "early_exit_hours": 1, "early_exit_loss_pct": -1.0, "force_exit_loss_pct": -2.0},
 }
 # V3.1.78: Tier reassignment based on actual ATR/volatility analysis
 # BTC T1→T2 (2.28% actual SL, +52% stretch - behaves mid-cap)
@@ -2045,7 +2047,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.92-FeeAwareRR"
+PIPELINE_VERSION = "SMT-v3.2.93-TechnicalThresholdAlign"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3508,7 +3510,12 @@ class TechnicalPersona:
             # In swing trading, entering against confirmed hourly momentum is a losing play.
             # The direction thesis may be correct long-term, but timing is wrong — wait for momentum to turn.
             # Judge sees NEUTRAL from TECHNICAL → harder to reach 85% → trade waits for confirmation.
-            _MOMENTUM_TREND_THRESH = 0.20  # 1h momentum threshold for "confirmed trend"
+            # V3.2.93: Raised from 0.20% to 0.40%. At 0.20%, TECHNICAL was NEUTRAL on 100% of analyses
+            # because any positive 1h movement (normal in crypto) blocked all SHORT signals.
+            # A gate that fires 100% of the time = the persona doesn't exist.
+            # 0.40% still blocks in genuine strong trends but allows signals in mild oscillation.
+            # The daemon's execution gate (0.10% dual 1h+15m check) provides a second safety layer.
+            _MOMENTUM_TREND_THRESH = 0.40  # V3.2.93: 1h momentum threshold (was 0.20 — too tight)
             if direction == "SHORT" and momentum_1h > _MOMENTUM_TREND_THRESH:
                 reasoning += f"; MOMENTUM BLOCK: 1h mom {momentum_1h:+.2f}% contradicts SHORT — returning NEUTRAL (wait for momentum to turn)"
                 return {"persona": self.name, "signal": "NEUTRAL", "confidence": 0.40, "reasoning": reasoning}
