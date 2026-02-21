@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.78** — all production code is in `v3/`.
+**Current version: V3.2.87** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -459,35 +459,36 @@ python3 v3/cryptoracle_client.py
 40. **Opposite swap range pre-check (V3.2.78)** — Before closing an existing position for an opposite swap, the range gate is pre-checked. If the replacement trade would be blocked (e.g. LONG at 91% of 12H range with 2H=88%), the existing position is kept instead. Without this, the bot closes the existing position (taking a loss), then the replacement is blocked by the range gate, leaving zero positions and a realized loss with nothing to show for it. Uses the same 12H 55/45 gate with 2H 30/70 override thresholds as `execute_trade()`. Do not move the pre-check after the close — the whole point is to avoid closing when the replacement can't open.
 41. **Thesis exit same-direction false positive (V3.2.84)** — When Judge returns LONG 89% but a LONG already exists, the "already have same direction" block converts it to WAIT 0% before returning to the daemon. The thesis exit then sees WAIT and closes the position thinking signals degraded — but Judge actually *confirmed* the thesis. Fix: `same_direction_hold=True` flag and `judge_raw_decision`/`judge_raw_confidence` are preserved on the WAIT decision. Thesis exit checks this flag and logs "thesis ALIVE (skip exit)" instead of closing. Do not remove the flag or fall back to string parsing of the WAIT reason — that's the ANTI-WAIT disaster (V3.2.37) in reverse.
 42. **Zero-cooldown exit blacklist leak (V3.2.84)** — thesis_degraded, velocity_exit, and flow_contra exits all have 0.0 cooldown multiplier (slot freed immediately). But the loss blacklist at `close_trade()` line 5465 checked `pnl_pct < -0.1` independently of exit reason, applying a 2h blacklist even on zero-cooldown exits. BTC SHORT was thesis-exited at -0.32% and got a 2h blacklist despite the exit being designed for immediate re-entry. Fix: `is_zero_cooldown_exit` flag exempts these reasons from the loss blacklist. Do not remove — the blacklist and cooldown are separate mechanisms, and both must respect zero-cooldown exit semantics.
+43. **Opposite swap SR pre-check (V3.2.86)** — Before closing an existing position for an opposite swap, `find_chart_based_tp_sl()` is called with the current price and replacement direction. If no valid TP exists (`tp_not_found=True` or `method == "fallback"`), the swap is skipped and the existing position is kept. Without this, the bot closes the existing position (taking a loss + blacklist), then the replacement trade is discarded because chart SR found no valid TP — resulting in zero positions, a realized loss, and a 2h blacklist. Triggered by LTC SHORT closed at -$40, LONG replacement failed ("Chart SR returned no valid TP"), left with nothing. Do not move the pre-check after the close — the whole point is to verify the replacement can open before destroying the existing position.
+44. **Stale confidence comparison removed (V3.2.87)** — The old "existing conf > new conf = hold" logic for opposite swaps has been removed. It predated all modern swap guards: age gate (V3.1.100), TP proximity (V3.1.100), range pre-check (V3.2.78), SR pre-check (V3.2.86), FLOW gate (V3.2.72), and thesis exit (V3.2.76). The confidence comparison blocked legitimate flips — e.g. BNB LONG at 88% (from 17 min ago) blocked SHORT 85% when FLOW had violently flipped to 95% SHORT (taker ratio 0.09 = extreme selling). Now: if Judge says opposite at 85%+, the swap gates (age, TP proximity, range, SR) decide. Do not re-add confidence comparison — stale numbers from 10-30 min ago don't reflect current market conditions. The confidence decay hack (V3.2.73) was also removed as it was a band-aid on this broken logic.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.84. Next change should be V3.2.85.
+Current: V3.2.87. Next change should be V3.2.88.
 
 **Recent version history (last 5):**
-- V3.2.84: (**CURRENT**) THESIS EXIT SAME-DIRECTION FIX + BLACKLIST EXEMPT.
-  (1) When Judge says LONG 89% but we already have LONG, the "already have same direction" block
-  converted it to WAIT 0%. Thesis exit then saw WAIT and closed the position thinking signals
-  degraded. Fix: `same_direction_hold=True` flag preserves raw Judge intent — thesis exit skips
-  when Judge actually confirms the held direction. (2) Zero-cooldown exits (thesis_degraded,
-  velocity_exit, flow_contra) now exempt from the 2h loss blacklist. These exits free the slot
-  immediately by design — blacklisting defeats the purpose.
+- V3.2.87: (**CURRENT**) REMOVE STALE CONF COMPARISON.
+  Removed old "existing conf > new conf = hold" for opposite swaps. Swap gates (age, TP proximity,
+  range pre-check, SR pre-check, FLOW gate) are the real guards. Also removed conf decay hack (V3.2.73).
+  `PIPELINE_VERSION = "SMT-v3.2.87-RemoveStaleConfComparison"`.
+- V3.2.86: OPPOSITE SWAP SR PRE-CHECK.
+  `find_chart_based_tp_sl()` called before closing existing position. If no valid TP for replacement,
+  keep existing position. Prevents close-for-nothing disaster (LTC SHORT -$40, no replacement opened).
+  `PIPELINE_VERSION = "SMT-v3.2.86-OppositeSRPrecheck"`.
+- V3.2.85: PNL LEVERAGE FIX + PER-CYCLE FLOW SEED.
+  (1) PnL was margin not notional (missing ×20) — broke BE-SL detection, display, AI logs.
+  (2) Full sync_tracker_with_weex() + 3-tier FLOW seed every signal cycle, not just daemon startup.
+  `PIPELINE_VERSION = "SMT-v3.2.85-PnLLeverageFix"`.
+- V3.2.84: THESIS EXIT SAME-DIRECTION FIX + BLACKLIST EXEMPT.
+  (1) Judge LONG 89% + already have LONG = thesis CONFIRMED, not degraded.
+  (2) Zero-cooldown exits exempt from 2h loss blacklist.
   `PIPELINE_VERSION = "SMT-v3.2.84-ThesisExitSameDirFix"`.
 - V3.2.78: OPPOSITE SWAP RANGE PRE-CHECK.
   Range gate checked BEFORE closing existing position for opposite swap.
   `PIPELINE_VERSION = "SMT-v3.2.78-OppositeRangePrecheck"`.
-- V3.2.77: TECHNICAL MOMENTUM CONFLICT FIX.
-  Momentum/velocity signals gated on 1h momentum. Conflict cap at 65%.
-  `PIPELINE_VERSION = "SMT-v3.2.77-TechMomentumConflict"`.
-- V3.2.76: NEAR-TP GRACE + THESIS EXIT.
-  (1) Near-TP grace: max_hold skipped if trade >= 60% toward TP (15min grace).
-  (2) Judge thesis exit: WAIT for held position → close with thesis_degraded (zero cooldown).
-  `PIPELINE_VERSION = "SMT-v3.2.76-NearTPGrace-ThesisExit"`.
-- V3.2.75: REMOVE DYNAMIC BLACKOUT — Gemini event scanner removed.
-  `PIPELINE_VERSION = "SMT-v3.2.75-RemoveDynamicBlackout"`.
 
 **CRITICAL RULE (V3.2.57): The 85% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that
