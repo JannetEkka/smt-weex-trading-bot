@@ -6,7 +6,7 @@ AI trading bot for the **WEEX AI Wars: Alpha Awakens** competition (Feb 8-23, 20
 Trades 7 crypto pairs on WEEX futures using a 5-persona ensemble (Whale, Sentiment, Flow, Technical, Judge).
 Starting balance $10,000 USDT (Finals). Prelims (was $1K): +566% ROI, #2 overall.
 
-**Current version: V3.2.90** — all production code is in `v3/`.
+**Current version: V3.2.91** — all production code is in `v3/`.
 
 ## Architecture
 
@@ -472,16 +472,24 @@ python3 v3/cryptoracle_client.py
 49. **Execution sort by persona agreement (V3.2.89)** — Old sort: confidence desc, then tier desc (T3>T2>T1). When BNB (88%, 3 personas agreeing) and ADA (88%, 2 personas + WHALE opposing) tied on confidence, ADA was executed first because T3>T2. ADA had worse R:R and weaker consensus. New: confidence desc, then persona agreement count desc. At equal confidence, prefer trades with more personas agreeing. Do not re-add tier bias — it was a scalp-era preference for volatile alts that made sense for quick bounces but not for swing trades.
 50. **TP_HAIRCUT for swing trades (V3.2.89)** — TP_HAIRCUT changed 0.90→0.95. In scalp mode, targeting 90% of SR made sense (price rarely reaches exact SR on quick bounces). In swing mode with 4-8H holds, price has time to test the actual SR level. 95% captures nearly the full move. Do not lower back to 0.90 — that shaves 5% off every TP unnecessarily for swing timeframes.
 51. **Opposite swap SR pre-check was silently broken (V3.2.90)** — `find_chart_based_tp_sl` was never added to the daemon's import list when V3.2.86 introduced the SR pre-check. Every opposite swap since V3.2.86 hit a `NameError`, fell through to "proceeding cautiously" (no block), and the safety net was dead. ETH SHORT at +$16.33 was closed for a LONG swap, the SR pre-check NameError fell through, then the range gate blocked the LONG replacement — lost profit + zero positions. Two fixes: (1) added `find_chart_based_tp_sl` to daemon imports, (2) changed the except handler from fallthrough to `continue` (BLOCK swap). The error handler MUST block — "proceed cautiously" on an error means the safety net doesn't exist. Do not change the except handler back to fallthrough.
+52. **FLOW flip boost bypasses volume floor (V3.2.91)** — The V3.2.81 volume floor caps FLOW confidence when minority taker side < 3% of total (noise detection). But the V3.2.68 flip boost (+15%) applied AFTER the cap, re-inflating the noise signal. XRP: taker ratio 271.40 (sell side = 50 units = 0.4% of total = pure noise). Volume floor correctly capped FLOW to 70%, then flip boost took 70%→85%, presenting noise as "extreme taker buying" to Judge (who gave 88% LONG — only R:R guard prevented execution). Fix: `vol_noise` flag propagated from FLOW persona return dict to `MultiPersonaAnalyzer.analyze()`; flip boost checks `flow_vote.get("vol_noise", False)` and skips boost when True. Do not remove this gate — if the underlying volume data is noise, a flip based on that noise is also noise.
 
 ## Version Naming
 
 Format: `V3.{MAJOR}.{N}` where N increments with each fix/feature.
 Major bumps for strategy pivots (V3.1.x → V3.2.x for dip-signal strategy).
 Bump the version number in the daemon startup banner and any new scripts.
-Current: V3.2.90. Next change should be V3.2.91.
+Current: V3.2.91. Next change should be V3.2.92.
 
 **Recent version history (last 5):**
-- V3.2.90: (**CURRENT**) FIX OPPOSITE SWAP SR PRE-CHECK.
+- V3.2.91: (**CURRENT**) FLIP BOOST VOL NOISE GATE.
+  FLOW flip boost (+15%) now blocked when volume floor fired (minority side < 3% of total taker volume).
+  XRP V3.2.90 bug: taker ratio 271.40 from noise (sell side = 50 units = 0.4% of total). Volume floor
+  correctly capped FLOW to 70%, but flip boost took 70%→85%, presenting noise as "extreme taker buying"
+  to Judge (who gave 88% — only R:R guard saved it). Fix: `vol_noise` flag propagated from FLOW persona
+  to MultiPersonaAnalyzer; flip boost checks flag before applying.
+  `PIPELINE_VERSION = "SMT-v3.2.91-FlipBoostVolNoiseGate"`.
+- V3.2.90: FIX OPPOSITE SWAP SR PRE-CHECK.
   (1) `find_chart_based_tp_sl` was missing from daemon imports since V3.2.86 → NameError on every SR
   pre-check (the feature was silently broken since introduction). (2) SR pre-check error handler changed
   from "proceed cautiously" (fallthrough) to BLOCK (continue). Bug: ETH SHORT at +$16.33 was closed for
@@ -502,9 +510,6 @@ Current: V3.2.90. Next change should be V3.2.91.
 - V3.2.87: REMOVE STALE CONF COMPARISON.
   Removed old "existing conf > new conf = hold" for opposite swaps. Swap gates are the real guards.
   `PIPELINE_VERSION = "SMT-v3.2.87-RemoveStaleConfComparison"`.
-- V3.2.86: OPPOSITE SWAP SR PRE-CHECK.
-  Chart SR pre-checked before closing existing position. If no valid TP for replacement, keep existing.
-  `PIPELINE_VERSION = "SMT-v3.2.86-OppositeSRPrecheck"`.
 
 **CRITICAL RULE (V3.2.57): The 85% confidence floor is ABSOLUTE.**
 Never add session discounts, contrarian boosts, or any other override that

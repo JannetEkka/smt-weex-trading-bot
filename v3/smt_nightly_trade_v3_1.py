@@ -2045,7 +2045,7 @@ TRADING_PAIRS = {
 }
 
 # Pipeline Version
-PIPELINE_VERSION = "SMT-v3.2.90-FixOppositeSRPrecheck"
+PIPELINE_VERSION = "SMT-v3.2.91-FlipBoostVolNoiseGate"
 MODEL_NAME = "CatBoost-Gemini-MultiPersona-v3.2.16"
 
 # Known step sizes
@@ -3160,14 +3160,16 @@ class FlowPersona:
                     "signal": "NEUTRAL",
                     "confidence": 0.50,
                     "reasoning": "; ".join(s[2] for s in signals if s[0] == "NEUTRAL"),
+                    "vol_noise": _taker_vol_noise,  # V3.2.91: propagate volume floor status
                 }
-            
+
             if long_score > short_score and long_score >= 0.4:
                 return {
                     "persona": self.name,
                     "signal": "LONG",
                     "confidence": min(0.85, long_score),
                     "reasoning": "; ".join(s[2] for s in signals if s[0] == "LONG"),
+                    "vol_noise": _taker_vol_noise,  # V3.2.91: propagate volume floor status
                     "data": {
                         "nearest_ask_wall": depth.get("nearest_ask_wall"),
                         "nearest_bid_wall": depth.get("nearest_bid_wall"),
@@ -3179,6 +3181,7 @@ class FlowPersona:
                     "signal": "SHORT",
                     "confidence": min(0.85, short_score),
                     "reasoning": "; ".join(s[2] for s in signals if s[0] == "SHORT"),
+                    "vol_noise": _taker_vol_noise,  # V3.2.91: propagate volume floor status
                     "data": {
                         "nearest_ask_wall": depth.get("nearest_ask_wall"),
                         "nearest_bid_wall": depth.get("nearest_bid_wall"),
@@ -3190,6 +3193,7 @@ class FlowPersona:
                 "signal": "NEUTRAL",
                 "confidence": 0.4,
                 "reasoning": "Mixed flow signals",
+                "vol_noise": _taker_vol_noise,  # V3.2.91: propagate volume floor status
             }
             
         except Exception as e:
@@ -4600,13 +4604,21 @@ class MultiPersonaAnalyzer:
                     _dip_aligned = True
 
             if _dip_aligned:
+                _MIN_FLOW_FOR_BOOST = 0.65
+                # V3.2.91: BLOCK flip boost when volume floor fired (V3.2.81).
+                # XRP V3.2.90 bug: taker ratio 271.40 from noise (sell side 50 units = 0.4% of total).
+                # Volume floor correctly capped FLOW to 70%, but flip boost took 70%→85%,
+                # presenting noise as "extreme taker buying" to Judge (who gave 88%).
+                # If the underlying data is noise, the flip based on it is also noise.
+                _flow_vol_noise = flow_vote.get("vol_noise", False)
+                if _flow_vol_noise:
+                    print(f"  [FLOW] FLIP {_flow_prev}->{_flow_dir} at range {_range_pos_flow:.0f}% — aligned but VOL NOISE (minority side < 3%%), no boost (V3.2.91)")
                 # V3.2.89: BOOST requires minimum FLOW confidence before flip boost applies.
                 # SOL V3.2.88 bug: taker ratio 0.84 (mild selling) → FLOW 80% → boosted to 95% SHORT.
                 # A 0.84 taker ratio is NOT extreme conviction. The flip boost inflated a moderate signal.
                 # Gate: FLOW must already be >= 65% before the flip boost adds +15%.
                 # At 65%: 65→80%. At 70%: 70→85%. At 80%: 80→95%. Below 65%: no boost (log + skip).
-                _MIN_FLOW_FOR_BOOST = 0.65
-                if flow_vote["confidence"] >= _MIN_FLOW_FOR_BOOST:
+                elif flow_vote["confidence"] >= _MIN_FLOW_FOR_BOOST:
                     _boost = min(0.95, round(flow_vote["confidence"] + 0.15, 2))
                     print(f"  [FLOW] DIP/PEAK FLIP BOOST: {_flow_prev}->{_flow_dir} at range {_range_pos_flow:.0f}% — conf {flow_vote['confidence']:.0%} → {_boost:.0%} (V3.2.89)")
                     flow_vote = dict(flow_vote)
